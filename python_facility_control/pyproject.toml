@@ -1,0 +1,16 @@
+[project]
+name = "facility-control"
+version = "0.1.0"
+description = "Python port of the NewOrbit LabVIEW vacuum facility control (Main_V4.4.vi)"
+requires-python = ">=3.10"
+dependencies = ["PySide6-Essentials>=6.6", "pyqtgraph>=0.13", "numpy>=1.24", "PyYAML>=6.0"]
+
+[project.optional-dependencies]
+daq = ["nidaqmx>=0.9"]
+test = ["pytest>=7"]
+
+[project.scripts]
+facility-control = "facility_control.app:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

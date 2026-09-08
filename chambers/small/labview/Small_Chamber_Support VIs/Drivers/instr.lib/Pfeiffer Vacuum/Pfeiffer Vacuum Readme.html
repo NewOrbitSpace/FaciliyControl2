@@ -1,0 +1,163 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<html><head>
+<meta http-equiv="content-type" content="text/html; charset=windows-1252">
+<!-- Find and Replace all instances of 'Driver Identifer' with the Driver Identifier of your instrument driver. Remove this note once this is complete. -->
+
+<!-- Replace all the instructions that appear within the <font color="red"> tags with information about your instrument driver.  Make sure to delete the <font color="red"> tags as you fill in each line. Remove this note once this is complete.-->
+  <title>Instrument Driver Readme</title>
+  <style type="text/css">
+  dt { float: left; margin-right: 5px; }
+  </style>
+</head>
+<body>
+<h1>Pfeiffer Vacuum products with pfeiffer protocol Instrument Driver Readme</h1>
+<p>To rate this instrument driver, go to the driver download page on the <a href="https://www.pfeiffer-vacuum.com/de/info-center/download-center/">Pfeiffer Vacuuum Webpage</a>.</p>
+<h2>1. Overview</h2>
+<dl>
+<dt>Instrument Driver Technology:</dt> <dd>LabVIEW Plug and Play (project-style)</dd>
+<dt>Manufacturer:</dt><dd>Pfeiffer Vaccum</dd>
+<dt>Supported Language(s):</dt><dd>LabVIEW</dd>
+<dt>Supported Model(s):</dt><dd>Turbopumps, DigiLine Gauges, Handheld Vacuum Gauge, OnTool DryPump, Leak Detectors HLT5xx and ASM340, MiniTest 300, ActiveLine Gauges, integrated Sensors, Diaphragm Pumps, HiLobe, ModulLine (TPG500), HiScroll</dd>
+<dt>Model(s) Tested:</dt><dd>Turbopumps, DigiLine Gauges, TPG 201/202, OnTool DryPump, Leak Detectors HLT5xx and ASM340, MiniTest300, ActiveLine Gauges, integrated Sensors, Diaphragm Pumps, HiLobe, ModulLine (TPG500), HiScroll</dd>
+<dt>Interface(s):</dt><dd>Serial interface RS232 and RS485, USB with USB/RS485 converter, Article No.: PM 061 207-T</dd>
+<dt>Firmware Revision(s) Tested:</dt><dd>010100 and larger version</dd>
+</dl>
+<dl>
+<dt>Certified:</dt><dd>No</dd>
+<dt>NI Supported:</dt><dd>No</dd>
+<dt>Source Code Available:</dt><dd>Yes</dd>
+</dl>
+<dl>
+<dt>Driver Revision:</dt><dd>2021</dd>
+<dt>Original Release Date:</dt><dd>01/01/2000</dd>
+<dt>Current Revision Date:</dt><dd>09/15/2021 [mm/dd/yyyy]</dd>
+</dl>
+<h2>2. Required Software</h2>
+<p>Some software components need to be installed before using this instrument driver. The minimum versions of these components are listed below, and can be downloaded from the National Instruments Download Site.</p>
+<p>LabView 2016 or later.<br>
+VISA 2016 or later<br>
+<br>
+Refer to the <i>LabVIEW Help</i> for more information about software requirements. You access the <i>LabVIEW Help</i> by selecting <i>Help»LabVIEW Help</i>.</p>
+<h2>3. Known Issues</h2>
+<p>To report issues or provide feedback about this instrument driver,
+please send an email to <a href="mailto:Frank.Pfeifer@pfeiffer-vacuum.de">Frank.Pfeifer@pfeiffer-vacuum.de</a>.</p>
+<p>Include instrument functionality not supported by the driver or known issues as necessary.</p>
+
+<h2>4. Revision History</h2>
+
+16.09.2021<br>
+new Parameter for HiScroll (006 , 011 , 020 , 034 , 095 , 730 , 732) <br>
+Parameter 708 deleted from HiScroll<br>
+<br>
+06.01.2020<br>
+new VI´s for HiScroll<br>
+<br>
+02.12.2019<br>
+new VI´s for ModulLine Gauges (TPG500)<br>
+<br>
+01.08.2019<br>
+new VI´s for HILobe: PV HiLobe Pumps Control commands .vi<br>
+new VI´s for HILobe: PV HiLobe Set value settings.vi<br>
+new VI´s for HILobe: PV HiLobe Status requests.vi<br>
+<br>
+27.03.2019<br>
+renamed VI : PV ASM340 Lock TF Vent.vi in PV ASM340 Lock N Vent.vi<br>
+<br>
+12.11.2018<br>
+new VI: PV Set decimal separator.vi for using the right separator<br>
+<br>
+24.04.2017<br>
+all VI´s for ActiveLine gauges changed for using TPG366<br>
+<br>
+15.09.2016<br>
+new vi´s for Diaphragm Pumps (MVP) : PV Diaphragm Pumps Control commands .vi<br>
+new vi´s for Diaphragm Pumps (MVP) : PV Diaphragm Pumps Status requests.vi<br>
+new vi´s for Diaphragm Pumps (MVP) : PV Diaphragm Pumps Set value settings.vi<br>
+exchanged : Digiline - Cluster.ctl to PV Digiline - Cluster.ctl<br>
+exchanged : Digiline relay switch point - Cluster.ctl to PV Digiline relay switch point - Cluster.ctl<br>
+exchanged : DigiLine adjustment - Cluster.ctl to PV DigiLine adjustment - Cluster.ctl<br>
+exchanged : Handheld Gauge Data - Cluster.ctl to PV Handheld Gauge Data - Cluster.ctl<br>
+exchanged : Handheld Gauge Data Logging - Cluster.ctl to PV Handheld Gauge Data Logging - Cluster.ctl<br>
+<br>
+09.04.2015<br>
+new vi : PV ActiveLine Gauges<br>
+PV Miscellaneous.VI changed incl. Typ def.<br>
+<br>
+19.05.2014<br>
+new vi : PV Integrated Pressure Sensors<br>
+<br> 
+22.04.2014<br>
+new parameter in PV run-up time.vi : configuration rotation speed switchpoint<br> 
+new info text : PV config A D input output.vi<br>
+new parameter in PV temperature info.vi : temperature rotor 384<br> 
+<br>
+08.05.2013<br>
+new vi´s:  VI´s for PV MiniTest 300<br> 
+<br> 
+30.04.2013<br>
+all Example VI modified : New “VISA in” control<br>
+new vi: PV Handheld vacuum gauge.vi<br>
+delete vi:  PV DigiLine adjustment BA (functions in PV DigiLine adjustment.vi)<br>
+new vi: PV DigiLine relay switch point.vi (only for DigiLine 2 analog gauges)<br>
+<br> 
+28.10.2009<br>
+PV Operating adjustment turbopump.vi modified : New control for Parameter 27 – Gas mode<br> 
+<br>			
+28.04.2008<br>
+exchanged : initialize.vi ? PV initialize.vi<br>
+exchanged : close.vi ? PV close.vi<br>
+exchanged : Parameter 663 (SmartTest) maximum value from 15 at 31<br> 
+<br>
+30.11.2007<br>
+new parameter for HiPace (Turbopump) <br>
+new vi : initialize.vi<br>
+new vi : read-write-core-vi<br>
+delete vi : miscellaneous 2.vi<br>
+new vi : temperature.vi<br>
+new vi : config A D input output.vi<br>
+new gaugetyp : MPT100<br>
+<br>
+07.04.2006<br>
+new item in PV error_handling.vi<br>
+<br>
+15.09.2005<br>
+new HLT 5xx Parameter (690)<br>
+<br>
+18.07.2005<br>
+HLT 5xx Parameter new and VI Error2txt.vi modified<br>
+<br>
+01.10.2004<br>
+new parameter<br>
+miscellaneous 2.VI changed incl. Typ def.<br>
+miscellaneous.VI changed incl. Typ def. <br>
+PV Pumping station controlling.vi changed incl. Typ def.<br>
+<br>
+08.06.2004<br>
+Typ def. and Read-Write Core new<br>
+<br>
+18.11.2003<br>   
+PV Write-Read Core.vi new<br>     
+<br>
+01.10.2002<br>
+OnTool DryPump Parameter new<br>
+Miscellaneous 2.VI new<br>
+<br>
+20.04.2001<br>
+VI (PV Operating adjustment turbopump.vi) modified.<br>
+<br>
+01.01.2000<br>
+First version of PV LabView Driver<br>
+<br>
+</p>
+
+<h2>5. For more information</h2>
+Frank Pfeifer<br>
+<a href="mailto:Frank.Pfeifer@pfeiffer-vacuum.de">Frank.Pfeifer@pfeiffer-vacuum.de</a><br>
+Tel.: +49 (0)6441 802 1637 <br>
+Pfeiffer Vacuum GmbH<br>
+Berlinerstr: 43<br>
+D-35614 Asslar<br>
+<br>
+<br>
+</p>
+</body></html>

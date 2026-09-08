@@ -1,0 +1,10 @@
+# Runtime (PySide6-Essentials = QtCore/QtGui/QtWidgets only; the full PySide6 pulls in a 170 MB
+# 'Addons' package whose deeply nested QML files exceed the Windows 260-character path limit)
+PySide6-Essentials>=6.6
+pyqtgraph>=0.13
+numpy>=1.24
+PyYAML>=6.0
+# Real hardware only (the NI-DAQmx driver must also be installed on the lab desktop):
+#   <venv>\Scripts\pip install nidaqmx
+# Tests
+pytest>=7

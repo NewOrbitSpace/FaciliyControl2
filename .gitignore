@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# App runtime
+logs/
+*.log
+
+# Delivery / scratch artifacts
+*.zip
+Claude outputs/
+
+# OS
+Thumbs.db
+.DS_Store

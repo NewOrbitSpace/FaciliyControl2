@@ -1,0 +1,7 @@
+# Unresolved dependencies in Main_V4.4.vi
+
+1 distinct gap(s): 0 unknown primitive(s), 0 placeholder primitive(s), 0 unmapped vi.lib VI(s), 1 terminal-mapping gap(s).
+
+## Terminal-mapping gaps
+- Initialize.vi — 1x in 1 VI(s)
+    · /mnt/user-data/uploads/FaciliyControl/Main_V4.4.vi
