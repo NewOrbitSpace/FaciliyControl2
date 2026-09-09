@@ -24,13 +24,13 @@ def cfg():
 class Harness:
     """Controller + simulator with a simulated clock so tests run fast and deterministically."""
 
-    def __init__(self, cfg, mode=Mode.AUTO):
+    def __init__(self, cfg, mode=Mode.AUTO, run_hours=None):
         self.cfg = cfg
         self.backend = SimBackend(cfg)
         self.dialogs = AutoAnswerDialogs()
         self.t0 = time.time()
         # the controller's timers follow the simulated clock; sleeps are shortened
-        self.ctl = Controller(cfg, self.backend, dialogs=self.dialogs, initial_mode=mode,
+        self.ctl = Controller(cfg, self.backend, dialogs=self.dialogs, initial_mode=mode, run_hours=run_hours,
                               sleep=lambda s: time.sleep(min(s, 0.0005)), clock=lambda: self.t0 + self.backend._sim_time)
         self.ctl.backend.open()
 

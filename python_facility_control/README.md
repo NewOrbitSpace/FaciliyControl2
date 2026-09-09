@@ -1,22 +1,28 @@
-# Facility Control – Python port of the LabVIEW vacuum-facility VI
+# Facility Control – Python port of the LabVIEW vacuum-facility VIs
 
-Replaces `Main_V4.4.vi` (NewOrbit vacuum chamber facility control) with a Python program:
-the same manual (Admin) and automatic control, the same interlocks, thresholds, timings, error
-codes and colours, a front panel in the LabVIEW style, and a **simulated facility** so it runs on any
-laptop without an NI cDAQ.
+Replaces the NewOrbit facility-control VIs with one Python program driven by a *facility profile*:
+`Main_V4.4.vi` (small chamber, one turbo) and `VC100_Facility_Control_V1.0.vi` (medium chamber, three
+turbos) – the same Admin and Auto control, the same interlocks, thresholds, timings, error codes and
+colours, a front panel in the LabVIEW style, and a **simulated facility** so it runs on any laptop
+without an NI cDAQ.  The chamber is chosen with `--config`:
+
+```
+run.bat                                        # small chamber  (config/facility_main_v4.4.yaml)
+run.bat --config config/facility_vc100.yaml    # medium chamber (VC100, chassis cDAQ3)
+```
 
 ```
 python_facility_control/
 ├── run_facility.py           entry point            ├── config/
-├── run.bat / run.sh          one-click launchers    │   ├── facility_main_v4.4.yaml   ← the facility profile (channel map, thresholds…)
-├── requirements.txt                                 │   └── facility_vc100_template.yaml (3-turbo template, unverified)
+├── run.bat / run.sh          one-click launchers    │   ├── facility_main_v4.4.yaml   ← small chamber profile (channel map, thresholds…)
+├── requirements.txt                                 │   └── facility_vc100.yaml       ← medium chamber profile (3 turbos, cDAQ3)
 ├── facility_control/         the package            ├── docs/
-│   ├── controller.py         main loop (VI frames 0-5)   │   ├── MAIN_V4.4_REFERENCE.md   what the VI does, wire by wire
-│   ├── automode.py           Auto state machine          │   └── Main_V4.4.semantic.lvnet  readable netlist of the VI
-│   ├── interlocks.py         Manual-mode interlocks      ├── tests/                        pytest suite (44 tests)
-│   ├── hal/                  nidaqmx backend + simulator └── tools/                        daq_check.py (read-only bring-up), screenshot_gui.py
-│   ├── gui/                  PySide6 front panel
-│   ├── logging_csv.py        daily CSV log
+│   ├── controller.py         main loop (VI frames 0-5)   │   ├── MAIN_V4.4_REFERENCE.md   what the small-chamber VI does, wire by wire
+│   ├── automode.py           Auto state machine          │   ├── VC100_REFERENCE.md       the medium-chamber VI: pinout, constants, differences
+│   ├── interlocks.py         Manual-mode interlocks      │   └── Main_V4.4.semantic.lvnet  readable netlist of Main_V4.4
+│   ├── hal/                  nidaqmx backend + simulator ├── tests/                        pytest suite (76 tests)
+│   ├── gui/                  PySide6 front panel         └── tools/                        daq_check.py (read-only bring-up), screenshot_gui.py
+│   ├── logging_csv.py        daily CSV log + runhours.py (pump hour meter)
 │   └── config.py, model.py, gauges.py, units.py
 ```
 
@@ -44,7 +50,7 @@ Windows (Settings → System → For developers → *Enable Win32 long paths*). 
 can live anywhere.  For the real cDAQ install the driver package into that environment once:
 `%LOCALAPPDATA%\FacilityControl\venv\Scripts\pip install nidaqmx`.
 
-Tests: `python -m pytest -q` (≈1½ min, 44 tests; the GUI test runs offscreen).
+Tests: `python -m pytest -q` (≈3 min, 76 tests – 23 of them for the VC100 profile; the GUI test runs offscreen).
 
 ## What the program does (short version – full detail in `docs/MAIN_V4.4_REFERENCE.md`)
 
@@ -67,8 +73,9 @@ is over.  The sequencing of commands is identical in both modes; the difference 
 readings freeze.  Kept for later – the default follows the VI.
 
 **Modes**
-* *Auto* – the state machine of the VI: Facility Off → Pumping to Rough (bypass, primary; turbo valve
-  after the WRG has stayed below 0.25 Torr for 30 s) → Engage Turbo (pressure check < 1.25 Torr, close
+* *Auto* – the state machine of the VI, plus the test engineer's start-order rules (below):
+  Facility Off → Pumping to Rough (bypass, primary; turbo valve
+  after the WRG has stayed below the turbo-on threshold for 30 s) → Engage Turbo (pressure check < 1.25 Torr, close
   bypass, open gate, start turbo) → Pumping to High Vac → Disengage Turbo → Venting (10 min) / Turbo
   slowing → Facility Off; plus Overnight Pump (timed start).  Any error (5000–5010) → everything off
   ("Shutt down due to error").  Turbo forced off if its gauge reads ≥ 5 Torr.
@@ -78,42 +85,41 @@ readings freeze.  Kept for later – the default follows the VI.
 * *Manual* – the mode the VI planned but never finished: manual commands checked against interlocks
   ("Please Close Vent Valve first", "Main Facility Pressure Too High", …).
 
-**Units** – Torr ⇄ mBar switch (all thresholds stay in Torr internally, as in the VI).
+**Units** – **mBar by default** on this facility, Torr ⇄ mBar switch on the panel (all thresholds stay
+in Torr internally, as in the VI).  The turbo-on threshold defaults to **2e-1 mBar**.
 **Logging** – event log on the panel + one CSV per day in `logs/` (all pressures in Torr and mBar,
 every command/read, turbo speed/status, error).  **Plots** – log-pressure and On/Off traces on a
-shared time axis; untick *Follow* to zoom into history.
+shared time axis.  The panel is used on a **touch screen**, so the plots have finger-sized controls:
+*Box zoom* (drag a rectangle to zoom in), separate **Reset X** (back to the live window) and
+**Reset Y** (rescale to the traces shown) buttons, and a checkbox per reading to show/hide it –
+with *Auto-rescale on show/hide* ticked, hiding a trace rescales the rest.  Any manual pan/zoom
+switches *Follow* off automatically.
 
-## Adapting to another facility (VC100/VC140 style, several turbos)
+## The medium chamber (VC100) and adapting to another facility
 
-Copy `config/facility_main_v4.4.yaml`, edit the channel map and add turbo branches:
+`config/facility_vc100.yaml` is the medium chamber: chassis **cDAQ3**, three turbo branches (Turbo 1 =
+Shimadzu **contact interface** – six status contacts, Motor/Standby/Reset outputs, no speed signal;
+Turbos 2 and 3 = Pfeiffer HiPace D-SUB with ±10 V speed and an error line), Edwards WRG/APG gauges in
+mBar, the compressed-air sensor (error when < 5 bar for 5 s) and the VI's own Auto rules (20 s primary
+warm-up before the bypass, 15 min vent, turbo valves compared with the turbo gauges, primary and
+chiller keep backing spinning turbos in Overnight, standby while a gate is closed, "Shut Off once
+rough", "Shutdown Now / After Vent").  `docs/VC100_REFERENCE.md` lists every line of the pinout, every
+constant and every difference to the small chamber, with the VI node it comes from.
 
-```yaml
-turbos:
-  - id: turbo2
-    label: "Turbo 2"
-    control_mode: hipace_dsub25   # or bigred_dsub15
-    gate_valve: gate2             # ids from the valves section
-    turbo_valve: turbo2_valve
-    gauge: pir_2                  # a gauge with role: turbo, turbo: turbo2
-    hipace_dsub25: {speed_ai: Mod8/ai5, error_di: Mod2/port0/line16, error_di_inverted: true,
-                    motor_do: Mod3/port0/line3, standby_do: Mod3/port0/line4, error_ack_do: Mod3/port0/line5}
-```
-Analog inputs use the terminal configuration set by `analog_input.terminal_config` (Main_V4.4 wires the
-gauges **differentially** = the VI's DAQmx value 10106; options `differential | rse | nrse | pseudo_diff |
-default`).  This must match the wiring — the wrong choice adds a per-channel voltage offset and the
-pressures read wrong while the DAQ still "reads OK".
+Everything that differs between the two chambers is a profile setting, so a third facility is a copy
+of the nearest YAML: channel map, gauge formulas (`convectron`, `ion_gauge`, `edwards_wrg_mbar`,
+`edwards_apg_mbar`, `leybold_*`), turbo blocks (`bigred_dsub15 | hipace_dsub25 | shimadzu_contacts`,
+each with its lines, error code/message, `error_requires_chiller`, `standby_speed_min_pct`),
+`thresholds` (Torr or `_mbar` keys), `timings` (settle waits, gap, vent time), the `auto_mode` rule
+switches and the `auto_buttons` per tab page.  Analog inputs use `analog_input.terminal_config` (both
+VIs wire the gauges **differentially** = DAQmx 10106); the wrong choice adds a per-channel offset and
+the pressures read wrong while the DAQ still "reads OK".
 
-Optional readings that Main_V4.4's chamber does not have are added the same way: an `extra_analog`
-entry (e.g. `{id: com_potential, label: "Com Potential (V)", channel: Mod1/ai6}`) shows a display-only
-voltage box on the diagram and logs it to the CSV; a `compressor: {channel: Mod8/ai16}` block shows the
-"Compressor Pressure (Bar)" box, logs it, adds the "Compressor air low" simulator fault and – with
-`thresholds.compressor_min_bar` – raises error 5011.  Both are commented out in
-`facility_main_v4.4.yaml`.
-
-The controller, recognition, interlocks, CSV and the diagram all follow the config (one branch per
-turbo; `in_use: false` parks a turbo like the VI's "Turbo X in use?" constant).  Start it with
-`run.bat --config config/my_facility.yaml`.  `facility_vc100_template.yaml` shows the 3-turbo shape but
-is *not* verified against the VC100 VI.
+Optional readings are blocks too: `extra_analog` entries show a display-only voltage box and CSV column;
+a `compressor:` block (channel, `scale`, `offset` → bar) shows the "Compressor Pressure (Bar)" box, adds
+the "Compressor air low" simulator fault and, with `thresholds.compressor_min_bar`, raises error 5011.
+The controller, recognition, interlocks, CSV and the diagram follow the config (one branch per turbo;
+`in_use: false` parks a turbo like the VIs' "Turbo X in use?" constant).
 
 ## Simulation
 
@@ -122,23 +128,42 @@ feedback, pump/chiller feedback, turbo spin-up/down and gauge voltages through t
 The panel at the bottom injects faults (stuck valve, turbo error, chiller/primary fault, WRG fault, power
 cut; "compressor air low" only for a facility with a `compressor:` block) and sets the plant speed-up.
 
+## Changes requested by the test engineer (2026-09-08)
+
+These deviate from the VI on purpose and are all driven by the facility profile:
+
+* **Pumping to Rough start order depends on the chamber pressure.**  Above
+  `thresholds.bypass_first_above_torr` (**5e1 mBar**) the bypass valve is opened **first** and the
+  primary pump starts after it; below it the **primary pump starts first** and the bypass follows
+  after `timings.primary_to_bypass_gap_s` (**25 s**, the requested 20-30 s).  The VI always started
+  the pump immediately.
+* **"Is the manual vent valve closed?"** – Pump to Rough / Pump to High Vac / Overnight Pump ask this
+  first and only run on *Yes* (the manual vent valve is a hand valve, not on the DAQ).
+* **Overnight Pump below `thresholds.overnight_skip_below_torr` (2e-1 mBar)** skips roughing entirely:
+  no primary pump, no bypass, straight into the overnight hold.
+* **Primary pump total operating hours** – a maintenance meter on the panel, counted from the pump's
+  read-back and kept in `logs/run_hours_<facility>.json` so it survives restarts (also a CSV column).
+
 ## Differences from Main_V4.4 (deliberate, all optional)
 
 * Optional non-blocking settle waits and dialogs (`blocking_waits: false`, see above) – off by default.
 * CSV logging, zoomable plots, unit switch, Manual mode, config-driven facility layout.
 * "Reset Turbos" (error acknowledge) also works in Auto mode.
 * The VI appends "Shutt down due to error" every 100 ms while an error persists; here it is logged once.
-* HiPace **RS485** control (Pfeiffer PV library) is not ported – both D-SUB modes are.
+* HiPace **RS485** control (Pfeiffer PV library) is not ported – both D-SUB modes and the contact interface are.
+* Auto mode stops on error codes 5000–5011 (the VIs: 5000–5010; 5011 is the compressor error, which the
+  VC100 VI reports under the gate code 5010).
 
 ## Connecting to the real facility (bring-up)
 
 The DAQ backend (`hal/nidaqmx_backend.py`) reproduces the VI's task layout and channel map, and is
 covered by tests against a *fake* driver – it has **not yet run against the real cDAQ**.  Go in steps:
 
-1. On the lab PC: NI-DAQmx driver installed, cDAQ visible in NI MAX as `cDAQ1` (or change
-   `facility.daq_name`), then `%LOCALAPPDATA%\FacilityControl\venv\Scripts\pip install nidaqmx`.
+1. On the lab PC: NI-DAQmx driver installed, cDAQ visible in NI MAX under the profile's
+   `facility.daq_name` (`cDAQ1` small chamber, `cDAQ3` medium chamber), then
+   `%LOCALAPPDATA%\FacilityControl\venv\Scripts\pip install nidaqmx`.
    **Close LabVIEW** – DAQmx lets only one program own the lines.
-2. `python tools\daq_check.py` – read-only: lists the devices, checks every channel of the profile
+2. `python tools\daq_check.py` (add `--config config\facility_vc100.yaml` for the medium chamber) – read-only: lists the devices, checks every channel of the profile
    exists on its module, then prints live gauge / valve / pump / turbo readings for 20 s.  Nothing is
    written, the facility stays as it is.  Compare with the LabVIEW panel (pressures, reed states).
 3. With the facility in a safe state (pumps off, valves closed, vented) start `run.bat --daq --mode admin`.

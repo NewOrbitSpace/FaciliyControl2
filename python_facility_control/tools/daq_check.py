@@ -43,7 +43,9 @@ def channel_inventory(cfg):
     for tc in cfg.turbos:
         p = tc.params
         for key, kind in (("motor_do", "do"), ("standby_do", "do"), ("error_ack_do", "do"),
-                          ("error_di", "di"), ("still_spinning_di", "di"), ("speed_ai", "ai")):
+                          ("error_di", "di"), ("still_spinning_di", "di"), ("speed_ai", "ai"),
+                          ("rotating_di", "di"), ("accelerating_di", "di"), ("at_speed_di", "di"),
+                          ("braking_di", "di"), ("alarm_di", "di"), ("warning_di", "di")):
             if key in p:
                 items.append((kind, cfg.phys(p[key]), f"{tc.label} {key} ({tc.control_mode})"))
     return items
@@ -114,9 +116,12 @@ def live_readings(cfg, seconds: float) -> None:
                 parts.append(f"compressor={inp.compressor_bar:.2f}")
             valves = " ".join(f"{vid}={'OPEN' if inp.valve_reads.get(vid) else 'closed'}" for vid in cfg.valve_ids)
             pumps = f"primary={'ON' if inp.primary_read else 'off'} chiller={'ON' if inp.chiller_read else 'off'}"
-            turbos = " ".join(f"{tid}: err={'YES' if ti.error else 'no'} speed={ti.speed_pct:.0f}%"
-                              + (f" spinning={ti.still_spinning}" if ti.still_spinning else "")
-                              for tid, ti in inp.turbos.items())
+            turbos = " ".join(
+                (f"{tid}: " + " ".join(f"{k}={'Y' if v else 'n'}" for k, v in ti.contacts.items()))
+                if ti.contacts else
+                (f"{tid}: err={'YES' if ti.error else 'no'} speed={ti.speed_pct:.0f}%"
+                 + (f" spinning={ti.still_spinning}" if ti.still_spinning else ""))
+                for tid, ti in inp.turbos.items())
             print(time.strftime("%H:%M:%S"), f"(read {dt * 1000:.0f} ms)")
             print("   ", " | ".join(parts))
             print("   ", valves, "|", pumps, "|", turbos)

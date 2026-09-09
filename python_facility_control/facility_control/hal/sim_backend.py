@@ -7,7 +7,8 @@ The plant is deliberately simple but physically sensible:
 * primary pump / chiller with delayed run feedback
 * turbo with spin-up / spin-down dynamics; effective pumping speed ~ (speed %)^2
 * gauge voltages produced with the *inverse* of the VI's formula nodes (+ a little noise)
-* fault injection (stuck valve, turbo error, chiller/primary fault, compressor low, gauge fault, power cut)
+* fault injection (stuck valve, turbo error/warning, chiller/primary fault, compressor low, gauge fault, power cut)
+* Shimadzu contact interface (VC100 Turbo 1): the six status contacts are derived from the modelled speed
 
 Time advances with wall-clock time multiplied by `simulation.time_scale` from the YAML.
 """
@@ -140,7 +141,9 @@ class SimBackend(HardwareBackend):
             t.standby = bool(cmds.turbo_standby.get(tid, False))
 
     def turbo_error_ack(self, turbo_id: str, level: bool) -> None:
-        if level and self.state.turbos[turbo_id].error and not self.state.faults.get("turbo_error"):
+        """Error-acknowledge / 'Reset' line: clears a tripped turbo unless the fault is still injected."""
+        f = self.state.faults
+        if level and self.state.turbos[turbo_id].error and not (f.get("turbo_error") or f.get(f"turbo_error_{turbo_id}")):
             self.state.turbos[turbo_id].error = False
         if level and self.state.faults.get("turbo_error") == "latched":
             self.state.faults["turbo_error"] = False
@@ -171,7 +174,7 @@ class SimBackend(HardwareBackend):
         # turbos
         for tid, t in st.turbos.items():
             tcfg = cfg.turbo(tid)
-            fault = st.faults.get("turbo_error")
+            fault = st.faults.get("turbo_error") or st.faults.get(f"turbo_error_{tid}")   # all turbos / one turbo
             if fault:
                 t.error = True
             powered = st.chiller_on > 0.5  # chiller contactor also powers the turbo controllers
@@ -297,8 +300,25 @@ class SimBackend(HardwareBackend):
         for ea in cfg.extra_analog:
             inp.extra_analog[ea["id"]] = 0.5 + self.rng.gauss(0.0, 0.01)
         for tid, t in st.turbos.items():
-            ti = TurboInputs(speed_pct=t.speed_pct if power else 0.0, error=bool(t.error) if power else False,
-                             motor_read=bool(t.motor and power), still_spinning=bool(t.speed_pct > 5.0))
+            tcfg = cfg.turbo(tid)
+            if tcfg.control_mode == "shimadzu_contacts":
+                # contact interface: no speed signal, six status contacts derived from the modelled speed
+                # (already de-inverted: True = condition present)
+                spd = t.speed_pct if power else 0.0
+                th = cfg.thresholds
+                contacts = {
+                    "rotating": spd > 1.0,
+                    "accelerating": bool(t.motor and power and not t.error and spd < th.turbo_speed_reached_pct),
+                    "at_speed": spd >= th.turbo_speed_reached_pct,
+                    "braking": bool((not t.motor or t.error) and spd > th.turbo_slow_speed_pct),
+                    "alarm": bool(t.error) if power else False,
+                    "warning": bool(st.faults.get("turbo_warning")) if power else False,
+                }
+                ti = TurboInputs(speed_pct=0.0, error=contacts["alarm"], motor_read=bool(t.motor and power),
+                                 still_spinning=contacts["rotating"], contacts=contacts)
+            else:
+                ti = TurboInputs(speed_pct=t.speed_pct if power else 0.0, error=bool(t.error) if power else False,
+                                 motor_read=bool(t.motor and power), still_spinning=bool(t.speed_pct > 5.0))
             inp.turbos[tid] = ti
         # the plant always has an air supply; a *reading* exists only if the facility has the sensor
         inp.compressor_bar = st.compressor_bar if cfg.has_compressor else None

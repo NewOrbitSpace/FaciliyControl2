@@ -1,12 +1,23 @@
-"""Auto-mode state machine – a faithful port of the 'Auto' frame of Main_V4.4.vi.
+"""Auto-mode state machine – a faithful port of the 'Auto' frame of the facility VIs.
 
 Every state below corresponds to one frame of the VI's `Current Facility State` case
 structure; comments quote the VI where the behaviour is non-obvious.  The code is written
-against a *list* of turbos so that a facility profile with several turbo branches can reuse
-it; with one turbo it collapses to exactly the VI's logic.
+against a *list* of turbos so that a facility profile with several turbo branches reuses it;
+with one turbo it collapses to exactly Main_V4.4's logic, with three (VC100) to the medium
+chamber's VI.  Where the two VIs differ the behaviour is selected by the profile's `auto_mode`
+block (`AutoBehaviour` in config.py) – nothing is hard-coded per facility.
 
-Button names (normalised from the VI's duplicated controls):
-    pump_to_rough, pump_to_high_vac, overnight_pump, vent, shut_off, shutdown, vent_and_shutdown
+Button names (normalised from the VIs' duplicated controls):
+    pump_to_rough, pump_to_high_vac, overnight_pump, vent, shut_off, shut_off_once_rough,
+    shutdown, shutdown_after_vent, vent_and_shutdown
+
+Deviation from the VIs, requested by the test engineer (2026-09-08) – the start order of
+Pumping to Rough can depend on the chamber pressure, and Overnight Pump can skip roughing:
+  * chamber above `thresholds.bypass_first_above_torr`: open the bypass valve FIRST, then start the
+    primary pump (set the threshold to null for the VIs' own order: primary first, bypass after
+    `timings.primary_to_bypass_gap_s` – 20 s in the VC100 VI, 60 s but disabled in Main_V4.4);
+  * Overnight Pump pressed below `thresholds.overnight_skip_below_torr` goes straight to the
+    overnight hold without starting the primary pump or opening the bypass (null = never).
 """
 from __future__ import annotations
 
@@ -15,8 +26,17 @@ import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set
 
-from .config import FacilityConfig
-from .model import Commands, FacilityState as S, Inputs, TabPage
+from .config import FacilityConfig, TurboConfig
+from .model import Commands, FacilityState as S, Inputs, TabPage, TurboInputs
+from .units import torr_to
+
+
+# --------------------------------------------------------------- Pumping to Rough substates
+# (renamed/renumbered 2026-09-08 – the start order now depends on the chamber pressure)
+SUB_ROUGH_ENTRY = 0          # decide the start order from the chamber pressure
+SUB_ROUGH_BYPASS_FIRST = 1   # high pressure: bypass already open, now start the primary pump
+SUB_ROUGH_PRIMARY_GAP = 2    # low pressure: primary running, waiting the gap before the bypass opens
+SUB_ROUGH_WAIT = 3           # primary + bypass on: wait for the chamber to sit below the threshold
 
 
 # ---------------------------------------------------------------------------- timers
@@ -45,6 +65,7 @@ class ElapsedTimer:
 class AutoMemory:
     """Persistent objects of the Auto frame (express-VI timers, edge detectors)."""
     warmup: ElapsedTimer = field(default_factory=lambda: ElapsedTimer(60.0))
+    bypass_gap: ElapsedTimer = field(default_factory=lambda: ElapsedTimer(25.0))
     below_threshold: ElapsedTimer = field(default_factory=lambda: ElapsedTimer(30.0))
     below_prev: Optional[bool] = None
     disengage: ElapsedTimer = field(default_factory=lambda: ElapsedTimer(1.0, auto_reset=True))
@@ -61,7 +82,7 @@ class AutoInput:
     substate: int
     buttons: Set[str]
     now: float
-    error_active: bool                 # error? OR 5000 <= code <= 5010
+    error_active: bool                 # error? OR 5000 <= code <= 5011
     turbo_on_threshold_torr: float
     turbo_engage_time: Optional[float]  # epoch seconds ('Turbo Engage time')
     skip_primary_warm: bool
@@ -83,24 +104,39 @@ def _ts() -> str:
     return time.strftime("%H:%M:%S")
 
 
+def turbo_is_spinning(ti: Optional[TurboInputs], pct: float) -> bool:
+    """'Still spinning' for one turbo: speed above `pct`, or – for the contact interface, which has
+    no speed signal – the 'Rotating' contact (VC100: `Turbo 1 Rotating Read`)."""
+    if ti is None:
+        return False
+    if ti.has_contacts:
+        return ti.contact("rotating")
+    return ti.speed_pct > pct
+
+
 class AutoStateMachine:
     def __init__(self, cfg: FacilityConfig, mem: Optional[AutoMemory] = None):
         self.cfg = cfg
         self.th = cfg.thresholds
         self.tm = cfg.timings
+        self.am = cfg.auto_mode
         self.mem = mem or AutoMemory()
         self.mem.warmup.target_s = self.tm.primary_warmup_s
+        self.mem.bypass_gap.target_s = self.tm.primary_to_bypass_gap_s
         self.mem.below_threshold.target_s = self.th.min_time_below_threshold_s
         self.mem.disengage.target_s = self.tm.disengage_wait_s
         self.mem.vent.target_s = self.tm.vent_duration_s
 
     # ------------------------------------------------------------- helpers
-    def _turbos(self):
+    def _turbos(self) -> List[TurboConfig]:
         return self.cfg.turbos_in_use()
 
-    def _max_speed(self, inp: Inputs) -> float:
-        speeds = [inp.turbos[t.id].speed_pct for t in self.cfg.turbos if t.id in inp.turbos]
-        return max(speeds) if speeds else 0.0
+    def _spinning(self, inp: Inputs, tc: TurboConfig, pct: float) -> bool:
+        return turbo_is_spinning(inp.turbos.get(tc.id), pct)
+
+    def _any_spinning(self, inp: Inputs, pct: float) -> bool:
+        """The VIs OR the spinning test over every turbo (VC100: Turbo1.Rotating ∨ T2 % ∨ T3 %)."""
+        return any(turbo_is_spinning(ti, pct) for ti in inp.turbos.values())
 
     def _wrg(self, inp: Inputs) -> float:
         return inp.pressure(self.cfg.main_gauge.id)
@@ -136,9 +172,25 @@ class AutoStateMachine:
     def _any_turbo_valve_prev(self, prev: Commands) -> bool:
         return any(prev.valves.get(t.turbo_valve, False) for t in self._turbos())
 
+    def _spinning_turbo_valves(self, cmds: Commands, inp: Inputs, prev: Commands, pct: float,
+                               gauge_rule: bool) -> None:
+        """Turbo valves while turbos spin down (Overnight / Venting / Turbo slowing).
+
+        Main_V4.4 (one turbo): TV := spinning.  VC100 (per turbo): TV_i := spinning_i ∧ (TV_i_prev ∨
+        foreline < turbo-body pressure_i) – a valve that is closed is only opened if the foreline is
+        below the turbo body, so no gas is pushed into a spinning turbo (`turbo_valve_gauge_rule`).
+        """
+        fore = self._foreline(inp)
+        for t in self._turbos():
+            spin = self._spinning(inp, t, pct)
+            if gauge_rule:
+                p_t = self._turbo_pressure(inp, t.id)
+                spin = spin and (prev.valves.get(t.turbo_valve, False) or fore < p_t)
+            cmds.valves[t.turbo_valve] = spin
+
     # ------------------------------------------------------------- main entry
     def step(self, a: AutoInput) -> AutoOutput:
-        cfg, th = self.cfg, self.th
+        cfg, th, am = self.cfg, self.th, self.am
         inp, prev, b = a.inputs, a.prev, a.buttons
         log: List[str] = []
         cur, tgt = a.current, a.target
@@ -156,7 +208,9 @@ class AutoStateMachine:
         cmds = prev.copy()                 # every state redefines what it needs
         cmds.turbo_error_ack = {t: False for t in cfg.turbo_ids}
         bypass, vent = self._bypass_id(), self._vent_id()
-        speed = self._max_speed(inp)
+        spinning15 = self._any_spinning(inp, th.turbo_spinning_pct)      # 15 % / Rotating (Rough, Engage)
+        slow_pct = th.slowing_pct                                          # 'Turbo slowing Threshold (%)'
+        spinning_slow = self._any_spinning(inp, slow_pct)                 # Overnight / Venting / Turbo slowing
         wrg = self._wrg(inp)
         substate = a.substate
         out_sub = 0
@@ -173,6 +227,9 @@ class AutoStateMachine:
                 cmds.turbo_motor[t] = False
                 cmds.turbo_standby[t] = False
 
+        def off_or_slowing(spinning: bool) -> S:
+            return S.TURBO_SLOWING if spinning else S.FACILITY_OFF
+
         # =====================================================================
         if cur == S.FACILITY_OFF:
             all_off()
@@ -184,10 +241,19 @@ class AutoStateMachine:
                 new_tgt = S.PUMPING_TO_HIGH_VAC
             if "overnight_pump" in b:
                 new_tgt = S.OVERNIGHT_PUMP
+            if "shut_off_once_rough" in b:            # VC100: rough the chamber once, then switch off
+                new_tgt = S.FACILITY_OFF
             if "vent" in b:
                 new_tgt = S.VENT_AND_SHUTDOWN
-            if b & {"pump_to_rough", "pump_to_high_vac", "overnight_pump"}:
+            if b & {"pump_to_rough", "pump_to_high_vac", "overnight_pump", "shut_off_once_rough"}:
                 new_cur = S.PUMPING_TO_ROUGH
+            # test engineer: Overnight Pump with the chamber already below the skip threshold needs no
+            # roughing at all – hold straight away, without the primary pump or the bypass valve
+            if ("overnight_pump" in b and th.overnight_skip_below_torr is not None
+                    and wrg > th.wrg_error_threshold_torr and wrg < th.overnight_skip_below_torr):
+                new_cur = S.OVERNIGHT_PUMP
+                log.append(f"Chamber already below {torr_to('mbar', th.overnight_skip_below_torr):.1f} mBar"
+                           f" – holding for Overnight Pump without roughing at {_ts()}")
             if "vent" in b:
                 new_cur = S.VENTING
             cur, tgt = new_cur, new_tgt
@@ -203,25 +269,46 @@ class AutoStateMachine:
                 tgt_mid = S.PUMPING_TO_ROUGH
             if "pump_to_high_vac" in b:
                 tgt_mid = S.PUMPING_TO_HIGH_VAC
+            if b & {"shut_off", "shut_off_once_rough"}:   # VC100 buttons: target Facility Off
+                tgt_mid = S.FACILITY_OFF
             new_tgt = S.VENTING if "vent" in b else tgt_mid
 
             primary_already_on = inp.primary_read
             done = False
-            # --- substates
-            if substate == 0:
-                skip_warm = primary_already_on
-                bypass_flag = primary_already_on
-                next_sub = 1
+            # --- substates.  The start order depends on the chamber pressure (test engineer):
+            #     above bypass_first_above_torr -> bypass valve first, then the primary pump
+            #     below it (or rule disabled)   -> primary pump first, bypass after the gap (the VIs)
+            if substate == SUB_ROUGH_ENTRY:
                 self.mem.warmup.reset(a.now)
-            elif substate == 1:
-                _, warm_done = self.mem.warmup.update(a.now)
-                # VI: Compound OR (time elapsed, TRUE, primary already on) -> always TRUE
-                if not self.tm.primary_warmup_enabled:
-                    warm_done = True
-                warm_done = warm_done or skip_warm
-                next_sub = 2 if warm_done else 1
-                bypass_flag = True
-            else:  # substate 2 – wait for the WRG to sit below the threshold for 30 s
+                self.mem.bypass_gap.reset(a.now)
+                wrg_valid = wrg > th.wrg_error_threshold_torr
+                if primary_already_on:
+                    # already roughing (e.g. recognised from Admin) – nothing to sequence
+                    skip_warm = True
+                    primary_flag, bypass_flag = True, True
+                    next_sub = SUB_ROUGH_WAIT
+                elif th.bypass_first_above_torr is not None and wrg_valid and wrg > th.bypass_first_above_torr:
+                    primary_flag, bypass_flag = False, True
+                    next_sub = SUB_ROUGH_BYPASS_FIRST
+                    log.append(f"Chamber above {torr_to('mbar', th.bypass_first_above_torr):.0f} mBar – "
+                               f"opening the bypass valve before starting the primary pump at {_ts()}")
+                else:
+                    primary_flag, bypass_flag = True, False
+                    next_sub = SUB_ROUGH_PRIMARY_GAP
+                    log.append(f"Starting the primary pump; the bypass valve opens in "
+                               f"{self.tm.primary_to_bypass_gap_s:.0f} s at {_ts()}")
+            elif substate == SUB_ROUGH_BYPASS_FIRST:
+                # the bypass valve was commanded open in the previous frame (and has settled)
+                primary_flag, bypass_flag = True, True
+                next_sub = SUB_ROUGH_WAIT
+            elif substate == SUB_ROUGH_PRIMARY_GAP:
+                gap_elapsed, gap_done = self.mem.bypass_gap.update(a.now)
+                primary_flag = True
+                bypass_flag = gap_done
+                next_sub = SUB_ROUGH_WAIT if gap_done else SUB_ROUGH_PRIMARY_GAP
+                if gap_done:
+                    log.append(f"Opened the bypass valve {gap_elapsed:.0f} s after the primary pump at {_ts()}")
+            else:  # SUB_ROUGH_WAIT – wait for the WRG to sit below the threshold for 30 s
                 below = (wrg < a.turbo_on_threshold_torr) and (wrg > th.gauge_error_threshold_torr)
                 if below:
                     changed = (self.mem.below_prev is not True)
@@ -229,32 +316,46 @@ class AutoStateMachine:
                 else:
                     elapsed_below, done = 0.0, False
                 self.mem.below_prev = below
-                bypass_flag = True
+                primary_flag, bypass_flag = True, True
                 skip_warm = False
-                next_sub = 2
+                next_sub = SUB_ROUGH_WAIT
 
             # commands
-            tv_open = (tgt_mid != S.PUMPING_TO_ROUGH) and (self._any_turbo_valve_prev(prev) or done)
-            self._set_turbo_valves(cmds, tv_open)
+            # turbo valves: TV := (tgt ≠ Rough) ∧ (TV_prev ∨ done)  [Main_V4.4]
+            # VC100 adds per turbo: ∨ (bypass open ∧ chamber pressure < turbo-body pressure_i)
+            leaving = tgt_mid != S.PUMPING_TO_ROUGH
+            any_prev = self._any_turbo_valve_prev(prev)
+            bypass_prev = bool(bypass and prev.valves.get(bypass, False))
+            for t in self._turbos():
+                if am.turbo_valve_gauge_rule:
+                    # VC100 For-loop: TV_i := done ∨ TV_i_prev ∨ (bypass ∧ WRG < turbo gauge_i)
+                    early = bypass_prev and wrg > th.gauge_error_threshold_torr and wrg < self._turbo_pressure(inp, t.id)
+                    open_i = done or prev.valves.get(t.turbo_valve, False) or early
+                else:
+                    open_i = done or any_prev
+                cmds.valves[t.turbo_valve] = leaving and open_i
             if bypass:
                 cmds.valves[bypass] = False if "vent" in b else bypass_flag
             if vent:
                 cmds.valves[vent] = False
             self._set_gates(cmds, False)
-            cmds.primary = True
-            cmds.chiller = (tgt == S.PUMPING_TO_HIGH_VAC) or (speed > th.turbo_spinning_pct) or (substate == 0)
+            cmds.primary = primary_flag
+            cmds.chiller = ((tgt == S.PUMPING_TO_HIGH_VAC) or spinning15 or (substate == SUB_ROUGH_ENTRY))
             # transitions (use the target *after* the error override, as the VI does)
             new_cur = S.PUMPING_TO_ROUGH
             if tgt == S.OVERNIGHT_PUMP and done:
                 new_cur = S.OVERNIGHT_PUMP
             if tgt == S.PUMPING_TO_HIGH_VAC and done:
                 new_cur = S.ENGAGE_TURBO
+            if tgt == S.FACILITY_OFF and done:          # VC100 'Shut Off once rough'
+                new_cur = off_or_slowing(spinning15)
+                log.append(f"Rough vacuum reached – shutting off as requested at {_ts()}")
             if "shut_off" in b:
-                new_cur = S.FACILITY_OFF
+                new_cur = off_or_slowing(spinning15) if am.shut_off_spins_down_first else S.FACILITY_OFF
             if "vent" in b:
                 new_cur = S.VENTING
             if new_cur != S.PUMPING_TO_ROUGH:
-                out_sub = 0
+                out_sub = SUB_ROUGH_ENTRY
                 skip_warm = False
             else:
                 out_sub = next_sub
@@ -264,7 +365,15 @@ class AutoStateMachine:
         elif cur == S.OVERNIGHT_PUMP:
             tab = TabPage.OVERNIGHT_PUMP
             all_off()
-            cmds.chiller = speed > th.overnight_chiller_speed_pct
+            if am.overnight_backing_while_spinning:
+                # VC100: while any turbo is still above the slowing threshold keep the primary pump and
+                # chiller running and each spinning turbo's valve open; everything else is off
+                for t in self._turbos():
+                    cmds.valves[t.turbo_valve] = self._spinning(inp, t, slow_pct)
+                cmds.primary = spinning_slow
+                cmds.chiller = spinning_slow
+            else:
+                cmds.chiller = self._any_spinning(inp, th.overnight_chiller_speed_pct)
             time_reached = a.turbo_engage_time is not None and a.now > a.turbo_engage_time
             new_cur = S.PUMPING_TO_ROUGH if time_reached else S.OVERNIGHT_PUMP
             new_tgt = S.PUMPING_TO_HIGH_VAC if time_reached else tgt
@@ -276,6 +385,8 @@ class AutoStateMachine:
                 new_cur, new_tgt = S.PUMPING_TO_ROUGH, S.PUMPING_TO_ROUGH
             if "pump_to_high_vac" in b:
                 new_cur, new_tgt = S.PUMPING_TO_ROUGH, S.PUMPING_TO_HIGH_VAC
+            if new_cur != S.OVERNIGHT_PUMP:             # VI: turbo valves only while the state stays
+                self._set_turbo_valves(cmds, False)
             cur, tgt = new_cur, new_tgt
 
         # =====================================================================
@@ -290,9 +401,9 @@ class AutoStateMachine:
             if substate == 0:
                 bp, gv, out_sub = True, False, 1
             elif substate == 1:
-                limit = th.turbo_on_wiggle_room_multiplier * a.turbo_on_threshold_torr
+                limit = th.turbo_on_wiggle_room_multiplier * th.engage_threshold(a.turbo_on_threshold_torr)
                 ok = (wrg < limit) and (wrg > th.wrg_error_threshold_torr) and (self._foreline(inp) < limit)
-                what = "open gate" if speed > th.turbo_engage_msg_speed_pct else "turn on turbo"
+                what = "open gate" if self._any_spinning(inp, th.turbo_engage_msg_speed_pct) else "turn on turbo"
                 if ok:
                     log.append(f"Pressure low enough to {what}")
                     bp, gv, out_sub = True, False, 2
@@ -383,8 +494,8 @@ class AutoStateMachine:
             if bypass:
                 cmds.valves[bypass] = False
             self._set_gates(cmds, False)
-            spinning = speed > th.turbo_spinning_pct
-            # 10-minute vent timer
+            spinning = spinning_slow
+            # vent timer (10 min Main_V4.4, 15 min VC100 – timings.vent_duration_s)
             if substate == 0:
                 self.mem.vent.reset(a.now)
                 venting_active, next_sub = True, 1
@@ -393,10 +504,15 @@ class AutoStateMachine:
                 venting_active, next_sub = True, (2 if done else 1)
             else:
                 venting_active, next_sub = False, 2
+            stop_now = "shut_off" in b                    # 'Shut Off' (Main_V4.4) / 'Shutdown Now' (VC100)
             if vent:
                 cmds.valves[vent] = venting_active or (tgt == S.VENT_AND_SHUTDOWN)
+                if am.vent_closes_on_shutdown and (stop_now or b & {"pump_to_rough", "pump_to_high_vac", "overnight_pump"}):
+                    cmds.valves[vent] = False            # VC100: a button that leaves Venting closes the vent at once
             cmds.primary = spinning
             cmds.chiller = spinning
+            if am.venting_buttons_stop_turbos and b & {"shut_off", "shutdown_after_vent", "pump_to_rough", "overnight_pump"}:
+                self._set_motors(cmds, False)             # VC100 frame 8: motors := 0 on these buttons
             # new target
             new_tgt = S.FACILITY_OFF if tgt in (S.FACILITY_OFF, S.VENT_AND_SHUTDOWN) else tgt
             if "overnight_pump" in b:
@@ -405,21 +521,26 @@ class AutoStateMachine:
                 new_tgt = S.PUMPING_TO_ROUGH
             if "pump_to_high_vac" in b:
                 new_tgt = S.PUMPING_TO_HIGH_VAC
+            if stop_now or "shutdown_after_vent" in b:   # VC100 'Shutdown After Vent': finish venting, then off
+                new_tgt = S.FACILITY_OFF
             # new current
             if tgt in (S.FACILITY_OFF, S.VENT_AND_SHUTDOWN):
-                new_cur = S.TURBO_SLOWING if spinning else S.FACILITY_OFF
+                new_cur = off_or_slowing(spinning)
             else:
                 new_cur = S.VENTING
             if venting_active:
                 new_cur = S.VENTING
             if "overnight_pump" in b:
                 new_cur = S.PUMPING_TO_ROUGH
-            if "shut_off" in b:
-                new_cur = S.TURBO_SLOWING if spinning else S.FACILITY_OFF
+            if stop_now:
+                new_cur = off_or_slowing(spinning)
             if "pump_to_rough" in b or "pump_to_high_vac" in b:
                 new_cur = S.PUMPING_TO_ROUGH
             staying = new_cur == S.VENTING
-            self._set_turbo_valves(cmds, spinning if staying else False)
+            if staying:
+                self._spinning_turbo_valves(cmds, inp, prev, slow_pct, am.turbo_valve_gauge_rule)
+            else:
+                self._set_turbo_valves(cmds, False)
             out_sub = next_sub if staying else 0
             cur, tgt = new_cur, new_tgt
 
@@ -427,30 +548,50 @@ class AutoStateMachine:
         elif cur == S.TURBO_SLOWING:
             tab = TabPage.TURBO_SLOWING
             back = "pump_to_high_vac" in b
-            self._set_turbo_valves(cmds, not back)
+            to_vent = "vent" in b and not back            # VC100 'Vent' on the Turbo slowing page
             if bypass:
                 cmds.valves[bypass] = False
             if vent:
-                cmds.valves[vent] = False if back else prev.valves.get(vent, False)
+                if am.vent_closes_on_shutdown:
+                    cmds.valves[vent] = False
+                else:
+                    cmds.valves[vent] = False if back else prev.valves.get(vent, False)
             self._set_gates(cmds, False)
             cmds.primary = True
             cmds.chiller = True
             self._set_motors(cmds, back)
             if back:
+                self._set_turbo_valves(cmds, False)
                 cur, tgt = S.PUMPING_TO_ROUGH, S.PUMPING_TO_HIGH_VAC
+            elif to_vent:
+                self._set_turbo_valves(cmds, False)
+                cur, tgt = S.VENTING, S.FACILITY_OFF
             else:
-                cur, tgt = (S.TURBO_SLOWING if speed > th.turbo_spinning_pct else S.FACILITY_OFF), S.FACILITY_OFF
+                cur, tgt = off_or_slowing(spinning_slow), S.FACILITY_OFF
+                if am.turbo_valve_gauge_rule:
+                    # VC100: TV_i := spinning_i ∧ (TV_i_prev ∨ foreline < turbo gauge_i); all closed once off
+                    self._spinning_turbo_valves(cmds, inp, prev, slow_pct, True)
+                    if cur == S.FACILITY_OFF:
+                        self._set_turbo_valves(cmds, False)
+                else:
+                    self._set_turbo_valves(cmds, True)   # Main_V4.4: TV on until Facility Off runs
 
         else:  # VENT_AND_SHUTDOWN is only a target; treat like Facility Off
             all_off()
             cur = S.FACILITY_OFF
 
-        # --- global protection: high-pressure turbo shut-off (Turbo Convectron >= 5 Torr)
+        # --- VC100: turbo standby line = motor commanded while its gate is closed
+        if am.standby_when_gate_closed:
+            for t in self._turbos():
+                cmds.turbo_standby[t.id] = bool(cmds.turbo_motor.get(t.id, False)) and not cmds.valves.get(t.gate_valve, False)
+
+        # --- global protection: high-pressure turbo shut-off (turbo gauge >= 5 Torr / 5 mBar)
         for t in self._turbos():
             if cmds.turbo_motor.get(t.id, False):
                 p = self._turbo_pressure(inp, t.id)
                 if not (p < th.turbo_high_pressure_shutoff_torr):
                     cmds.turbo_motor[t.id] = False
-                    log.append(f"High pressure turbo shuttoff triggered at {_ts()}")
+                    who = "turbo" if len(cfg.turbos) == 1 else t.label.lower()
+                    log.append(f"High pressure {who} shuttoff triggered at {_ts()}")
 
         return AutoOutput(cmds, cur, tgt, out_sub, tab, log, skip_warm, elapsed_below)

@@ -9,7 +9,7 @@ facility:
   daq_name: cDAQ1            # 'Real_DAQ?' True -> cDAQ1, False -> cDAQ2 in the VI
   loop_period_ms: 100         # Wait Until Next ms Multiple in frame 5
   status_wait_ms: 10          # Wait (ms) in frame 2
-  pressure_unit_default: torr # torr | mbar  (runtime switchable)
+  pressure_unit_default: mbar # torr | mbar  (runtime switchable) - mBar by default on the lab panel
 
 # ---------------------------------------------------------------- hardware
 analog_input:
@@ -106,7 +106,7 @@ turbos:
 
 # ---------------------------------------------------------------- behaviour (VI constants)
 thresholds:
-  turbo_on_threshold_torr: 0.25       # 'Turbo on Threshold (torr) 2' control default
+  turbo_on_threshold_torr: 0.150012   # = 2e-1 mBar ('Turbo on Threshold' control default; starts the next turbo step)
   turbo_on_wiggle_room_multiplier: 5.0 # Engage Turbo check uses 5 x threshold on WRG and foreline
   min_time_below_threshold_s: 30.0    # pressure must stay below threshold this long (Pumping to Rough)
   gauge_error_threshold_torr: 1.0e-8  # WRG must be above this (gauge sanity) in Pumping to Rough
@@ -119,12 +119,19 @@ thresholds:
   overnight_chiller_speed_pct: 10.0
   manual_main_pressure_max_torr: 0.01 # Manual mode: turbo may start if Turbo Convectron < this
   manual_foreline_pressure_max_torr: 1.6
+  # Pumping-to-Rough start order (test engineer, 2026-09-08):
+  #   chamber above this -> open the bypass valve FIRST, then start the primary pump
+  #   chamber below this -> start the primary pump first, bypass follows after primary_to_bypass_gap_s
+  bypass_first_above_torr: 37.503084  # 5e1 mBar
+  # Overnight Pump pressed below this pressure skips roughing (no primary pump, no bypass)
+  overnight_skip_below_torr: 0.150012 # 2e-1 mBar
 
 timings:
   primary_warmup_s: 60.0        # Pumping to Rough substate 1 (in the VI OR-ed with TRUE -> effectively skipped)
   primary_warmup_enabled: false # set true to actually wait for the warm-up
   disengage_wait_s: 1.0
   vent_duration_s: 600.0        # 10 min
+  primary_to_bypass_gap_s: 25.0 # primary pump -> bypass valve gap (low-pressure branch), 20-30 s
   valve_settle_ms: 1000
   gate_settle_ms: 9000
   chiller_settle_ms: 10000

@@ -27,9 +27,14 @@ class Interlocks:
 
     # ------------------------------------------------------------ helpers
     def _speed(self, inp: Inputs, tid: Optional[str] = None) -> float:
+        """Speed in % – a contact-interface turbo (no speed signal) counts as 100 % while 'Rotating'."""
+        def one(t):
+            if t.has_contacts:
+                return 100.0 if t.contact("rotating") else 0.0
+            return t.speed_pct
         if tid:
-            return inp.turbos[tid].speed_pct if tid in inp.turbos else 0.0
-        return max([t.speed_pct for t in inp.turbos.values()] or [0.0])
+            return one(inp.turbos[tid]) if tid in inp.turbos else 0.0
+        return max([one(t) for t in inp.turbos.values()] or [0.0])
 
     def _motor(self, cmds: Commands, tid: Optional[str] = None) -> bool:
         if tid:

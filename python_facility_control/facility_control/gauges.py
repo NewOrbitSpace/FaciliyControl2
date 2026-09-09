@@ -40,6 +40,17 @@ def leybold_ptr90_v_to_mbar(v: float) -> float:      # PTR90 wide range: p = 10*
     return 10.0 ** (1.667 * v - 11.33)
 
 
+# Edwards gauges of the VC100 VI (formula nodes 'Ion gauge / Foreline / Turbo N Pressure calculation (mBar)'):
+#   WRG (wide range):        P_WRG_mBar  = 10**((V-6.8)/0.6)
+#   APG / Pirani (Fore, T1-3): P_Gage_mBar = 10**((V-6.143)/1.286)
+def edwards_wrg_v_to_mbar(v: float) -> float:
+    return 10.0 ** ((v - 6.8) / 0.6)
+
+
+def edwards_apg_v_to_mbar(v: float) -> float:
+    return 10.0 ** ((v - 6.143) / 1.286)
+
+
 def _mbar_to_torr(fn):
     return lambda v: fn(v) * 0.7500616827
 
@@ -49,6 +60,8 @@ FORMULAS: Dict[str, FormulaFn] = {
     "ion_gauge": ion_gauge_v_to_torr,
     "leybold_ttr91": _mbar_to_torr(leybold_ttr91_v_to_mbar),
     "leybold_ptr90": _mbar_to_torr(leybold_ptr90_v_to_mbar),
+    "edwards_wrg_mbar": _mbar_to_torr(edwards_wrg_v_to_mbar),
+    "edwards_apg_mbar": _mbar_to_torr(edwards_apg_v_to_mbar),
 }
 
 INVERSES: Dict[str, InverseFn] = {
@@ -56,6 +69,8 @@ INVERSES: Dict[str, InverseFn] = {
     "ion_gauge": ion_gauge_torr_to_v,
     "leybold_ttr91": lambda p: math.log10(max(p, 1e-30) / 0.7500616827) + 5.5,
     "leybold_ptr90": lambda p: (math.log10(max(p, 1e-30) / 0.7500616827) + 11.33) / 1.667,
+    "edwards_wrg_mbar": lambda p: math.log10(max(p, 1e-30) / 0.7500616827) * 0.6 + 6.8,
+    "edwards_apg_mbar": lambda p: math.log10(max(p, 1e-30) / 0.7500616827) * 1.286 + 6.143,
 }
 
 

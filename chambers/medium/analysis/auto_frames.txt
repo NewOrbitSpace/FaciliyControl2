@@ -1,0 +1,336 @@
+### Case 38253: frames ['0', '1', '2', '3', '4', '5', '8', '7'], 40 tunnels
+  SELECTOR <- (Or(Simple Error Handler.vi#30838, And((Simple Error Handler.vi#42024 <= 5010), (Simple Error Handler.vi#42024 >= 5000))) ? 0 : SR(29706))
+  IN  Index Array(Select#8149, 2)   (used in frames: [])
+  IN  Index Array(Select#8149, 0)   (used in frames: [])
+  IN  Index Array(Select#8149, 1)   (used in frames: [])
+  IN  Index Array(Select#8149, 5)   (used in frames: [])
+  IN  SR(15123)   (used in frames: ['1', '8', '7'])
+  IN  SR(15154)   (used in frames: ['1'])
+  IN  SR(13104)   (used in frames: [])
+  IN  SR(23529)   (used in frames: [])
+  IN  Select#1046   (used in frames: ['1'])
+  IN  SR(16932)   (used in frames: [])
+  IN  Select#3778   (used in frames: [])
+  IN  SR(16639)   (used in frames: [])
+  IN  Build Array(Turbo_2_Motor_Sys_Cmd, Turbo_3_Motor_Sys_Cmd)   (used in frames: [])
+  OUT →And#72071.x
+       frame    0: [F,F,F]
+       frame    1: (Compound Arithmetic[or]((New_State? ? 0 : FP[Vent 2]), Or(And(Case Structure#29946, (((New_State? ? 0 : FP[Shut Off]) ? 0 : (Select#48848 ? 0 : Select#34047)) == 0)), (New_State? ? 0 : FP[Shut Off])), (New_State? ? 0 : FP[Overnight Pump 3])) ? [F,F,F] : And((((New_State? ? 0 : FP[Shut Off]) ? 0 : ((New_State? ? 0 : FP[Shut Off once rough]) ? 0 : ((New_State? ? 0 : FP[Pump to High Vac 2]) ? 4 : (Select#43879 ? 1 : Select#39999)))) != 1), And(Which_Turbos_used?, For Loop#18338)))
+       frame    2: ((((New_State? ? 0 : FP[Pump to High Vac 3]) ? 1 : ((New_State? ? 0 : FP[Pump to Rough 3]) ? 1 : ((New_State? ? 0 : FP[Vent 4]) ? 8 : ((Get Date/Time In Seconds#27875 > Turbo Engage time) ? 1 : 2)))) != 2) ? [F,F,F] : And(Build Array(Case Structure#12494.Turbo Rotating Read, (Index Array(Build Array#71607, 0) > Turbo slowing Threshold (%)), (Index Array(Build Array#71607, 1) > Turbo slowing Threshold (%))), Which_Turbos_used?))
+       frame    3: And([T,T,T], Which_Turbos_used?)
+       frame    4: And([T,T,T], Which_Turbos_used?)
+       frame    5: Case Structure#31816
+       frame    8: (Or((SR(SUBSTATE) == 0), (((New_State? ? 0 : FP[Pump to Hi vac]) ? 1 : ((New_State? ? 0 : FP[Pump to Rough 5]) ? 1 : ((New_State? ? 0 : FP[Shutdown Now]) ? (Compound Arithmetic#29168 ? 7 : 0) : (Select#19173 ? 1 : Select#559)))) != 8)) ? [F,F,F] : And(For Loop#23784, Which_Turbos_used?))
+       frame    7: (Or((SR(SUBSTATE) == 0), (((New_State? ? 0 : FP[Pump to High Vac 4]) ? 1 : ((New_State? ? 0 : FP[Vent]) ? 8 : (Compound Arithmetic[or](Bundle/Unbundle By Name#44588, Greater?#51160, Greater?#51019) ? 7 : 0))) != 7)) ? [F,F,F] : And(For Loop#52153, Which_Turbos_used?))
+  OUT ⇢(selTun)⇢(flatSeqTun)→unknown#1567.4697
+       frame    0: 0
+       frame    1: (Compound Arithmetic[or]((New_State? ? 0 : FP[Vent 2]), Or(And(Case Structure#29946, (((New_State? ? 0 : FP[Shut Off]) ? 0 : (Select#48848 ? 0 : Select#34047)) == 0)), (New_State? ? 0 : FP[Shut Off])), (New_State? ? 0 : FP[Overnight Pump 3])) ? 0 : Case Structure#29946)
+       frame    2: 0
+       frame    3: Case Structure#29718
+       frame    4: 0
+       frame    5: Case Structure#31816
+       frame    8: 0
+       frame    7: 0
+  OUT ⇢(selTun)⇢(flatSeqTun)→unknown#1567.4775
+       frame    0: 0
+       frame    1: 0
+       frame    2: 0
+       frame    3: 0
+       frame    4: 0
+       frame    5: 0
+       frame    8: (Compound Arithmetic[or]((New_State? ? 0 : FP[Pump to Hi vac]), (New_State? ? 0 : FP[Pump to Rough 5]), (New_State? ? 0 : FP[Overnight Pump 5]), (New_State? ? 0 : FP[Shutdown Now])) ? 0 : Case Structure#31021)
+       frame    7: 0
+  OUT ⇢(selTun)⇢(flatSeqTun)→unknown#1567.1638
+       frame    0: 0
+       frame    1: T
+       frame    2: Compound Arithmetic[or](Case Structure#12494.Turbo Rotating Read, (Index Array(Build Array#71607, 0) > Turbo slowing Threshold (%)), (Index Array(Build Array#71607, 1) > Turbo slowing Threshold (%)))
+       frame    3: T
+       frame    4: T
+       frame    5: T
+       frame    8: Compound Arithmetic[or](Case Structure#12494.Turbo Rotating Read, (Index Array(Build Array#71607, 0) > Turbo slowing Threshold (%)), (Index Array(Build Array#71607, 1) > Turbo slowing Threshold (%)))
+       frame    7: T
+  OUT ⇢(selTun)⇢(flatSeqTun)→unknown#1567.3929
+       frame    0: 0
+       frame    1: Or(Compound Arithmetic[or](Compound Arithmetic[or](Case Structure#12494.Turbo Rotating Read, (Index Array(Build Array#71607, 0) > 15.0), (Index Array(Build Array#71607, 1) > 15.0)), (0 == SR(SUBSTATE))), (4 == (Or(Simple Error Handler.vi#30838, And((Simple Error Handler.vi#42024 <= 5010), (Simple Error Handler.vi#42024 >= 5000))) ? 0 : SR(TARGET))))
+       frame    2: Compound Arithmetic[or](Case Structure#12494.Turbo Rotating Read, (Index Array(Build Array#71607, 0) > Turbo slowing Threshold (%)), (Index Array(Build Array#71607, 1) > Turbo slowing Threshold (%)))
+       frame    3: T
+       frame    4: T
+       frame    5: T
+       frame    8: Compound Arithmetic[or](Case Structure#12494.Turbo Rotating Read, (Index Array(Build Array#71607, 0) > Turbo slowing Threshold (%)), (Index Array(Build Array#71607, 1) > Turbo slowing Threshold (%)))
+       frame    7: T
+  OUT ⇢(selTun)⇢(flatSeqTun)→unknown#1567.29144 →Is Value Changed.vim#46115.46149
+       frame    0: ((New_State? ? 0 : FP[Vent]) ? 8 : (Compound Arithmetic[or]((New_State? ? 0 : FP[Pump to Rough]), (New_State? ? 0 : FP[Pump to High Vac]), (New_State? ? 0 : FP[Overnight Pump]), (New_State? ? 0 : FP[Shut Off once rough 2])) ? 1 : 0))
+       frame    1: ((New_State? ? 0 : FP[Vent 2]) ? 8 : (Or(And(Case Structure#29946, (((New_State? ? 0 : FP[Shut Off]) ? 0 : (Select#48848 ? 0 : Select#34047)) == 0)), (New_State? ? 0 : FP[Shut Off])) ? (Compound Arithmetic[or](Case Structure#12494.Turbo Rotating Read, (Index Array(Build Array#71607, 0) > 15.0), (Index Array(Build Array#71607, 1) > 15.0)) ? 7 : 0) : (And((4 == (Or#44471 ? 0 : <n3011:25472>)), Case Structure#29946) ? 3 : (And((2 == Select#15191), Case Structure#29946) ? 2 : 1))))
+       frame    2: ((New_State? ? 0 : FP[Pump to High Vac 3]) ? 1 : ((New_State? ? 0 : FP[Pump to Rough 3]) ? 1 : ((New_State? ? 0 : FP[Vent 4]) ? 8 : ((Get Date/Time In Seconds#27875 > Turbo Engage time) ? 1 : 2))))
+       frame    3: Case Structure#29718
+       frame    4: ((New_State? ? 0 : FP[Vent 5]) ? 5 : ((New_State? ? 0 : FP[Vent and shutdonw]) ? 5 : ((New_State? ? 0 : FP[Overnight Pump 2]) ? 5 : ((New_State? ? 0 : FP[Pump to Rough 4]) ? 5 : ((New_State? ? 0 : FP[Shutdown ]) ? 5 : 4)))))
+       frame    5: Case Structure#31816
+       frame    8: ((New_State? ? 0 : FP[Pump to Hi vac]) ? 1 : ((New_State? ? 0 : FP[Pump to Rough 5]) ? 1 : ((New_State? ? 0 : FP[Shutdown Now]) ? (Compound Arithmetic[or](Case Structure#12494.Turbo Rotating Read, (Index Array(Build Array#71607, 0) > Turbo slowing Threshold (%)), (Index Array(Build Array#71607, 1) > Turbo slowing Threshold (%))) ? 7 : 0) : ((New_State? ? 0 : FP[Overnight Pump 5]) ? 1 : (Case Structure#31021 ? 8 : (Or(Equal?#19541, Equal?#34539) ? (Compound Arithmetic#29168 ? 7 : 0) : 8))))))
+       frame    7: ((New_State? ? 0 : FP[Pump to High Vac 4]) ? 1 : ((New_State? ? 0 : FP[Vent]) ? 8 : (Compound Arithmetic[or](Case Structure#12494.Turbo Rotating Read, (Index Array(Build Array#71607, 0) > FP[Turbo slowing Threshold (%)]), (Index Array(Build Array#71607, 1) > FP[Turbo slowing Threshold (%)])) ? 7 : 0)))
+  IN  (Or(Simple Error Handler.vi#30838, And((Simple Error Handler.vi#42024 <= 5010), (Simple Error Handler.vi#42024 >= 5000))) ? 0 : SR(TARGET))   (used in frames: ['0', '1', '2', '4', '5', '8'])
+  OUT ⇢(selTun)⇢(flatSeqTun)→unknown#1567.28214 →Equal?#34357.y
+       frame    0: ((New_State? ? 0 : FP[Vent]) ? 6 : ((New_State? ? 0 : FP[Shut Off once rough 2]) ? 0 : ((New_State? ? 0 : FP[Overnight Pump]) ? 2 : ((New_State? ? 0 : FP[Pump to High Vac]) ? 4 : ((New_State? ? 0 : FP[Pump to Rough]) ? 1 : (Or#44471 ? 0 : <n3011:25472>))))))
+       frame    1: ((New_State? ? 0 : FP[Vent 2]) ? 8 : ((New_State? ? 0 : FP[Shut Off]) ? 0 : ((New_State? ? 0 : FP[Shut Off once rough]) ? 0 : ((New_State? ? 0 : FP[Pump to High Vac 2]) ? 4 : ((New_State? ? 0 : FP[Pump to Rough 2]) ? 1 : ((New_State? ? 0 : FP[Overnight Pump 3]) ? 2 : Select#15191))))))
+       frame    2: ((New_State? ? 0 : FP[Pump to High Vac 3]) ? 4 : ((New_State? ? 0 : FP[Pump to Rough 3]) ? 1 : ((New_State? ? 0 : FP[Vent 4]) ? 8 : ((Get Date/Time In Seconds#27875 > Turbo Engage time) ? 4 : (Or(Simple Error Handler.vi#30838, And#43299) ? 0 : SR(TARGET))))))
+       frame    3: Case Structure#29718
+       frame    4: ((New_State? ? 0 : FP[Vent 5]) ? 8 : ((New_State? ? 0 : FP[Vent and shutdonw]) ? 6 : ((New_State? ? 0 : FP[Overnight Pump 2]) ? 2 : ((New_State? ? 0 : FP[Pump to Rough 4]) ? 1 : ((New_State? ? 0 : FP[Shutdown ]) ? 0 : (Or#44471 ? 0 : <n3011:25472>))))))
+       frame    5: Case Structure#31816
+       frame    8: ((New_State? ? 0 : FP[Pump to Hi vac]) ? 4 : ((New_State? ? 0 : FP[Pump to Rough 5]) ? 1 : (Or((New_State? ? 0 : FP[Shutdown Now]), (New_State? 2 ? 0 : FP[Shutdown After Vent])) ? 0 : ((New_State? ? 0 : FP[Overnight Pump 5]) ? 2 : (Or((Select#15191 == 0), (Select#15191 == 6)) ? 0 : (Or#44471 ? 0 : <n3011:25472>))))))
+       frame    7: ((New_State? ? 0 : FP[Pump to High Vac 4]) ? 4 : 0)
+  IN  Build Array(Multiply#70689, Multiply#78676)   (used in frames: ['1', '2', '3', '8', '7'])
+  IN  SR(2316)   (used in frames: ['1', '3', '5', '8'])
+  OUT →Case Structure#37926.37950 →And#25242.y
+       frame    0: 0
+       frame    1: Case Structure#679
+       frame    2: 0
+       frame    3: Case Structure#29718
+       frame    4: And(Index Array(Which_Turbos_used?, 2), Not(Compound Arithmetic[or]((New_State? ? 0 : FP[Shutdown ]), (New_State? ? 0 : FP[Pump to Rough 4]), (New_State? ? 0 : FP[Overnight Pump 2]), (New_State? ? 0 : FP[Vent and shutdonw]))))
+       frame    5: Case Structure#31816
+       frame    8: Case Structure#29746
+       frame    7: ((New_State? ? 0 : FP[Pump to High Vac 4]) ? T : 0)
+  IN  Select#1174   (used in frames: ['3'])
+  IN  Select#11405   (used in frames: ['1', '3'])
+  IN  Select#5233   (used in frames: ['3', '8', '7'])
+  IN  SR(SUBSTATE)   (used in frames: ['1', '3', '5', '8', '7'])
+  OUT ⇢(selTun)⇢(flatSeqTun)→unknown#1567.26913
+       frame    0: 0
+       frame    1: Case Structure#35798
+       frame    2: 0
+       frame    3: Case Structure#29718
+       frame    4: 0
+       frame    5: Case Structure#31816
+       frame    8: ((((New_State? ? 0 : FP[Pump to Hi vac]) ? 1 : ((New_State? ? 0 : FP[Pump to Rough 5]) ? 1 : ((New_State? ? 0 : FP[Shutdown Now]) ? (Compound Arithmetic[or](Bundle/Unbundle By Name#29129, Greater?#49554, Greater?#10375) ? 7 : 0) : ((New_State? ? 0 : FP[Overnight Pump 5]) ? 1 : (Case Structure#31021 ? 8 : Select#29382))))) != 8) ? 0 : Case Structure#31021)
+       frame    7: ((((New_State? ? 0 : FP[Pump to High Vac 4]) ? 1 : ((New_State? ? 0 : FP[Vent]) ? 8 : (Compound Arithmetic[or](Case Structure#12494.Turbo Rotating Read, (Index Array#51081 > FP[Turbo slowing Threshold (%)]), (Index Array#51095 > FP[Turbo slowing Threshold (%)])) ? 7 : 0))) != 7) ? 0 : 1)
+  IN  Case Structure#31632   (used in frames: ['0', '1', '2', '3', '4', '5', '8', '7'])
+  OUT →Case Structure#37926.31314
+       frame    0: Case Structure#31632
+       frame    1: Case Structure#31632
+       frame    2: Case Structure#32107
+       frame    3: Case Structure#29718
+       frame    4: Case Structure#31632
+       frame    5: Case Structure#31632
+       frame    8: Case Structure#31632
+       frame    7: Case Structure#31632
+  OUT →Equal?#49610.x →Select#47709.t_value
+       frame    0: 0
+       frame    1: 1
+       frame    2: 3
+       frame    3: 4
+       frame    4: 5
+       frame    5: 6
+       frame    8: 7
+       frame    7: 8
+  IN  Build Array(Index Array(Select#8149, 5), Index Array(Select#8149, 6), Index Array(Select#8149, 7))   (used in frames: [])
+  OUT →Index Array#41852.array →And#57406.x →Index Array#44758.array →Index Array#3743.array
+       frame    0: [F,F,F]
+       frame    1: [F,F,F]
+       frame    2: [F,F,F]
+       frame    3: And(Case Structure#29718, Which_Turbos_used?)
+       frame    4: And([T,T,T], Which_Turbos_used?)
+       frame    5: Case Structure#31816
+       frame    8: [F,F,F]
+       frame    7: [F,F,F]
+  IN  Build Array(Select#1174, Turbo 2 Pressure calculation (mBar)#1868, Turbo 3 Pressure calculation (mBar)#7199)   (used in frames: ['1', '8', '7'])
+  IN  Case Structure#12494   (used in frames: ['1', '2', '3', '4', '5', '8', '7'])
+  OUT →Bundle/Unbundle By Name#50813.50839 →Bundle/Unbundle By Name#27747.29684
+       frame    0: '\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+       frame    1: Case Structure#679
+       frame    2: Case Structure#12494
+       frame    3: Case Structure#29718
+       frame    4: Bundle<>(Case Structure#12494, And(Not(Compound Arithmetic[or]((New_State? ? 0 : FP[Shutdown ]), (New_State? ? 0 : FP[Pump to Rough 4]), (New_State? ? 0 : FP[Overnight Pump 2]), (New_State? ? 0 : FP[Vent and shutdonw]))), Index Array(Which_Turbos_used?, 0)))
+       frame    5: Case Structure#31816
+       frame    8: Case Structure#29746
+       frame    7: Bundle<>(Case Structure#12494, ((New_State? ? 0 : FP[Pump to High Vac 4]) ? T : 0))
+  IN  SR(49850)   (used in frames: ['1', '3', '5', '8'])
+  OUT →Case Structure#58164.58166 →And#2563.y
+       frame    0: 0
+       frame    1: Case Structure#679
+       frame    2: 0
+       frame    3: Case Structure#29718
+       frame    4: And(Not(Compound Arithmetic[or]((New_State? ? 0 : FP[Shutdown ]), (New_State? ? 0 : FP[Pump to Rough 4]), (New_State? ? 0 : FP[Overnight Pump 2]), (New_State? ? 0 : FP[Vent and shutdonw]))), Index Array(Which_Turbos_used?, 1))
+       frame    5: Case Structure#31816
+       frame    8: Case Structure#29746
+       frame    7: ((New_State? ? 0 : FP[Pump to High Vac 4]) ? T : 0)
+### Case 29946: frames ['0', '1', '2'], 7 tunnels
+  SELECTOR <- SR(SUBSTATE)
+  OUT →Case Structure#35798.36849
+       frame    0: (And(Select#1046, (0 == SR(SUBSTATE))) ? 1 : 1)
+       frame    1: (Compound Arithmetic[or](Elapsed Time3.out(20.0, _), And(Select#1046, (0 == SR(SUBSTATE)))) ? 2 : 1)
+       frame    2: 2
+  IN  Compound Arithmetic[or](Elapsed Time3.out(20.0, _), And(Select#1046, (0 == SR(SUBSTATE))))   (used in frames: ['1'])
+  OUT →Select#30303.f_value
+       frame    0: (And(Select#1046, (0 == SR(SUBSTATE))) ? 0 : 0)
+       frame    1: Compound Arithmetic[or](Elapsed Time3.out(20.0, _), And(Select#1046, (0 == SR(SUBSTATE))))
+       frame    2: T
+  OUT →And#27653.x →For Loop#18338.47242 →And#26792.x →And#36424.y
+       frame    0: 0
+       frame    1: 0
+       frame    2: Case Structure#32946
+  IN  And(Select#1046, (0 == SR(SUBSTATE)))   (used in frames: ['0'])
+  IN  Select#11405   (used in frames: ['2'])
+### Case 29718: frames ['0', '1', '2', '3', '4', '5'], 18 tunnels
+  SELECTOR <- SR(SUBSTATE)
+  OUT ⇢(selTun)⇢(selTun)⇢(flatSeqTun)→unknown#1567.4697
+       frame    0: T
+       frame    1: T
+       frame    2: T
+       frame    3: 0
+       frame    4: 0
+       frame    5: 0
+  OUT ⇢(selTun)→Case Structure#37926.37950 →And#25242.y
+       frame    0: SR(2316)
+       frame    1: SR(2316)
+       frame    2: SR(2316)
+       frame    3: SR(2316)
+       frame    4: SR(2316)
+       frame    5: Index Array(Which_Turbos_used?, 2)
+  OUT ⇢(selTun)⇢(selTun)⇢(flatSeqTun)→unknown#1567.29144 →Is Value Changed.vim#46115.46149
+       frame    0: 3
+       frame    1: (And((Select#5233 < Multiply(5.0, Turbo on Threshold (torr))), (Select#11405 < Multiply(5.0, Turbo on Threshold (torr)))) ? 3 : 1)
+       frame    2: 3
+       frame    3: 3
+       frame    4: 3
+       frame    5: 4
+  IN  Select#11405   (used in frames: ['1'])
+  IN  Select#1174   (used in frames: [])
+  IN  Select#5233   (used in frames: ['1'])
+  OUT ⇢(selTun)⇢(selTun)⇢(flatSeqTun)→unknown#1567.26913
+       frame    0: 1
+       frame    1: (And((Select#5233 < Multiply(5.0, Turbo on Threshold (torr))), (Select#11405 < Multiply(5.0, Turbo on Threshold (torr)))) ? 2 : 0)
+       frame    2: 3
+       frame    3: 4
+       frame    4: 5
+       frame    5: 0
+  IN  Case Structure#31632   (used in frames: ['0', '1', '2', '3', '4', '5'])
+  OUT ⇢(selTun)→Case Structure#37926.31314
+       frame    0: Case Structure#31632
+       frame    1: Case Structure#35966
+       frame    2: Case Structure#31632
+       frame    3: Case Structure#31632
+       frame    4: Case Structure#31632
+       frame    5: Case Structure#31632
+  OUT ⇢(selTun)⇢(selTun)⇢(flatSeqTun)→unknown#1567.28214 →Equal?#34357.y
+       frame    0: 4
+       frame    1: 4
+       frame    2: 4
+       frame    3: 4
+       frame    4: 4
+       frame    5: 4
+  IN  Build Array(Multiply#70689, Multiply#78676)   (used in frames: ['1'])
+  IN  SR(2316)   (used in frames: ['0', '1', '2', '3', '4'])
+  OUT →And#31057.y
+       frame    0: [F,F,F]
+       frame    1: [F,F,F]
+       frame    2: [F,F,F]
+       frame    3: [F,F,F]
+       frame    4: [T,T,T]
+       frame    5: [T,T,T]
+  IN  Case Structure#12494   (used in frames: ['0', '1', '2', '3', '4', '5'])
+  OUT ⇢(selTun)→Bundle/Unbundle By Name#50813.50839 →Bundle/Unbundle By Name#27747.29684
+       frame    0: Case Structure#12494
+       frame    1: Case Structure#12494
+       frame    2: Case Structure#12494
+       frame    3: Case Structure#12494
+       frame    4: Case Structure#12494
+       frame    5: Bundle<>(Case Structure#12494, Index Array(Which_Turbos_used?, 0))
+  OUT ⇢(selTun)→Case Structure#58164.58166 →And#2563.y
+       frame    0: SR(49850)
+       frame    1: SR(49850)
+       frame    2: SR(49850)
+       frame    3: SR(49850)
+       frame    4: SR(49850)
+       frame    5: Index Array(Which_Turbos_used?, 1)
+  IN  SR(49850)   (used in frames: ['0', '1', '2', '3', '4'])
+### Case 31816: frames ['0', '1', '2'], 14 tunnels
+  SELECTOR <- SR(SUBSTATE)
+  IN  SR(2316)   (used in frames: ['0', '1', '2'])
+  OUT ⇢(selTun)→Case Structure#37926.37950 →And#25242.y
+       frame    0: SR(2316)
+       frame    1: SR(2316)
+       frame    2: SR(2316)
+  OUT ⇢(selTun)⇢(selTun)⇢(flatSeqTun)→unknown#1567.26913
+       frame    0: 1
+       frame    1: (Elapsed Time2.out(1.0, _) ? 2 : 1)
+       frame    2: 0
+  OUT ⇢(selTun)→And#72071.x
+       frame    0: And([T,T,T], Which_Turbos_used?)
+       frame    1: And([T,T,T], Which_Turbos_used?)
+       frame    2: And((((Or(Simple Error Handler.vi#30838, And#43299) ? 0 : SR(TARGET)) == 8) ? [T,T,T] : [F,F,F]), Which_Turbos_used?)
+  OUT ⇢(selTun)⇢(selTun)⇢(flatSeqTun)→unknown#1567.29144 →Is Value Changed.vim#46115.46149
+       frame    0: 5
+       frame    1: 5
+       frame    2: (((Or(Simple Error Handler.vi#30838, And(Less Or Equal?#43605, Greater Or Equal?#43011)) ? 0 : SR(TARGET)) == 0) ? 7 : (Or(((Or#44471 ? 0 : <n3011:25472>) == 8), ((Or#44471 ? 0 : <n3011:25472>) == 6)) ? 8 : (((Or#44471 ? 0 : <n3011:25472>) == 2) ? 2 : ((Select#15191 == 1) ? 1 : 7))))
+  IN  (Or(Simple Error Handler.vi#30838, And((Simple Error Handler.vi#42024 <= 5010), (Simple Error Handler.vi#42024 >= 5000))) ? 0 : SR(TARGET))   (used in frames: ['0', '1', '2'])
+  OUT ⇢(selTun)⇢(selTun)⇢(flatSeqTun)→unknown#1567.28214 →Equal?#34357.y
+       frame    0: (Or(Simple Error Handler.vi#30838, And((Simple Error Handler.vi#42024 <= 5010), (Simple Error Handler.vi#42024 >= 5000))) ? 0 : SR(TARGET))
+       frame    1: (Or(Simple Error Handler.vi#30838, And((Simple Error Handler.vi#42024 <= 5010), (Simple Error Handler.vi#42024 >= 5000))) ? 0 : SR(TARGET))
+       frame    2: (Or(Simple Error Handler.vi#30838, And((Simple Error Handler.vi#42024 <= 5010), (Simple Error Handler.vi#42024 >= 5000))) ? 0 : SR(TARGET))
+  OUT ⇢(selTun)⇢(selTun)⇢(flatSeqTun)→unknown#1567.4697
+       frame    0: 0
+       frame    1: 0
+       frame    2: ((Or(Simple Error Handler.vi#30838, And((Simple Error Handler.vi#42024 <= 5010), (Simple Error Handler.vi#42024 >= 5000))) ? 0 : SR(TARGET)) == 1)
+  OUT ⇢(selTun)→Index Array#41852.array →And#57406.x →Index Array#44758.array →Index Array#3743.array
+       frame    0: [F,F,F]
+       frame    1: [F,F,F]
+       frame    2: [F,F,F]
+  OUT ⇢(selTun)→Bundle/Unbundle By Name#50813.50839 →Bundle/Unbundle By Name#27747.29684
+       frame    0: Case Structure#12494
+       frame    1: Case Structure#12494
+       frame    2: Case Structure#12494
+  IN  Case Structure#12494   (used in frames: ['0', '1', '2'])
+  IN  SR(49850)   (used in frames: ['0', '1', '2'])
+  OUT ⇢(selTun)→Case Structure#58164.58166 →And#2563.y
+       frame    0: SR(49850)
+       frame    1: SR(49850)
+       frame    2: SR(49850)
+### Case 31021: frames ['0', '1', '2'], 4 tunnels
+  SELECTOR <- SR(SUBSTATE)
+  OUT →Select#559.selector →Select#56499.f_value
+       frame    0: T
+       frame    1: T
+       frame    2: 0
+  OUT →Select#30695.f_value
+       frame    0: 1
+       frame    1: (Elapsed Time4.out(Multiply(60.0, 15.0), _) ? 2 : 1)
+       frame    2: 2
+  IN  Elapsed Time4.out(Multiply(60.0, 15.0), _)   (used in frames: ['1'])
+### Case 679: frames ['False', 'True'], 7 tunnels
+  SELECTOR <- 0
+  IN  Case Structure#29819   (used in frames: ['False'])
+  IN  Case Structure#29819   (used in frames: ['False', 'True'])
+  OUT ⇢(selTun)→Case Structure#37926.37950 →And#25242.y
+       frame False: Case Structure#29819
+       frame True: Index Array(Which_Turbos_used?, 2)
+  OUT ⇢(selTun)→Bundle/Unbundle By Name#50813.50839 →Bundle/Unbundle By Name#27747.29684
+       frame False: Case Structure#29819
+       frame True: Bundle<>(Case Structure#29819, Index Array(Which_Turbos_used?, 0))
+  IN  Case Structure#29819   (used in frames: ['False'])
+  OUT ⇢(selTun)→Case Structure#58164.58166 →And#2563.y
+       frame False: Case Structure#29819
+       frame True: Index Array(Which_Turbos_used?, 1)
+### Case 29746: frames ['False', 'True'], 7 tunnels
+  SELECTOR <- Compound Arithmetic[or]((New_State? ? 0 : FP[Overnight Pump 5]), (New_State? ? 0 : FP[Shutdown Now]), (New_State? ? 0 : FP[Pump to Rough 5]), (New_State? 2 ? 0 : FP[Shutdown After Vent]))
+  IN  Case Structure#12494   (used in frames: ['False', 'True'])
+  IN  SR(2316)   (used in frames: ['False'])
+  OUT ⇢(selTun)→Case Structure#37926.37950 →And#25242.y
+       frame False: SR(2316)
+       frame True: 0
+  OUT ⇢(selTun)→Bundle/Unbundle By Name#50813.50839 →Bundle/Unbundle By Name#27747.29684
+       frame False: Case Structure#12494
+       frame True: Bundle<>(Case Structure#12494, 0)
+  OUT ⇢(selTun)→Case Structure#58164.58166 →And#2563.y
+       frame False: SR(49850)
+       frame True: 0
+  IN  SR(49850)   (used in frames: ['False'])
+### Case 32107: frames ['False', 'True'], 3 tunnels
+  SELECTOR <- (Get Date/Time In Seconds#27875 > Turbo Engage time)
+  IN  Case Structure#31632   (used in frames: ['False', 'True'])
+  OUT ⇢(selTun)→Case Structure#37926.31314
+       frame False: Case Structure#31632
+       frame True: Concatenate Strings(Case Structure#31632, '\r', 'Timestamp reached, turning on pumps at ', Get Date/Time String#26267)
+### Case 35798: frames ['False', 'True'], 3 tunnels
+  SELECTOR <- (((New_State? ? 0 : FP[Vent 2]) ? 8 : (Or(And(Case Structure#29946, ((Select#51688 ? 0 : Select#41219) == 0)), (New_State? ? 0 : FP[Shut Off])) ? (Compound Arithmetic[or](Case Structure#12494.Turbo Rotating Read, (Index Array(Build Array#71607, 0) > 15.0), (Index Array(Build Array#71607, 1) > 15.0)) ? 7 : 0) : (And((4 == Select#15191), Case Structure#29946) ? 3 : (And((2 == Select#15191), Case Structure#29946) ? 2 : 1)))) != 1)
+  IN  Case Structure#29946   (used in frames: ['False'])
+  OUT ⇢(selTun)⇢(selTun)⇢(flatSeqTun)→unknown#1567.26913
+       frame False: Case Structure#29946
+       frame True: 0

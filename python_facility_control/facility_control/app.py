@@ -5,12 +5,14 @@ import argparse
 import os
 import sys
 import time
+from pathlib import Path
 from typing import Optional
 
 from .config import load_config
 from .controller import AutoAnswerDialogs, Controller
 from .hal import SimBackend, create_backend, daqmx_available
 from .logging_csv import CsvLogger
+from .runhours import RunHours
 from .model import Mode
 
 
@@ -49,16 +51,20 @@ def build(args):
     if cfg.logging.csv_enabled and not args.no_csv:
         csv = CsvLogger(cfg, args.log_dir)
     initial = {"ask": None, "auto": Mode.AUTO, "admin": Mode.ADMIN, "manual": Mode.MANUAL}[args.mode]
-    return cfg, backend, csv, initial
+    # the run-hour meter lives beside the CSV logs so it survives restarts
+    hours_dir = Path(args.log_dir or cfg.logging.csv_directory)
+    run_hours = RunHours(str(hours_dir / f"run_hours_{cfg.id}.json"))
+    return cfg, backend, csv, initial, run_hours
 
 
 def main(argv=None) -> int:
     args = parse_args(argv)
 
     if args.headless is not None:
-        cfg, backend, csv, initial = build(args)
+        cfg, backend, csv, initial, run_hours = build(args)
         dialogs = AutoAnswerDialogs()          # headless: every question is answered with its first button
-        ctl = Controller(cfg, backend, dialogs=dialogs, csv_logger=csv, initial_mode=initial or Mode.AUTO)
+        ctl = Controller(cfg, backend, dialogs=dialogs, csv_logger=csv, initial_mode=initial or Mode.AUTO,
+                         run_hours=run_hours)
         ctl.start()
         t_end = time.time() + args.headless
         try:
@@ -89,9 +95,9 @@ def main(argv=None) -> int:
     app = QApplication.instance() or QApplication(sys.argv)
     app.setStyle("Fusion")
 
-    cfg, backend, csv, initial = build(args)               # nidaqmx is imported here, after Qt is loaded
+    cfg, backend, csv, initial, run_hours = build(args)    # nidaqmx is imported here, after Qt is loaded
     dialogs = QtDialogProvider(modal_info=cfg.timings.blocking_waits)
-    ctl = Controller(cfg, backend, dialogs=dialogs, csv_logger=csv, initial_mode=initial)
+    ctl = Controller(cfg, backend, dialogs=dialogs, csv_logger=csv, initial_mode=initial, run_hours=run_hours)
     win = MainWindow(cfg, ctl, sim_backend=backend if isinstance(backend, SimBackend) else None)
     dialogs._parent = win
     win.show()

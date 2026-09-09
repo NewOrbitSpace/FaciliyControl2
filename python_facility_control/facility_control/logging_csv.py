@@ -13,6 +13,9 @@ from .model import Snapshot
 from .units import torr_to
 
 
+CONTACT_COLUMNS = ("rotating", "accelerating", "at_speed", "braking", "alarm", "warning")
+
+
 class CsvLogger:
     def __init__(self, cfg: FacilityConfig, directory: Optional[str] = None):
         self.cfg = cfg
@@ -35,9 +38,11 @@ class CsvLogger:
         cols += ["primary_cmd", "primary_read", "chiller_cmd", "chiller_read"]
         for t in cfg.turbos:
             cols += [f"{t.id}_motor_cmd", f"{t.id}_standby_cmd", f"{t.id}_speed_pct", f"{t.id}_status", f"{t.id}_error"]
+            if not t.has_speed:                       # contact interface: log the six status contacts too
+                cols += [f"{t.id}_{c}" for c in CONTACT_COLUMNS]
         if cfg.has_compressor:
             cols.append("compressor_bar")
-        cols += ["error_status", "error_code", "error_source"]
+        cols += ["error_status", "error_code", "error_source", "primary_run_hours"]
         return cols
 
     def _rotate(self, now: float) -> None:
@@ -71,9 +76,11 @@ class CsvLogger:
             tv = s.turbos.get(t.id)
             row += [int(bool(s.commands.turbo_motor.get(t.id))), int(bool(s.commands.turbo_standby.get(t.id))),
                     f"{(tv.speed_pct if tv else 0.0):.1f}", (tv.status.label if tv else ""), int(bool(tv.error)) if tv else 0]
+            if not t.has_speed:
+                row += [int(bool(tv.contacts.get(c))) if tv else 0 for c in CONTACT_COLUMNS]
         if cfg.has_compressor:
             row.append("" if s.compressor_bar is None else f"{s.compressor_bar:.2f}")
-        row += [int(s.error.status), s.error.code, s.error.source]
+        row += [int(s.error.status), s.error.code, s.error.source, f"{s.primary_run_hours:.3f}"]
         assert self._writer is not None
         self._writer.writerow(row)
         self._fh.flush()  # type: ignore[union-attr]

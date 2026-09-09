@@ -49,6 +49,12 @@ class MainWindow(QMainWindow):
         self.sim = sim_backend
         self.unit = cfg.pressure_unit_default
         self.setWindowTitle(f"{cfg.name} – Front Panel")
+        # Auto buttons per page: the profile's `auto_buttons` block (VC100) or the Main_V4.4 pages
+        self.auto_buttons_map: Dict[TabPage, List[tuple]] = dict(AUTO_BUTTONS)
+        if cfg.auto_buttons:
+            self.auto_buttons_map = {TabPage(page): list(items) for page, items in cfg.auto_buttons.items()}
+            for page in TabPage:
+                self.auto_buttons_map.setdefault(page, [])
         self.setStyleSheet(f"QMainWindow {{ background: {LV_BG}; }} QLabel {{ color: black; }} QGroupBox {{ font-weight: bold; }}")
         self._build()
         self._timer = QTimer(self)
@@ -165,13 +171,13 @@ class MainWindow(QMainWindow):
         self.unit_combo.currentIndexChanged.connect(self._on_unit)
         opts.addWidget(self.unit_combo)
         opts.addSpacing(10)
-        self.threshold_label = QLabel("Turbo on Threshold (torr)")
+        self.threshold_label = QLabel(f"Turbo on Threshold ({unit_label(self.unit).lower()})")
         opts.addWidget(self.threshold_label)
         self.threshold = QDoubleSpinBox()
         self.threshold.setDecimals(4)
-        self.threshold.setRange(1e-4, 100.0)
+        self.threshold.setRange(1e-4, 1000.0)
         self.threshold.setSingleStep(0.01)
-        self.threshold.setValue(self.cfg.thresholds.turbo_on_threshold_torr)
+        self.threshold.setValue(torr_to(self.unit, self.cfg.thresholds.turbo_on_threshold_torr))
         self.threshold.valueChanged.connect(self._on_threshold)
         opts.addWidget(self.threshold)
         opts.addStretch(1)
@@ -183,6 +189,13 @@ class MainWindow(QMainWindow):
         self.engage_time.setCalendarPopup(True)
         self.engage_time.dateTimeChanged.connect(self._on_engage_time)
         eng.addWidget(self.engage_time)
+        eng.addSpacing(16)
+        # maintenance meter: total hours the primary pump has actually run (persists across restarts)
+        eng.addWidget(QLabel("Primary pump total operating hours"))
+        self.primary_hours_box = ValueBox("0.00", width=90)
+        self.primary_hours_box.setToolTip("Total hours the primary pump has run, counted from its "
+                                          "read-back and kept in the log folder across restarts")
+        eng.addWidget(self.primary_hours_box)
         eng.addStretch(1)
         grid.addLayout(eng, 3, 0, 1, 3)
         self._on_engage_time(self.engage_time.dateTime())
@@ -203,6 +216,8 @@ class MainWindow(QMainWindow):
         lay = QHBoxLayout(box)
         self.fault_boxes: Dict[str, QCheckBox] = {}
         faults = [("turbo_error", "Turbo error"), ("chiller_fault", "Chiller fault"), ("primary_fault", "Primary fault")]
+        if any(t.control_mode == "shimadzu_contacts" for t in self.cfg.turbos):
+            faults.insert(1, ("turbo_warning", "Turbo warning (contacts)"))
         if self.cfg.has_compressor:                      # only facilities with the air-pressure sensor
             faults.append(("compressor_low", "Compressor air low"))
         faults.append(("power_cut", "Power cut"))
@@ -308,6 +323,7 @@ class MainWindow(QMainWindow):
         else:
             self.elapsed_label.setText("")
         self.reset_turbos.setText("Reset\nTurbos" if not any(snap.turbo_error_ack_active.values()) else "Ack…")
+        self.primary_hours_box.setText(f"{snap.primary_run_hours:.2f}")
 
     def _show_auto_buttons(self, tab: Optional[TabPage]):
         if tab == self._current_tab:
@@ -323,13 +339,13 @@ class MainWindow(QMainWindow):
             self.auto_group.setTitle("Auto commands (Auto mode only)")
             return
         self.auto_group.setTitle(f"Auto commands – {TAB_TITLES[tab]}")
-        for label, action in AUTO_BUTTONS.get(tab, []):
+        for label, action in self.auto_buttons_map.get(tab, []):
             b = lv_button(label, 90, 34)
             b.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
             b.clicked.connect(lambda _=False, a=action: self.ctl.request_auto_button(a))
             self.auto_layout.addWidget(b)
             self.auto_buttons.append(b)
-        if not AUTO_BUTTONS.get(tab):
+        if not self.auto_buttons_map.get(tab):
             lbl = QLabel("(sequence running – no commands on this page)")
             self.auto_layout.addWidget(lbl)
             self.auto_buttons.append(lbl)  # type: ignore[arg-type]

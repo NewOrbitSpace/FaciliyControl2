@@ -1,0 +1,279 @@
+# Facility profile: port of LabVIEW VC100_Facility_Control_V1.0.vi (medium chamber, 3 turbos, 8 valves).
+# Every channel and constant below was read out of that VI (see docs/VC100_REFERENCE.md – the pinout
+# table there lists the VI node each line comes from).  Start with:
+#     run.bat --config config/facility_vc100.yaml            (real cDAQ if present, else simulator)
+#     run.bat --config config/facility_vc100.yaml --sim --time-scale 20
+#
+# Compared with the small chamber (facility_main_v4.4.yaml) the differences are: the channel map and
+# chassis name, three turbo branches (Turbo 1 = Shimadzu contact interface, Turbos 2/3 = HiPace D-SUB),
+# Edwards gauges in mBar, the compressed-air sensor, and the `auto_mode` rules at the bottom.
+
+facility:
+  id: vc100
+  name: "VC100 Facility Control (medium chamber)"
+  daq_name: cDAQ3             # the VI writes 'cDAQ3' into DAQ_Name at start-up (the control's default is cDAQ1)
+  loop_period_ms: 100         # Wait Until Next ms Multiple in the main loop
+  status_wait_ms: 10          # Wait (ms) after the status frame
+  pressure_unit_default: mbar # the VC100 VI works in mBar throughout
+
+# ---------------------------------------------------------------- hardware
+analog_input:
+  sample_rate_hz: 1000.0      # 'rate' control default (the VI reads the turbo speeds a second time at 4 kHz x 2000 samples)
+  samples_per_channel: 25     # 'samples per channel' control default (mean is used)
+  min_v: 0.0                  # gauge channels 0..10 V
+  max_v: 10.0
+  terminal_config: differential  # every AI Create Channel in the VI uses DAQmx 10106 = Differential
+
+gauges:                       # NI-9205 in slot 8.  Order = order of the VI's AI task (array index 0..4)
+  - id: wrg
+    label: "Wide Range Gauge"
+    plot_label: "Main Gauge"
+    channel: Mod8/ai0         # 'Wide Range_Gauge_Read'
+    formula: edwards_wrg_mbar # 'Ion gauge Pressure calculation (mBar)': P = 10**((V-6.8)/0.6) mBar
+    role: main_chamber
+  - id: fore
+    label: "Foreline Gauge"
+    plot_label: "Foreline Gauge"
+    channel: Mod8/ai1         # 'Foreline_gauge_1_Read'
+    formula: edwards_apg_mbar # 'Foreline 1 Pressure calculation (mBar)': P = 10**((V-6.143)/1.286) mBar
+    role: foreline
+  - id: turbo1_gauge
+    label: "Turbo 1 Gauge"
+    plot_label: "Turbo 1 Gauge"
+    channel: Mod8/ai2         # 'Turbo_gauge_1_Read'
+    formula: edwards_apg_mbar
+    role: turbo
+    turbo: turbo1
+  - id: turbo2_gauge
+    label: "Turbo 2 Gauge"
+    plot_label: "Turbo 2 Gauge"
+    channel: Mod8/ai3         # 'Turbo_gauge_2_Read'
+    formula: edwards_apg_mbar
+    role: turbo
+    turbo: turbo2
+  - id: turbo3_gauge
+    label: "Turbo 3 Gauge"
+    plot_label: "Turbo 3 Gauge"
+    channel: Mod8/ai4         # 'Turbo_gauge_3_Read'
+    formula: edwards_apg_mbar
+    role: turbo
+    turbo: turbo3
+
+extra_analog: []              # (Mod8/ai5 and ai6 are the turbo speeds – see the turbo blocks)
+
+compressor:                   # 'Air_Com_pressure' – compressed air for the pneumatic valves
+  channel: Mod8/ai7
+  scale: 2.0                  # 'Air Compressor Pressure Calc (Bar)': Pressure_Bar = V/5*10
+  offset: 0.0
+
+valves:                       # cmd: NI-9375/9472 in slot 1 (24 V = open); read: NI-9375 DI in slot 2 (reed, 24 V = open)
+  bypass:       {label: "Bypass Valve",  cmd: Mod1/port0/line0, read: Mod2/port0/line0, kind: bypass, fail_closed: false}
+  vent:         {label: "Vent Valve",    cmd: Mod1/port0/line1, read: Mod2/port0/line1, kind: vent,   fail_closed: true}
+  turbo1_valve: {label: "Turbo 1 Valve", cmd: Mod1/port0/line2, read: Mod2/port0/line2, kind: turbo,  turbo: turbo1, fail_closed: true}
+  turbo2_valve: {label: "Turbo 2 Valve", cmd: Mod1/port0/line3, read: Mod2/port0/line3, kind: turbo,  turbo: turbo2, fail_closed: true}
+  turbo3_valve: {label: "Turbo 3 Valve", cmd: Mod1/port0/line4, read: Mod2/port0/line4, kind: turbo,  turbo: turbo3, fail_closed: true}
+  gate1:        {label: "Gate 1 Valve",  cmd: Mod1/port0/line5, read: Mod2/port0/line5, kind: gate,   turbo: turbo1, fail_closed: false}
+  gate2:        {label: "Gate 2 Valve",  cmd: Mod1/port0/line6, read: Mod2/port0/line6, kind: gate,   turbo: turbo2, fail_closed: false}
+  gate3:        {label: "Gate 3 Valve",  cmd: Mod1/port0/line7, read: Mod2/port0/line7, kind: gate,   turbo: turbo3, fail_closed: false}
+
+primary_pump:
+  label: "Primary Pump"
+  cmd: Mod4/port0/line0       # 'Primary_Pump_Cmd'
+  read: Mod2/port0/line8      # 'Primary_Pump_Read'
+  cross_check: true           # the VC100 VI raises 5000 'Conflict between Primary pump command and read!'
+                              # (Main_V4.4 had this check disabled).  The 10 s start-up wait below covers the start.
+                              # 'Use Ecodry As Primary?' in the VI = a primary pump without read-back: set cross_check: false.
+
+chiller:
+  label: "Chiller"
+  cmd: Mod4/port0/line1       # 'Chiller_Cmd'
+  read: Mod2/port0/line9      # 'Chiller_Read'
+  cross_check: true           # error 5004
+
+turbos:
+  # ---- Turbo 1: Shimadzu, dry-contact interface.  DO Mod3/port0/line0..2 = Motor / Standby / Reset;
+  #      DI Mod2/port0/line10..15 = Rotating, Accelerating, At Speed, Breaking, Alarm, Warning (the VI's
+  #      'Turbo 1 <name>' channels, created in a For loop from line 10 upwards).
+  #      Alarm and Warning are normally-closed contacts: the VI treats a FALSE read as the condition
+  #      ('Not(Turbo Alarm Read) -> Error'), hence *_di_inverted: true.
+  - id: turbo1
+    label: "Turbo 1"
+    in_use: true                  # 'Turbo 1 in use?' constant (True in the VI)
+    control_mode: shimadzu_contacts
+    gate_valve: gate1
+    turbo_valve: turbo1_valve
+    gauge: turbo1_gauge
+    shimadzu_contacts:
+      rotating_di:      Mod2/port0/line10
+      accelerating_di:  Mod2/port0/line11
+      at_speed_di:      Mod2/port0/line12
+      braking_di:       Mod2/port0/line13
+      alarm_di:         Mod2/port0/line14
+      alarm_di_inverted: true
+      warning_di:       Mod2/port0/line15
+      warning_di_inverted: true
+      motor_do:         Mod3/port0/line0   # 'Turbo 1 Motor CMD'
+      standby_do:       Mod3/port0/line1   # 'Turbo 1 Standby CMD'
+      error_ack_do:     Mod3/port0/line2   # 'Turbo 1 Reset CMD' – pulsed by 'Reset Turbos' ('Yes, Reset Shimadzu' in the VI)
+      error_ack_pulse_ms: 1000
+      error_code: 5005                     # VI: error 5005 'Turbo1 Alarm' / 'Turbo1 Warning'
+      error_message: "{label} {what}"
+      warning_is_error: true               # VI: a Warning also raises 5005 and stops Auto mode; false = show only
+  # ---- Turbo 2: Pfeiffer HiPace, D-SUB.  DO Mod3/port0/line3..5 = Motor / Standby / Reset; speed on Mod8/ai5
+  #      (+/-10 V, x10 = %); error on DI Mod2/port0/line16 (24 V = healthy).
+  - id: turbo2
+    label: "Turbo 2"
+    in_use: true
+    control_mode: hipace_dsub25
+    gate_valve: gate2
+    turbo_valve: turbo2_valve
+    gauge: turbo2_gauge
+    hipace_dsub25:
+      speed_ai: Mod8/ai5                   # 'Turbo_2_Speed_Read' (VI: min -10 V, max +10 V, Differential)
+      speed_ai_min_v: -10.0
+      speed_ai_max_v: 10.0
+      error_di: Mod2/port0/line16          # 'Turbo 2 Error read'
+      error_di_inverted: true              # VI: And(in use, Not(read)) -> error
+      error_requires_chiller: false        # VC100 does not gate the turbo error on the chiller (Main_V4.4 does)
+      motor_do: Mod3/port0/line3           # 'Turbo 2 Motor CMD'
+      standby_do: Mod3/port0/line4         # 'Turbo 2 Standby CMD'
+      error_ack_do: Mod3/port0/line5       # 'Turbo 2 Reset CMD' ('Yes, Reset Both HiPaces')
+      error_ack_pulse_ms: 1000
+      error_code: 5007                     # VI: 5007 'Turbo 2 Error.'
+      error_message: "Turbo 2 Error."
+      standby_speed_min_pct: 40.0          # VI: 'In Standby' shown only when standby is set and speed > 40 %
+  # ---- Turbo 3: Pfeiffer HiPace, D-SUB.  DO Mod3/port0/line6..7 = Motor / Standby (the VI creates only
+  #      two lines for Turbo 3 – there is NO reset line); speed on Mod8/ai6; error on DI Mod2/port0/line17.
+  - id: turbo3
+    label: "Turbo 3"
+    in_use: true
+    control_mode: hipace_dsub25
+    gate_valve: gate3
+    turbo_valve: turbo3_valve
+    gauge: turbo3_gauge
+    hipace_dsub25:
+      speed_ai: Mod8/ai6                   # 'Turbo_3_Speed_Read'
+      speed_ai_min_v: -10.0
+      speed_ai_max_v: 10.0
+      error_di: Mod2/port0/line17          # 'Turbo 3 Error read'
+      error_di_inverted: true
+      error_requires_chiller: false
+      motor_do: Mod3/port0/line6           # 'Turbo 3 Motor CMD'
+      standby_do: Mod3/port0/line7         # 'Turbo 3 Standby CMD'
+      # error_ack_do: Mod3/port0/line8     # not wired in the VI ('Reset Both HiPaces' only resets Turbo 2) – add if the cable has it
+      error_code: 5007
+      error_message: "Turbo 3 Error."
+      standby_speed_min_pct: 40.0
+
+# ---------------------------------------------------------------- behaviour (VI constants, mBar where the VI uses mBar)
+thresholds:
+  turbo_on_threshold_mbar: 0.25        # 'Turbo on Threshold (torr) 2' default – despite the name the VI compares it with mBar readings.
+                                       # (the small chamber uses 2e-1 mBar on the test engineer's request; change here if wanted)
+  turbo_on_wiggle_room_multiplier: 5.0 # 'Threshold_wiggle_room_multiplier': Engage check WRG and foreline < 5 x threshold
+  min_time_below_threshold_s: 30.0     # 'Elapsed Time' 30 s below threshold in Pumping to Rough
+  gauge_error_threshold_mbar: 1.0e-8
+  wrg_error_threshold_mbar: 1.0e-9
+  turbo_high_pressure_shutoff_mbar: 5.0   # 'Turbo N Gauge < 5.0' – motor forced off above 5 mBar ("High pressure turbo N shuttoff")
+  turbo_speed_reached_pct: 95.0        # 'Turbo Speed Reached Threshold'
+  turbo_slow_speed_pct: 5.0            # 'Turbo Slow Speed Threshold'
+  turbo_spinning_pct: 15.0             # constant 15 % in the Pumping-to-Rough shut-off decision and the Engage log text
+  turbo_engage_msg_speed_pct: 15.0     # "Pressure low enough to open gates" vs "...turn on turbos" (VC100: 15 %)
+  turbo_slowing_threshold_pct: 50.0    # 'Turbo slowing Threshold (%)' control default – Overnight / Venting / Turbo slowing
+  overnight_chiller_speed_pct: 10.0    # unused while auto_mode.overnight_backing_while_spinning is true
+  manual_main_pressure_max_mbar: 0.0133  # Manual (interlocked) mode only – same values as the small chamber, in mBar
+  manual_foreline_pressure_max_mbar: 2.13
+  compressor_min_bar: 5.0              # 'Air Compressor Pressure Calc (Bar) < 5.0'
+  compressor_low_time_s: 5.0           # ... for 5 s ('Elapsed Time5') -> "Compressor Pressure Below 5 Bar!" (stops Auto mode)
+  # Pumping-to-Rough start order: the VC100 VI always starts the primary pump first and opens the bypass
+  # after 20 s (null below keeps that).  Set e.g. bypass_first_above_mbar: 50.0 for the test engineer's rule
+  # used on the small chamber (bypass first above 5e1 mBar).
+  bypass_first_above_mbar: null
+  # Overnight Pump below this pressure skips roughing (test engineer's rule on the small chamber: 0.2 mBar).
+  # null = the VI's behaviour (always rough first).
+  overnight_skip_below_mbar: null
+
+timings:
+  primary_warmup_s: 20.0        # (kept for reference – the gap below is what is used)
+  primary_warmup_enabled: false
+  primary_to_bypass_gap_s: 20.0 # 'Elapsed Time3' 20 s: primary pump on, then the bypass valve opens
+  disengage_wait_s: 1.0         # 'Elapsed Time2'
+  vent_duration_s: 900.0        # 'Elapsed Time4' 60 x 15 = 15 min
+  valve_settle_ms: 1000         # Wait after a valve command changed ...
+  bypass_settle_ms: 2000        # ... 2000 ms if the bypass changed ...
+  gate_settle_ms: 9000          # ... 9000 ms if a gate changed
+  chiller_settle_ms: 10000      # Wait 10 s after the chiller command changed
+  primary_settle_ms: 10000      # Wait 10 s after the primary pump is switched ON ...
+  primary_settle_off_ms: 0      # ... nothing when it is switched off
+  blocking_waits: true          # freeze the loop during the waits, exactly like the VI
+
+# ---------------------------------------------------------------- Auto-mode rules that differ from Main_V4.4
+auto_mode:
+  overnight_backing_while_spinning: true   # Overnight: primary + chiller keep running and each spinning turbo's
+                                           # valve stays open until that turbo is below the slowing threshold
+  turbo_valve_gauge_rule: true             # turbo valves compared with the turbo gauges (see docs/VC100_REFERENCE.md)
+  standby_when_gate_closed: true           # Standby line = motor commanded AND gate closed
+  shut_off_spins_down_first: true          # 'Shut Off' with a spinning turbo -> Turbo slowing, not Facility Off
+  vent_closes_on_shutdown: true            # 'Shutdown Now' closes the vent valve at once
+  venting_buttons_stop_turbos: true        # Shutdown Now / After Vent / Pump to Rough / Overnight in Venting stop the turbos
+
+# Buttons of the VI's tab pages (page number = TabPage: 0 Facility Off, 1 Pumping to Rough, 3 Overnight,
+# 5 Pumping to High Vac, 7 Venting, 8 Turbo slowing; 2/4/6 have no buttons).  Label = the VI's caption,
+# action = what the state machine does.
+auto_buttons:
+  0:
+    - {label: "Pump to Rough",       action: pump_to_rough}
+    - {label: "Pump to High Vac",    action: pump_to_high_vac}
+    - {label: "Overnight Pump",      action: overnight_pump}
+    - {label: "Vent",                action: vent}
+    - {label: "Shut Off once rough", action: shut_off_once_rough}   # rough the chamber, then everything off
+  1:
+    - {label: "Pump to Rough",       action: pump_to_rough}
+    - {label: "Pump to High Vac",    action: pump_to_high_vac}
+    - {label: "Overnight Pump",      action: overnight_pump}
+    - {label: "Vent",                action: vent}
+    - {label: "Shut Off once rough", action: shut_off_once_rough}
+    - {label: "Shut Off",            action: shut_off}
+  2: []
+  3:
+    - {label: "Pump to Rough",       action: pump_to_rough}
+    - {label: "Pump to High Vac",    action: pump_to_high_vac}
+    - {label: "Vent",                action: vent}
+  4: []
+  5:
+    - {label: "Shutdown",            action: shutdown}
+    - {label: "Pump to Rough",       action: pump_to_rough}
+    - {label: "Overnight Pump",      action: overnight_pump}
+    - {label: "Vent and shutdown",   action: vent_and_shutdown}
+    - {label: "Vent",                action: vent}
+  6: []
+  7:
+    - {label: "Shutdown Now",        action: shut_off}             # closes the vent, turbos slow down, then off
+    - {label: "Shutdown After Vent", action: shutdown_after_vent}  # finish the 15 min vent, then off
+    - {label: "Pump to Hi vac",      action: pump_to_high_vac}
+    - {label: "Overnight Pump",      action: overnight_pump}
+    - {label: "Pump to Rough",       action: pump_to_rough}
+  8:
+    - {label: "Pump to High Vac",    action: pump_to_high_vac}
+    - {label: "Vent",                action: vent}
+
+logging:
+  csv_enabled: true             # the VI writes a CSV every 5 s to C:/Users/Lab Admin/Desktop/Pressure_Data
+  csv_directory: logs           # (a path is fine here too, e.g. "C:/Users/Lab Admin/Desktop/Pressure_Data")
+  csv_period_s: 5.0
+  event_log_max_lines: 2000
+
+# ---------------------------------------------------------------- simulation model (no DAQ)
+simulation:
+  time_scale: 1.0
+  chamber_volume_l: 1000.0      # medium chamber
+  foreline_volume_l: 8.0
+  primary_pump_speed_l_s: 40.0
+  turbo_pump_speed_l_s: 1200.0
+  turbo_spinup_s: 90.0
+  turbo_spindown_s: 300.0
+  valve_actuation_s: 0.8
+  atmosphere_torr: 760.0
+  chamber_ultimate_torr: 1.0e-7
+  leak_torr_l_s: 3.0e-4
+  outgassing_torr_l_s: 5.0e-5
+  compressor_bar: 6.3

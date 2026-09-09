@@ -1,6 +1,7 @@
 """Auto-mode state machine tests against the behaviour extracted from Main_V4.4.vi."""
 import pytest
 
+from facility_control.automode import SUB_ROUGH_BYPASS_FIRST, SUB_ROUGH_PRIMARY_GAP, SUB_ROUGH_WAIT
 from facility_control.model import FacilityState as S, Mode
 
 
@@ -17,13 +18,16 @@ def test_pump_to_high_vac_full_sequence(harness):
     h = harness
     h.step(2)
     h.ctl.request_auto_button("pump_to_high_vac")
+    s = h.step()                      # the manual-vent-valve dialog is answered Yes by AutoAnswerDialogs
     s = h.step()
     assert s.current == S.PUMPING_TO_ROUGH and s.target == S.PUMPING_TO_HIGH_VAC
-    # substate 0 -> 1 -> 2 (warm-up is skipped in the VI)
+    # at atmosphere the test engineer's high-pressure branch applies:
+    # entry -> bypass valve opens first (primary still off) -> then the primary pump starts
     s = h.step()
-    assert s.substate == 1 and s.commands.primary and s.commands.chiller
+    assert s.substate == SUB_ROUGH_BYPASS_FIRST
+    assert s.commands.valves["bypass"] is True and s.commands.primary is False
     s = h.step()
-    assert s.substate == 2 and s.commands.valves["bypass"] is True
+    assert s.substate == SUB_ROUGH_WAIT and s.commands.primary is True and s.commands.valves["bypass"] is True
     assert s.commands.valves["turbo_valve"] is False and s.commands.valves["gate"] is False
     # pump down through the bypass; after 30 s below 0.25 Torr the turbo valve opens and Engage Turbo starts
     s, _ = h.run_until(lambda s: s.current == S.ENGAGE_TURBO, 6000)
@@ -99,7 +103,7 @@ def test_error_in_auto_forces_facility_off_and_logs(harness):
     s = h.step(3)
     assert s.error.status is False
     h.ctl.request_auto_button("pump_to_rough")
-    s = h.step()
+    s = h.step(2)                     # +1 iteration for the manual-vent-valve confirmation
     assert s.current == S.PUMPING_TO_ROUGH
 
 
@@ -158,7 +162,7 @@ def test_overnight_pump_waits_for_engage_time(harness):
     h.step(2)
     h.ctl.request_set_engage_time(h.ctl.clock() + 3600)
     h.ctl.request_auto_button("overnight_pump")
-    s = h.step()
+    s = h.step(2)                     # +1 iteration for the manual-vent-valve confirmation
     assert s.current == S.PUMPING_TO_ROUGH and s.target == S.OVERNIGHT_PUMP
     s, _ = h.run_until(lambda s: s.current == S.OVERNIGHT_PUMP, 8000)
     s = h.step()

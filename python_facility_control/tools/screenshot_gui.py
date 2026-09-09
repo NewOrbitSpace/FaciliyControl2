@@ -1,6 +1,6 @@
 """Render the GUI offscreen and save PNG screenshots at a few points of a simulated Auto cycle.
 
-    QT_QPA_PLATFORM=offscreen python tools/screenshot_gui.py out_dir
+    QT_QPA_PLATFORM=offscreen python tools/screenshot_gui.py out_dir [config/facility_vc100.yaml]
 """
 from __future__ import annotations
 
@@ -20,11 +20,11 @@ from facility_control.gui.main_window import MainWindow  # noqa: E402
 from facility_control.model import Mode  # noqa: E402
 
 
-def main(out_dir: str):
+def main(out_dir: str, config: str = None):
     os.makedirs(out_dir, exist_ok=True)
     app = QApplication.instance() or QApplication(sys.argv)
     app.setStyle("Fusion")
-    cfg = load_config()
+    cfg = load_config(config)
     cfg.simulation.time_scale = 40.0
     backend = SimBackend(cfg)
     dialogs = AutoAnswerDialogs()
@@ -42,6 +42,7 @@ def main(out_dir: str):
 
     pump(1.5)
     win.grab().save(os.path.join(out_dir, "01_facility_off.png"))
+    dialogs.answers.put(True)                      # "Is the manual vent valve closed?" -> Yes
     ctl.request_auto_button("pump_to_high_vac")
     pump(3.0)
     win.grab().save(os.path.join(out_dir, "02_pumping_to_rough.png"))
@@ -50,7 +51,7 @@ def main(out_dir: str):
     while time.time() - t0 < 120:
         pump(0.5)
         s = ctl.snapshot()
-        if s.current.name == "PUMPING_TO_HIGH_VAC" and s.turbos["turbo1"].speed_pct > 95:
+        if s.current.name == "PUMPING_TO_HIGH_VAC" and all(tv.status.name == "SPEED_REACHED" for tv in s.turbos.values()):
             break
     pump(2.0)
     win.grab().save(os.path.join(out_dir, "03_high_vac.png"))
@@ -78,4 +79,4 @@ def main(out_dir: str):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1] if len(sys.argv) > 1 else "screenshots")
+    main(sys.argv[1] if len(sys.argv) > 1 else "screenshots", sys.argv[2] if len(sys.argv) > 2 else None)

@@ -148,7 +148,8 @@ class SchematicWidget(QWidget):
             return QColor(COLOR_ERROR)
         return QColor(COLOR_ON if rd else COLOR_OFF)
 
-    def _pneumatic_valve(self, p: QPainter, cx: float, cy: float, vid: str, label: str, label_dx: float = 22):
+    def _pneumatic_valve(self, p: QPainter, cx: float, cy: float, vid: str, label: str, label_dx: float = 22,
+                         label_below: bool = False):
         """Vertical pneumatic valve: square body with an actuator triangle on top (VC100 panel style)."""
         col = self._valve_color(vid)
         body = QRectF(cx - 17, cy - 17, 34, 34)
@@ -159,7 +160,10 @@ class SchematicWidget(QWidget):
         p.drawPolygon(tri)
         p.drawLine(QPointF(cx, cy - 30), QPointF(cx, cy - 36))
         p.drawLine(QPointF(cx - 6, cy - 36), QPointF(cx + 6, cy - 36))
-        self._label(p, cx + label_dx, cy - 2, label, 10)
+        if label_below:
+            self._label(p, cx, cy + 27, label, 9.5, False, Qt.AlignHCenter)
+        else:
+            self._label(p, cx + label_dx, cy - 2, label, 10)
         self.hits.append(Hit(QRectF(cx - 20, cy - 38, 40, 58), f"valve:{vid}", f"{label}: click to open/close"))
 
     def _horizontal_valve(self, p: QPainter, cx: float, cy: float, vid: str, label: str):
@@ -243,15 +247,16 @@ class SchematicWidget(QWidget):
         # geometry
         ch_rect = QRectF(90, 20, 560, 190)           # chamber ellipse
         manifold_y = 560                               # foreline manifold
-        xs = [ch_rect.center().x() + (i - (n - 1) / 2) * 150 for i in range(n)]
+        spacing = 150 if n <= 2 else 165
+        xs = [ch_rect.center().x() - 40 + (i - (n - 1) / 2) * spacing for i in range(n)]
         if n == 1:
             xs = [330.0]
-        bypass_x = ch_rect.right() - 80
+        bypass_x = ch_rect.right() + 14 if n > 1 else ch_rect.right() - 80
         # ---- pipes first (under everything)
         for x in xs:
             self._pipe(p, [(x, ch_rect.bottom() - 15), (x, manifold_y)])
         self._pipe(p, [(xs[0] - 60 if n > 1 else 175, manifold_y), (bypass_x, manifold_y)])
-        self._pipe(p, [(bypass_x, ch_rect.center().y() + 30), (bypass_x, manifold_y)])
+        self._pipe(p, [(bypass_x, ch_rect.center().y() + (30 if n == 1 else 0)), (bypass_x, manifold_y)])
         self._pipe(p, [(185, manifold_y), (185, 600)])   # down to the primary pump
         self._pipe(p, [(ch_rect.left() + 12, ch_rect.center().y() - 40), (52, ch_rect.center().y() - 40)])  # vent stub
         # ---- chamber
@@ -286,32 +291,41 @@ class SchematicWidget(QWidget):
         cbox = QRectF(4, 452, 116, 30)
         ctext = snap.chiller_text if snap else "Chiller is Off"
         self._box(p, cbox, [(ctext, 10, False)])
-        # ---- turbo branches
+        # ---- turbo branches (one turbo: the Main_V4.4 layout; several: compact columns, VC100 style)
         for i, tc in enumerate(turbos):
             x = xs[i]
             gate = cfg.valves[tc.gate_valve]
             tvv = cfg.valves[tc.turbo_valve]
-            self._pneumatic_valve(p, x, 320, gate.id, gate.label)
-            self._turbo(p, x, 410, tc.id)
             tv = snap.turbos.get(tc.id) if snap else None
-            # speed box
-            self._label(p, x + 44, 352, "Speed (%):", 9.5)
-            self._box(p, QRectF(x + 44, 360, 40, 20), [(f"{(tv.speed_pct if tv else 0):.0f}", 10, False)])
-            # status box
+            speed_txt = "–" if (tv and not tv.has_speed) else f"{(tv.speed_pct if tv else 0):.0f}"
             st_txt = tv.status.label if tv else "Turbo Off"
             if tv and not tv.in_use:
                 st_txt = "Turbo not in use"
-            self._box(p, QRectF(x + 44, 392, 150, 28), [(st_txt, 9.5, False)])
-            # turbo gauge box
             g = cfg.turbo_gauge(tc.id)
-            if g:
-                self._box(p, QRectF(x + 40, 440, 116, 40), [(g.label, 9, False), (f"{self._pressure_text(g.id)} {unit}", 9, False)])
-                self._pipe(p, [(x + 12, 460), (x + 40, 460)])
-            self._pneumatic_valve(p, x, 520, tvv.id, tvv.label)
+            if n == 1:
+                self._pneumatic_valve(p, x, 320, gate.id, gate.label)
+                self._turbo(p, x, 410, tc.id)
+                self._label(p, x + 44, 352, "Speed (%):", 9.5)
+                self._box(p, QRectF(x + 44, 360, 40, 20), [(speed_txt, 10, False)])
+                self._box(p, QRectF(x + 44, 392, 150, 28), [(st_txt, 9.5, False)])
+                if g:
+                    self._box(p, QRectF(x + 40, 440, 116, 40), [(g.label, 9, False), (f"{self._pressure_text(g.id)} {unit}", 9, False)])
+                    self._pipe(p, [(x + 12, 460), (x + 40, 460)])
+                self._pneumatic_valve(p, x, 520, tvv.id, tvv.label)
+            else:
+                self._pneumatic_valve(p, x, 300, gate.id, gate.label, label_dx=20)
+                self._turbo(p, x, 372, tc.id, r=30)
+                self._label(p, x + 34, 358, tc.label, 9, True)
+                self._label(p, x + 34, 374, "Speed (%):", 8.5)
+                self._box(p, QRectF(x + 92, 365, 34, 18), [(speed_txt, 9, False)])
+                self._box(p, QRectF(x - 66, 410, 132, 22), [(st_txt.replace("Turbo ", ""), 9, False)])
+                if g:
+                    self._box(p, QRectF(x - 58, 438, 116, 36), [(g.label, 8.5, False), (f"{self._pressure_text(g.id)} {unit}", 9, False)])
+                self._pneumatic_valve(p, x, 520, tvv.id, tvv.label, label_dx=20)
         # ---- bypass valve (right)
         bps = cfg.valves_of_kind("bypass")
         if bps:
-            self._pneumatic_valve(p, bypass_x, 410, bps[0].id, bps[0].label, label_dx=22)
+            self._pneumatic_valve(p, bypass_x, 410, bps[0].id, bps[0].label, label_dx=22, label_below=(n > 1))
         # ---- foreline gauge + primary
         fg = cfg.foreline_gauge
         if fg:

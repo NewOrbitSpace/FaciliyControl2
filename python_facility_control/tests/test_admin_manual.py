@@ -1,6 +1,7 @@
 """Admin mode (dialog-confirmed commands, state recognition) and Manual mode interlocks."""
 import pytest
 
+from facility_control.automode import SUB_ROUGH_WAIT
 from facility_control.model import Commands, FacilityState as S, Mode
 from tests.conftest import Harness
 
@@ -82,7 +83,7 @@ def test_change_to_auto_not_recognised_stays_admin(admin):
     assert ("info", "Target State Not Recognised! ") in h.dialogs.log
 
 
-def test_change_to_auto_from_rough_with_bypass_goes_to_substate_2(admin):
+def test_change_to_auto_from_rough_with_bypass_goes_to_the_wait_substate(admin):
     h = admin
     h.step(2)
     h.dialogs.answers.put(True); h.ctl.request_user_cmd("primary"); h.step()
@@ -92,7 +93,7 @@ def test_change_to_auto_from_rough_with_bypass_goes_to_substate_2(admin):
     s = h.step()
     assert s.mode == Mode.AUTO
     assert s.current == S.PUMPING_TO_ROUGH and s.target == S.PUMPING_TO_HIGH_VAC
-    assert s.substate == 2
+    assert s.substate == SUB_ROUGH_WAIT   # already roughing -> straight to the below-threshold wait
     # the machine carries on pumping and eventually engages the turbo
     s, _ = h.run_until(lambda s: s.current == S.ENGAGE_TURBO, 8000)
 
@@ -101,7 +102,9 @@ def test_admin_mode_button_always_works(harness):
     h = harness
     h.step(2)
     h.ctl.request_auto_button("pump_to_rough")
-    h.step(3)
+    # +1 for the manual-vent-valve confirmation, and at atmosphere the bypass opens before the pump
+    h.step(5)
+    assert h.ctl.snapshot().commands.primary is True
     h.ctl.request_admin_mode()
     s = h.step()
     assert s.mode == Mode.ADMIN

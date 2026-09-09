@@ -1,0 +1,2765 @@
+# /home/claude/vc100/VC100.vi
+
+  vc100(DMM VISA resource name COM4: VisaRef refnum{Tag}, ON/OFF : TF, Fake_Primary_Pump_Read: TF, Fake_Valve_Turbo_Read: TF, Fake_Valve_Bypass_Read: TF, Fake_Valve_Vent_Read: TF, Fake_Fore_Pressure_mBar: DBL, Fake_Turbo_1_Pressure_mBar: DBL, Fake_WRG_Pressure_mBar: DBL, Fake_Chiller_Read: TF, Fake_Valve_Gate_Read: TF, rate: DBL, samples per channel: I32, Turbo_Reset_Cmd: TF, Clear error?: TF, Valve_Turbo_1_User_Cmd: TF, Valve_Vent_User_Cmd: TF, Primary_User_Cmd: TF, Chiller_User_Cmd: TF, Turbo_1_Motor_User_Cmd: TF, Valve_Gate_1_User_Cmd: TF, Change to Auto: TF, Valve_Turbo_2_User_Cmd: TF, Valve_Turbo_3_User_Cmd: TF, Valve_Gate_2_User_Cmd: TF, Valve_Gate_3_User_Cmd: TF, Valve_Bypass_User_Cmd: TF, Turbo_2_Motor_User_Cmd: TF, Turbo_3_Motor_User_Cmd: TF, Pump to Rough: TF, Pump to High Vac: TF, Overnight Pump: TF, Vent: TF, Shut Off once rough 2: TF, Turbo on Threshold (torr) 2: DBL, Shut Off: TF, Vent 2: TF, Overnight Pump 3: TF, Pump to Rough 2: TF, Pump to High Vac 2: TF, Shut Off once rough: TF, Vent 4: TF, Pump to Rough 3: TF, Pump to High Vac 3: TF, Vent 5: TF, Shutdown : TF, Pump to Rough 4: TF, Overnight Pump 2: TF, Vent and shutdonw: TF, Shutdown Now: TF, Pump to Hi vac: TF, Overnight Pump 5: TF, Pump to Rough 5: TF, Shutdown After Vent: TF, Pump to High Vac 4: TF, Vent: TF, Turbo slowing Threshold (%): DBL, Turbo Engage time: MeasureData, change_to_admin_mode: TF, stop: TF, Use fake values?: TF, use DMM?: TF) -> output array: [[String]], New log 2: String, New log 3: String, appended array: [[String]], Waveform Chart 2: [MeasureData], Measurement: DBL, Numeric: DBL, Turbo 3 Speed: String, Turbo 3 Motor Read: TF, Numeric 2: DBL, Turbo 2 Speed: String, Numeric 3: DBL, Ecodry Speed: String, Turbo 2 Motor Read: TF, Primary Status: U32, Vent Valve: TF, Bypass Valve: TF, Turbo 1 Valve: TF, Primary Pump Status: String, Wide Range Gauge Pressure : DBL, Foreline Gauge: DBL, Chiller Status: String, Chiller Status 2: U32, Bypass Valve Error?: TF, Turbo 1 Valve Error?: TF, Vent Valve Error?: TF, Primary_Pump_Read: TF, Gate 1 Valve: TF, Gate 1 Valve Error?: TF, Turbo 1 Gauge: DBL, Turbo 2 Valve: TF, Turbo 2 Valve Error?: TF, Turbo 3 Valve: TF, Turbo 3 Valve Error?: TF, Gate 2 Valve: TF, Gate 2 Valve Error?: TF, Gate 3 Valve: TF, Gate 3 Valve Error?: TF, Turbo 3 Status Color: U32, Turbo 3 Status: String, Turbo 2 Gauge : DBL, Turbo 3 Gauge: DBL, Turbo 1 Status: String, Turbo 2 Status: String, Turbo 2 Status Color: U32, Turbo 1 Status Color: U32, WRG (torr): DBL, Compressor Pressure (Bar): DBL, Turbo on Threshold (torr) 3: DBL, Low Compressor Pressure!: TF, Turbo on Threshold (torr): DBL, Elapsed Time (s): DBL, Vent Time (s) 2: DBL, Tab Control: enum{Facility Off, Pumping to Rough, Holding at Rough, Overnight Pump, Engaging Turbo, Pumping to Hig Vac, Closing Gate, Venting, Turbo Slowing}, Countdown: String, New_State?: TF, New_State? 2: TF, Control Level: enum{Admin, Debug, Automatic}, String 3: String, Current Time/date: String, String 4: String, Primary_Sys_Cmd: TF, Valve_Turbo_1_Sys_Cmd: TF, Valve_Bypass_Sys_Cmd: TF, Valve_Vent_Sys_Cmd: TF, Chiller_Sys_Cmd: TF, Turbo_3_Motor_Sys_Cmd: TF, Valve_Gate_1_Sys_Cmd: TF, Current Facility State: Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting}, Target Facility State: Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting}, Valve_Turbo_2_Sys_Cmd: TF, Valve_Turbo_3_Sys_Cmd: TF, Valve_Gate_2_Sys_Cmd: TF, Valve_Gate_3_Sys_Cmd: TF, Sub_state_iteration: I32, Turbo_2_Motor_Sys_Cmd: TF, Turbo 3 Standby?: TF, Turbo 2 Standby?: TF, Log: String, Running: TF, New log: String, DAQ_Name: String, Use_real_Values?: TF, Which_Turbos_used?: [TF], Index_of_working_turbo: I32, DAQ_Name 2: String, Use Ecodry As Primary?: TF, error out: Error
+
+## Properties
+  lock_state: unlocked
+  lv_version: 24.0.0
+  vi_type: Control
+  execution:
+    run_when_opened: true
+    allow_debugging: true
+  window:
+    show_scrollbar: 0
+    size_to_screen: true
+    auto_handle_menus: true
+    can_close: true
+    can_resize: true
+    can_minimize: true
+  toolbar:
+    hide_abort_button: true
+    hide_free_run_button: true
+
+## Inputs
+  DMM VISA resource name COM4: VisaRef refnum{Tag} = "Refnum(4)"
+  ON/OFF : TF
+  Fake_Primary_Pump_Read: TF
+  Fake_Valve_Turbo_Read: TF
+  Fake_Valve_Bypass_Read: TF
+  Fake_Valve_Vent_Read: TF
+  Fake_Fore_Pressure_mBar: DBL = "0.001"
+  Fake_Turbo_1_Pressure_mBar: DBL = "0.0001"
+  Fake_WRG_Pressure_mBar: DBL = "1e-05"
+  Fake_Chiller_Read: TF
+  Fake_Valve_Gate_Read: TF
+  rate: DBL = "1000.0"
+  samples per channel: I32 = "200"
+  Turbo_Reset_Cmd: TF
+  Clear error?: TF
+  Valve_Turbo_1_User_Cmd: TF
+  Valve_Vent_User_Cmd: TF
+  Primary_User_Cmd: TF
+  Chiller_User_Cmd: TF
+  Turbo_1_Motor_User_Cmd: TF
+  Valve_Gate_1_User_Cmd: TF
+  Change to Auto: TF
+  Valve_Turbo_2_User_Cmd: TF
+  Valve_Turbo_3_User_Cmd: TF
+  Valve_Gate_2_User_Cmd: TF
+  Valve_Gate_3_User_Cmd: TF
+  Valve_Bypass_User_Cmd: TF
+  Turbo_2_Motor_User_Cmd: TF
+  Turbo_3_Motor_User_Cmd: TF
+  Pump to Rough: TF
+  Pump to High Vac: TF
+  Overnight Pump: TF
+  Vent: TF
+  Shut Off once rough 2: TF
+  Turbo on Threshold (torr) 2: DBL = "0.25"
+  Shut Off: TF
+  Vent 2: TF
+  Overnight Pump 3: TF
+  Pump to Rough 2: TF
+  Pump to High Vac 2: TF
+  Shut Off once rough: TF
+  Vent 4: TF
+  Pump to Rough 3: TF
+  Pump to High Vac 3: TF
+  Vent 5: TF
+  Shutdown : TF
+  Pump to Rough 4: TF
+  Overnight Pump 2: TF
+  Vent and shutdonw: TF
+  Shutdown Now: TF
+  Pump to Hi vac: TF
+  Overnight Pump 5: TF
+  Pump to Rough 5: TF
+  Shutdown After Vent: TF
+  Pump to High Vac 4: TF
+  Vent: TF
+  Turbo slowing Threshold (%): DBL = "50.0"
+  Turbo Engage time: MeasureData = "Timestamp(3820287600)"
+  change_to_admin_mode: TF
+  stop: TF
+  Use fake values?: TF = "True"
+  use DMM?: TF
+
+## Outputs
+  output array: [[String]]
+  New log 2: String
+  New log 3: String
+  appended array: [[String]]
+  Waveform Chart 2: [MeasureData] = "[Timestamp(3754409348), Timestamp(4591870180066957722), Timestamp(7191089420065680566), Timestamp(7191089420065680566), Timestamp(6207332821683734379), Timestamp(6207332821683734379), Timestamp(6207332821683734379), Timestamp(6207332821683734379)]"
+  Measurement: DBL
+  Numeric: DBL
+  Turbo 3 Speed: String = "'0'"
+  Turbo 3 Motor Read: TF
+  Numeric 2: DBL
+  Turbo 2 Speed: String = "'0'"
+  Numeric 3: DBL
+  Ecodry Speed: String = "'0'"
+  Turbo 2 Motor Read: TF
+  Primary Status: U32 = "12632256"
+  Vent Valve: TF
+  Bypass Valve: TF
+  Turbo 1 Valve: TF
+  Primary Pump Status: String = "'Primary Pump is Off'"
+  Wide Range Gauge Pressure : DBL = "nan"
+  Foreline Gauge: DBL = "627.9033934565941"
+  Chiller Status: String = "'Chiller is Off'"
+  Chiller Status 2: U32 = "12632256"
+  Bypass Valve Error?: TF
+  Turbo 1 Valve Error?: TF
+  Vent Valve Error?: TF
+  Primary_Pump_Read: TF
+  Gate 1 Valve: TF
+  Gate 1 Valve Error?: TF
+  Turbo 1 Gauge: DBL = "627.9033934565941"
+  Turbo 2 Valve: TF
+  Turbo 2 Valve Error?: TF
+  Turbo 3 Valve: TF
+  Turbo 3 Valve Error?: TF
+  Gate 2 Valve: TF
+  Gate 2 Valve Error?: TF
+  Gate 3 Valve: TF
+  Gate 3 Valve Error?: TF
+  Turbo 3 Status Color: U32 = "12632256"
+  Turbo 3 Status: String = "'Turbo Off'"
+  Turbo 2 Gauge : DBL = "627.9033934565941"
+  Turbo 3 Gauge: DBL = "627.9033934565941"
+  Turbo 1 Status: String = "'Turbo Off'"
+  Turbo 2 Status: String = "'Turbo Off'"
+  Turbo 2 Status Color: U32 = "12632256"
+  Turbo 1 Status Color: U32 = "12632256"
+  WRG (torr): DBL = "nan"
+  Compressor Pressure (Bar): DBL = "627.9033934565941"
+  Turbo on Threshold (torr) 3: DBL = "0.08"
+  Low Compressor Pressure!: TF
+  Turbo on Threshold (torr): DBL = "0.08"
+  Elapsed Time (s): DBL
+  Vent Time (s) 2: DBL
+  Tab Control: enum{Facility Off, Pumping to Rough, Holding at Rough, Overnight Pump, Engaging Turbo, Pumping to Hig Vac, Closing Gate, Venting, Turbo Slowing} = "2"
+  Countdown: String
+  New_State?: TF
+  New_State? 2: TF
+  Control Level: enum{Admin, Debug, Automatic} = "2"
+  String 3: String
+  Current Time/date: String
+  String 4: String
+  Primary_Sys_Cmd: TF
+  Valve_Turbo_1_Sys_Cmd: TF
+  Valve_Bypass_Sys_Cmd: TF
+  Valve_Vent_Sys_Cmd: TF
+  Chiller_Sys_Cmd: TF
+  Turbo_3_Motor_Sys_Cmd: TF
+  Valve_Gate_1_Sys_Cmd: TF
+  Current Facility State: Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting}
+  Target Facility State: Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting}
+  Valve_Turbo_2_Sys_Cmd: TF
+  Valve_Turbo_3_Sys_Cmd: TF
+  Valve_Gate_2_Sys_Cmd: TF
+  Valve_Gate_3_Sys_Cmd: TF
+  Sub_state_iteration: I32
+  Turbo_2_Motor_Sys_Cmd: TF
+  Turbo 3 Standby?: TF
+  Turbo 2 Standby?: TF
+  Log: String
+  Running: TF
+  New log: String
+  DAQ_Name: String = "'cDAQ1'"
+  Use_real_Values?: TF = "True"
+  Which_Turbos_used?: [TF]
+  Index_of_working_turbo: I32
+  DAQ_Name 2: String = "'cDAQ1'"
+  Use Ecodry As Primary?: TF = "True"
+  error out: Error
+
+## Constants
+  (unnamed): Facility_State{Intialize, Admin, Manual, Auto} = 0
+  auto cleanup: TF = True
+  (unnamed): String = 'Mod2/port0/line0'
+  channel name: String = 'Valve_Bypass_Read'
+  line grouping: I32 = 0
+  channel name: String = 'Valve_Vent_Read'
+  channel name: String = 'Valve_Turbo_1_Read'
+  (unnamed): [String] = ['Motor CMD', 'Standby CMD']
+  (unnamed): Facility_State{Intialize, Admin, Manual, Auto} = 0
+  auto cleanup: TF = True
+  (unnamed): String = 'Mod2/port0/line8'
+  channel name: String = 'Primary_Pump_Read'
+  line grouping: I32 = 0
+  (unnamed): String = 'Mod4/port0/line0'
+  (unnamed): String = 'cDAQ3'
+  (unnamed): String = 'Primary_Pump_Cmd'
+  auto cleanup: TF = False
+  (unnamed): String = 'Mod2/port0/line1'
+  (unnamed): String = 'Mod2/port0/line2'
+  auto cleanup: TF = True
+  physical channel: String = 'Mod8/ai0'
+  maximum value: DBL = 10.0
+  minimum value: DBL = 0.0
+  channel name: String = 'Wide Range_Gauge_Read'
+  units: I32 = 10348
+  input terminal configuration: I32 = 10106
+  physical channel: String = 'Mod8/ai1'
+  channel name: String = 'Foreline_gauge_1_Read'
+  physical channel: String = 'Mod8/ai2'
+  channel name: String = 'Turbo_gauge_1_Read'
+  auto cleanup: TF = True
+  (unnamed): String = 'Mod1/port0/line0'
+  channel name: String = 'Valve_Bypass_Cmd'
+  line grouping: I32 = 0
+  (unnamed): String = 'Mod1/port0/line1'
+  channel name: String = 'Valve_Vent_Cmd'
+  (unnamed): String = 'Mod1/port0/line2'
+  channel name: String = 'Valve_Turbo_1_Cmd'
+  (unnamed): String = 'Mod1/port0/line3'
+  auto cleanup: TF = True
+  (unnamed): String = 'Mod2/port0/line9'
+  channel name: String = 'Chiller_Read'
+  line grouping: I32 = 0
+  (unnamed): TF = False
+  auto cleanup: TF = True
+  (unnamed): String = 'Mod4/port0/line1'
+  channel name: String = 'Chiller_Cmd'
+  line grouping: I32 = 0
+  channel name: String = 'Valve_Turbo_2_Cmd'
+  (unnamed): TF = False
+  (unnamed): I32 = 1
+  (unnamed): TF = False
+  (unnamed): [String] = ['Rotating', 'Accelerating', 'At Speed', 'Breaking', 'Alarm', 'Warning']
+  (unnamed): DBL = 1.0
+  Sample Freq (Hz): DBL = 5.0
+  (unnamed): TF = False
+  sample mode: I32 = 10178
+  number of samples: I32 = 25
+  rate: DBL = 1000.00
+  (unnamed): TF = False
+  line grouping: I32 = 0
+  input terminal configuration: I32 = 10106
+  units: I32 = 10348
+  channel name: String = 'Turbo_3_Speed_Read'
+  minimum value: DBL = -10.0
+  maximum value: DBL = 10.0
+  (unnamed): String = 'Mod8/ai6'
+  line grouping: I32 = 0
+  auto cleanup: TF = True
+  Target Facility State: Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 0
+  invert line: TF = False
+  channel name: String = 'Valve_Turbo_2_Read'
+  (unnamed): String = 'Mod2/port0/line3'
+  (unnamed): String = 'Mod2/port0/line17'
+  channel name: String = 'Turbo 3 Error read'
+  (unnamed): TF = False
+  (unnamed): TF = False
+  (unnamed): [String] = ['Motor CMD', 'Standby CMD', 'Reset CMD']
+  (unnamed): TF = False
+  (unnamed): [String] = ['Wide Range Guage (mBar)', 'Foreline Gauge (mBar)', 'Turbo 1 Gauge (mBar)', 'Turbo 2 Gauge (mBar)', 'Turbo 3 Gauge (mBar)', 'Primary Pump Status', 'Turbo 3 Motor Read', 'Turbo 1 Valve status', 'Turbo 2 Valve status', 'Turbo 3 Valve status', 'Bypass Valve Status', 'Gate 1 Valve Status', 'Gate 2 Valve Status', 'Gate 3 Valve Status', 'Vant Valve']
+  (unnamed): [TF] = [False, False, False]
+  (unnamed): DBL = 1000.0
+  (unnamed): I32 = 10178
+  (unnamed): I32 = 25
+  Sub_state_iteration: I32 = 0
+  physical channel: String = 'Mod8/ai3'
+  (unnamed): String = 'Mod2/port0/line4'
+  (unnamed): I32 = 2
+  Turbo 1 Cluseter: cluster{Turbo Rotating Read, Turbo Accelarating Read, Turbo At Speed Read, Turbo Breaking Read, Turbo Alarm Read, Turbo Warning Read, Turbo Motor SYS CMD, Turbo Standby SYS CMD, Turbo Reset  SYS CMD} = {'Turbo Rotating Read': False, 'Turbo Accelarating Read': False, 'Turbo At Speed Read': False, 'Turbo Breaking Read': False, 'Turbo Alarm Read': False, 'Turbo Warning Read': False, 'Turbo Motor SYS CMD': False, 'Turbo Standby SYS CMD': False, 'Turbo Reset  SYS CMD': False}
+  (unnamed): String = 'Mod1/port0/line4'
+  channel name: String = 'Valve_Turbo_3_Cmd'
+  line grouping: I32 = 0
+  (unnamed): String = 'Mod1/port0/line5'
+  channel name: String = 'Valve_Gate_1_Cmd'
+  (unnamed): String = 'Mod1/port0/line6'
+  channel name: String = 'Valve_Gate_2_Cmd'
+  (unnamed): [TF] = [False, False, False]
+  (unnamed): TF = False
+  (unnamed): String = 'Mod1/port0/line7'
+  channel name: String = 'Valve_Gate_3_Cmd'
+  Current Facility State: Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 0
+  physical channel: String = 'cDAQ2Mod8/ai0'
+  (unnamed): TF = True
+  (unnamed): I32 = 4
+  channel name: String = 'Turbo_gauge_2_Read'
+  physical channel: String = 'Mod8/ai7'
+  channel name: String = 'Air_Com_pressure'
+  (unnamed): I32 = 2
+  (unnamed): String = 'NI_ChannelName'
+  (unnamed): String = 'NI_ExpTimeStamp'
+  (unnamed): MeasureData = Timestamp(0)
+  (unnamed): String = ''
+  (unnamed): String = 'NI_UnitDescription'
+  (unnamed): String = 'ms'
+  (unnamed): I32 = 10106
+  (unnamed): MeasureData = Timestamp(0)
+  (unnamed): String = 'NI_ChannelName'
+  (unnamed): String = 'NI_ExpTimeStamp'
+  (unnamed): MeasureData = Timestamp(0)
+  (unnamed): String = 'NI_UnitDescription'
+  (unnamed): String = 'ms'
+  physical channel: String = 'Mod8/ai4'
+  (unnamed): MeasureData = Timestamp(0)
+  channel name: String = 'Turbo_gauge_3_Read'
+  (unnamed): String = 'NI_ChannelName'
+  (unnamed): String = ''
+  channel name: String = 'Valve_Turbo_3_Read'
+  line grouping: I32 = 0
+  channel name: String = 'Valve_Gate_1_Read'
+  (unnamed): String = 'Dummy Variable to get nice time data'
+  channel name: String = 'Valve_Gate_2_Read'
+  (unnamed): Path = Path("C/Users/Lab Admin/Desktop/Pressure_Data")
+  (unnamed): TF = False
+  (unnamed): I32 = 0
+  (unnamed): String = 'Mod2/port0/line5'
+  (unnamed): String = 'Mod2/port0/line6'
+  channel name: String = 'Valve_Gate_3_Read'
+  (unnamed): String = 'Mod2/port0/line7'
+  (unnamed): enum{Facility Off, Pumping to Rough, Holding at Rough, Overnight Pump, Engaging Turbo, Pumping to Hig Vac, Closing Gate, Venting, Turbo Slowing} = 2
+  Turbo 1 in use?: TF = True
+  Turbo 2 in use?: TF = True
+  Turbo 3 in use?: TF = True
+  (unnamed): TF = True
+  (unnamed): timing_clust{Expected End [f-1], Actual End [f-1], Finished Late? [f-1], Expected End [i-1], Actual End [i-1], Finished Late? [i-1], Expected Start [i], Actual Start [i], Expected Start [f], Actual Start [f], Source Name, Structure Name, Period, Deadline, Offset, Start, Priority, Timeout, Mode, Wakeup Reason, Error, Source Type, Secondary Source Type, Global End Time, Global Start Time, Frame Duration, Iteration Duration, Assigned CPU, I/O Scan Engine Mode} = {'Expected End [f-1]': 0, 'Actual End [f-1]': 0, 'Finished Late? [f-1]': False, 'Expected End [i-1]': 0, 'Actual End [i-1]': 0, 'Finished Late? [i-1]': False, 'Expected Start [i]': 0, 'Actual Start [i]': 0, 'Expected Start [f]': 0, 'Actual Start [f]': 0, 'Source Name': '1 kHz', 'Structure Name': 'L2566253622424', 'Period': -1, 'Deadline': -1, 'Offset': -1, 'Start': -1, 'Priority': -1, 'Timeout': 0, 'Mode': 0, 'Wakeup Reason': 0, 'Error': {'status': False, 'code': 0, 'source': ''}, 'Source Type': '1', 'Secondary Source Type': '', 'Global End Time': 0, 'Global Start Time': 0, 'Frame Duration': 0, 'Iteration Duration': 0, 'Assigned CPU': -1, 'I/O Scan Engine Mode': 0}
+  (unnamed): String = 'Mod2/port0/line16'
+  channel name: String = 'Turbo 2 Error read'
+  (unnamed): I64 = 1000
+  (unnamed): timing_clust{Expected End [f-1], Actual End [f-1], Finished Late? [f-1], Expected End [i-1], Actual End [i-1], Finished Late? [i-1], Expected Start [i], Actual Start [i], Expected Start [f], Actual Start [f], Source Name, Structure Name, Period, Deadline, Offset, Start, Priority, Timeout, Mode, Wakeup Reason, Error, Source Type, Secondary Source Type, Global End Time, Global Start Time, Frame Duration, Iteration Duration, Assigned CPU, I/O Scan Engine Mode} = {'Expected End [f-1]': 0, 'Actual End [f-1]': 0, 'Finished Late? [f-1]': False, 'Expected End [i-1]': 0, 'Actual End [i-1]': 0, 'Finished Late? [i-1]': False, 'Expected Start [i]': 0, 'Actual Start [i]': 0, 'Expected Start [f]': 0, 'Actual Start [f]': 0, 'Source Name': '1 kHz', 'Structure Name': 'L2566253622424', 'Period': 1000, 'Deadline': -1, 'Offset': 0, 'Start': -1, 'Priority': 100, 'Timeout': -1, 'Mode': 2, 'Wakeup Reason': 0, 'Error': {'status': False, 'code': 0, 'source': ''}, 'Source Type': '1', 'Secondary Source Type': '', 'Global End Time': 0, 'Global Start Time': 0, 'Frame Duration': 0, 'Iteration Duration': 0, 'Assigned CPU': -2, 'I/O Scan Engine Mode': 0}
+  (unnamed): String = 'Mod8/ai5'
+  maximum value: DBL = 10.0
+  minimum value: DBL = -10.0
+  channel name: String = 'Turbo_2_Speed_Read'
+  units: I32 = 10348
+  input terminal configuration: I32 = 10106
+  (unnamed): String = 'Timestamp'
+  (unnamed): String = '  '
+  (unnamed): TF = True
+  (unnamed): String = '" '
+  (unnamed): String = ' "'
+  (unnamed): enum{open, replace, create, open or create, replace or create, replace or create with confirmation} = 3
+  (unnamed): enum{read/write, read-only, write-only} = 0
+  (unnamed): I32 = 5
+  (unnamed): String = '.csv'
+  (unnamed): enum{short, long, abbreviated} = 0
+  (unnamed): String = '/'
+  (unnamed): String = '.'
+  (unnamed): TF = True
+
+## Comments
+  "Command Valves"
+  "Init Primary Pump Cmd"
+  "Chiller  / Cmd"
+  "Chiller  / Read"
+  "Poll User Valve Commands"
+  "Primary Pump / Cmd"
+  "Clear Errors?"
+  "Command "
+  "Primary Pump Read"
+  "Check For Primary Pump Errors and Display Status"
+  "Read Current Status"
+  "Check Status for error, and display status"
+  "Poll User Turbo Commands"
+  "Read User Commands"
+  "Asses User Demands"
+  "Init Valve Read"
+  "Gate Cmd"
+  "Enable Switches?"
+  "Display Gauge"
+  "Turbo Read"
+  "Init Primary Pump Read"
+  "Init Chiller Cmd"
+  "Check For Valve Errors and Display Status"
+  "Command Chiller"
+  "Turbo 3 Motor / Cmd"
+  "Poll User Primary Pump Commands"
+  "Gauge Read"
+  "Check For Turbo Errors and Display Status"
+  "Init Gauge Read"
+  "Command Turbo"
+  "Init Valve Cmd"
+  "Get Turbo 2 Error"
+  "Valve Read"
+  "Poll User Chiller Commands"
+  "Check For Chiller Errors and Display Status"
+  "Init Chiller Read"
+  "Turbo On?"
+  "Chiller Read"
+  "Command Chiller"
+  "Turbo 1 Digital Read"
+  "Command Primary"
+  "Turbo 3 Standby "
+  "Turbo_Valve / Read"
+  "Bypass Valve / Read"
+  "Turbo_Valve / Cmd"
+  "Vent Valve / Read"
+  "Foreline / Convectron / (mBar)"
+  "Bypass Valve / Cmd"
+  "Turbo / Convectron / (mBar)"
+  "Vent Valve / Cmd"
+  "WRG Pressure (mBar)"
+  "Foreline / Convectron / (mBar)"
+  "Turbo Error / Ackn Cmd"
+  "Turbo Speed / (%)"
+  "Turbo 2 Digital Read"
+  "Turbo Motor / Read"
+  "Primary Pump / Read"
+  "Sub_state_iteration"
+  "Command Turbo"
+  "Foreline Pressuse"
+  "WRG Pressuse"
+  "Turbo 1 Cluster"
+  "Command Primary"
+  "Enable admin Switches?"
+  "Turbo 3  Speed Read"
+  "Turbo 3 Digital Read"
+  "Turbo 2 Read"
+  "All used Turbo  valves Open"
+  "Gate control"
+  "Vent control"
+  "Gate Valve / Read"
+  "Turbo Standby / cmd"
+  "Turbo spinning?"
+  "Turbo  Standby / Cmd"
+  "Open turbo Valve"
+  "Ignore Turbo Error if chiller off"
+  "Turbo valve control"
+  "Bypass control"
+  "Turbo 1 Read"
+  "Turn on Chiller?"
+  "Slowing down"
+  "And turbo valve open"
+  "Drop below threshold long enough"
+  "Foreline Pressure Reached?"
+  "WRG Pressure reached?"
+  "For 10 mins"
+  "Time long enough"
+  "Keep Primary on?"
+  "For 20 mins"
+  "Close gate"
+  "Init"
+  "Check safe to turn on turbo/open gate"
+  "Gate open?"
+  "Wait 3 secs"
+  "Primary on?"
+  "Turbo on?"
+  "Turn off Turbo?"
+  "Overnight pump"
+  "Must be Pumping to rough, / lets check:"
+  "Enable Switches?"
+  "All  Turbo  valves Closed"
+  "Open Vent valve"
+  "Ask to Switch?"
+  "Open Gate"
+  "Turbo spinning?"
+  "Force Stop on exit?"
+  "Close Turbo Valve"
+  "Get Turbo 3 Error"
+  "If bypass open, skip warm up"
+  "Turbo 2 Standby "
+  "Varodry"
+  "substate"
+  "go right into substate 2, if and only if you are going /  to primary pump down and bypass is open   "
+  "Must be venting, Lets Check:"
+  "Must be pumping to Rough, /  Lets check:"
+  "Must be facility off, lets check"
+  "Must be Hi Vac, lets check:"
+  "Turbo 1 Digital CMD"
+  "Turbo 2 Digital CMD"
+  "WRG Pressure reached?"
+  "Foreline Pressure Reached?"
+  "Drop below threshold long enough"
+  "And turbo valve open"
+  "Open if lower, then keep open "
+  "Is the bypass open?"
+  "Gate"
+  "Vent"
+  "Turbo Valve"
+  "Drop below threshold long enough to close Breather"
+  "Bypass"
+  "Go to blank "Holding at rough" / page for a few seconds between  / state changes"
+  "Close Bypass"
+  "Turn on Turbo"
+  "Enable Switches?"
+  "Hot Start Turbo?"
+  "Close Vent ?"
+  "Stop Turbos?"
+  "Close Turbo Vavle when  / venting is complete,  / or changing state, / or if it is the first iteration"
+  "Saving Data"
+  "Turbo 3 Digital CMD"
+  "Turbo 2  Speed Read"
+  "Any Turbos spinnig?"
+  "Check if file is open"
+  "All used Gate  valves Open"
+  "All  Gate  valves Closed"
+  "Ecodry"
+  "Note this error in line / from the other AI in  / task must be attached / to ensure they are read  / sequentially! Otherwise  / this will throw an error "
+  "Convert 0-10V to 0-100% Turbo Speed"
+  "Turbo Speed Read"
+  "Turbo Error Read"
+  "Turbo Motor  Cmd"
+
+## Dependencies
+  Check if File or Folder Exists.vi: () -> () -- Checks whether a file or folder exists on disk at a specified path. This VI works with standard f...
+  Clear Errors.vi: (specific error code to clear (0: all): None, error in (no error): None) -> (specific error cleared?: None, error out: None) -- Resets the error status to no error, code to 0, and source to an empty string. Use this VI when y...
+  DAQmx Clear Task.vi: (task in: Refnum) -> () -- Clears (closes) the task.
+  DAQmx Control Task.vi
+  DAQmx Create Channel (AI-Voltage-Basic).vi
+  DAQmx Create Channel (DI-Digital Input).vi
+  DAQmx Create Channel (DO-Digital Output).vi
+  DAQmx Create Task.vi: (task name: String) -> (task out: Refnum) -- Creates a DAQmx task.
+  DAQmx Read (Analog 1D Wfm NChan NSamp).vi
+  DAQmx Read (Analog Wfm 1Chan 1Samp).vi
+  DAQmx Read (Digital 1D Bool NChan 1Samp 1Line).vi
+  DAQmx Read (Digital Bool 1Line 1Point).vi
+  DAQmx Stop Task.vi: (task in: Refnum) -> (task out: Refnum) -- Stops task.
+  DAQmx Timing (Sample Clock).vi: (task/channels in: None, rate: None, sample mode: None, samples per channel: None) -> (task out: None) -- Configures Sample Clock timing.
+  DAQmx Write (Digital 1D Bool NChan 1Samp 1Line).vi
+  DAQmx Write (Digital Bool 1Line 1Point).vi: (task in: None, auto start: Boolean, data: Boolean, timeout: NumFloat64, error in: Cluster) -> (task out: None, number of samples written: NumUInt32, error out: Cluster) -- Writes 1-line digital bool, 1 point.
+  Dynamic To Waveform Array.vi
+  Instance:0
+  Instance:10
+  Instance:11
+  Instance:12
+  Instance:13
+  Instance:2
+  Instance:3
+  Instance:5
+  Instance:5e56a759-01b7-43ee-a6c9-aa4e2b3cae4c.vi
+  Instance:6
+  Instance:7
+  Instance:8
+  Instance:92da63ed-27f3-4d29-b829-85232dab9436.vi
+  Instance:a7228664-7861-4e48-9f8d-e2306638d1d9.vi
+  Instance:dc02d6ae-0d69-4f83-ad2b-62eea8acb765.vi
+  NI_AALBase.lvlib:Mean (DBL).vi
+  Set DDT Attributes.lvlib:sub Set StartTimeStamp.vi
+  SetT0.vi
+  Simple Error Handler.vi: (error code (no error:0): None, error source (" "): None, type of dialog (OK msg:1): String, error in (no error): None) -> (error?: None, code out: None, source out: None, error out: Cluster, message: None) -- Indicates whether an error occurred. If an error occurred, this VI returns a description of the e...
+  Three Button Dialog.vi: () -> () -- Displays a dialog box that contains a message and three buttons.
+  U1250 Series Digital Multimeter.lvlib:Backlight Command.vi
+  U1250 Series Digital Multimeter.lvlib:Close.vi
+  U1250 Series Digital Multimeter.lvlib:DC Voltage Configuration.vi
+  U1250 Series Digital Multimeter.lvlib:Initialize.vi
+  U1250 Series Digital Multimeter.lvlib:Read (Single Point).vi
+  Waveform Array To Dynamic.vi
+  Write Delimited Spreadsheet (string).vi
+
+## Control Flow
+  Flat sequence (6 frames)
+    \ Case structure (2 frames, gated on Flat Sequence.idx=59)
+    \ Case structure (3 frames, gated on Select.idx=0)
+    \ Case structure (7 frames, gated on Select.idx=0)
+    \ Case structure (2 frames, gated on Less?.idx=0)
+    \ Case structure (2 frames, gated on Or.idx=0)
+    \ For loop
+    \   \ Case structure (6 frames, gated on Select.idx=0)
+    \ Case structure (2 frames, selector: /home/claude/vc100/VC100.vi::48352)
+    \   \ Case structure (3 frames, gated on Select.idx=0)
+    \   \ Case structure (3 frames, gated on Select.idx=0)
+    \ Case structure (2 frames, gated on Clear error?)
+    \ Case structure (2 frames, gated on Turbo_Reset_Cmd)
+    \   \ Case structure (3 frames, gated on Three Button Dialog.vi.idx=3)
+    \ Case structure (4 frames, gated on Select.idx=0)
+    \   \ Case structure (2 frames, gated on Valve_Bypass_User_Cmd)
+    \   \   \ Case structure (2 frames, gated on Select.idx=2)
+    \   \ Case structure (2 frames, gated on Primary_User_Cmd)
+    \   \   \ Case structure (2 frames, gated on Select.idx=2)
+    \   \ Case structure (2 frames, gated on Chiller_User_Cmd)
+    \   \   \ Case structure (2 frames, gated on Select.idx=2)
+    \   \ Case structure (2 frames, gated on Valve_Vent_User_Cmd)
+    \   \   \ Case structure (2 frames, gated on Select.idx=2)
+    \   \ For loop
+    \   \   \ Case structure (2 frames, gated on For Loop.idx=2)
+    \   \   \   \ Case structure (2 frames, gated on Select.idx=2)
+    \   \   \   \   \ Case structure (2 frames, gated on Select.idx=4)
+    \   \   \   \   \   \ Case structure (4 frames, gated on Three Button Dialog.vi.idx=3)
+    \   \   \   \   \   \ Case structure (4 frames, gated on Three Button Dialog.vi.idx=3)
+    \   \ For loop
+    \   \   \ Case structure (2 frames, gated on For Loop.idx=4)
+    \   \   \   \ Case structure (2 frames, gated on Select.idx=2)
+    \   \ For loop
+    \   \   \ Case structure (2 frames, gated on For Loop.idx=4)
+    \   \   \   \ Case structure (2 frames, gated on Select.idx=2)
+    \   \ Case structure (2 frames, gated on Change to Auto)
+    \   \   \ Case structure (2 frames, gated on Select.idx=1)
+    \   \   \   \ Case structure (2 frames, gated on Compound Arithmetic.idx=0)
+    \   \   \   \ Case structure (2 frames, gated on Select.idx=7)
+    \   \   \   \   \ Case structure (2 frames, gated on Select.idx=8)
+    \   \   \   \   \   \ Case structure (2 frames, gated on Compound Arithmetic.idx=0)
+    \   \   \   \   \   \ Case structure (2 frames, gated on Select.idx=7)
+    \   \   \   \   \   \   \ Case structure (2 frames, gated on Compound Arithmetic.idx=0)
+    \   \   \   \   \   \   \ Case structure (2 frames, gated on Compound Arithmetic.idx=0)
+    \   \   \   \   \ Case structure (2 frames, gated on Compound Arithmetic.idx=0)
+    \   \   \ Case structure (2 frames, gated on And.idx=0)
+    \   \ Case structure (2 frames, gated on Two Button Dialog.idx=0)
+    \   \ Case structure (2 frames, gated on Two Button Dialog.idx=0)
+    \   \ Case structure (2 frames, gated on Or.idx=0)
+    \   \ Case structure (8 frames, gated on Select.idx=0)
+    \   \   \ Case structure (2 frames, gated on Compound Arithmetic.idx=0)
+    \   \   \ Case structure (2 frames, selector: /home/claude/vc100/VC100.vi::695)
+    \   \   \ Case structure (3 frames, gated on Select.idx=37)
+    \   \   \   \ Case structure (2 frames, gated on Less?.idx=0)
+    \   \   \ For loop
+    \   \   \ Case structure (2 frames, gated on Not Equal?.idx=0)
+    \   \   \ Case structure (2 frames, gated on Greater?.idx=0)
+    \   \   \ Case structure (6 frames, gated on Select.idx=28)
+    \   \   \   \ Case structure (2 frames, gated on And.idx=0)
+    \   \   \ Case structure (3 frames, gated on Select.idx=27)
+    \   \   \ Case structure (3 frames, gated on Select.idx=27)
+    \   \   \ For loop
+    \   \   \ Case structure (2 frames, gated on Compound Arithmetic.idx=0)
+    \   \   \ For loop
+    \   \ Case structure (2 frames, gated on Select.idx=24)
+    \   \   \ Case structure (2 frames, gated on Less?.idx=0)
+    \   \ Case structure (2 frames, gated on Bundle/Unbundle By Name.idx=1)
+    \   \   \ Case structure (2 frames, gated on Less?.idx=0)
+    \   \ Case structure (2 frames, gated on Select.idx=39)
+    \   \   \ Case structure (2 frames, gated on Less?.idx=0)
+    \ Case structure (2 frames, gated on Not Equal?.idx=0)
+    \ Case structure (2 frames, gated on Or Array Elements.idx=0)
+    \ Case structure (2 frames, gated on And.idx=0)
+    \ For loop
+    \   \ Case structure (2 frames, gated on For Loop.idx=8)
+    \ Case structure (2 frames, gated on Not Equal?.idx=0)
+    \ Case structure (2 frames, gated on Not Equal?.idx=0)
+    \ For loop
+    \   \ Case structure (2 frames, gated on For Loop.idx=9)
+    \ Case structure (2 frames, gated on Not Equal?.idx=0)
+    \ Case structure (2 frames, gated on Not Equal?.idx=0)
+    \ Case structure (2 frames, gated on Not Equal?.idx=0)
+    \ Case structure (2 frames, gated on Not Equal?.idx=0)
+  While loop (stops when stop)
+  For loop
+  For loop
+  Case structure (2 frames, selector: /home/claude/vc100/VC100.vi::21050)
+  For loop
+  While loop
+  Case structure (2 frames, selector: /home/claude/vc100/VC100.vi::21478)
+  Case structure (2 frames, selector: /home/claude/vc100/VC100.vi::32142)
+  Case structure (2 frames, selector: /home/claude/vc100/VC100.vi::38014)
+  Case structure (2 frames, selector: /home/claude/vc100/VC100.vi::39421)
+  For loop
+  Case structure (2 frames, gated on Check if File or Folder Exists.vi.idx=2)
+    \ For loop
+  Case structure (2 frames, gated on Equal?.idx=0)
+    \ For loop
+    \ For loop
+  For loop
+  Case structure (2 frames, selector: /home/claude/vc100/VC100.vi::89528)
+
+## Operations
+Concatenate Strings
+Merge Errors [prim 2147]
+DAQmx Stop Task.vi
+Concatenate Strings
+DAQmx Clear Task.vi
+DAQmx Create Virtual Channel.vi
+Concatenate Strings
+Merge Errors [prim 2147]
+Dynamic To Waveform Array.vi
+DAQmx Stop Task.vi
+DAQmx Create Task.vi
+Dynamic To Waveform Array.vi
+Concatenate Strings
+DAQmx Create Task.vi
+DAQmx Create Virtual Channel.vi
+Merge Errors [prim 2147]
+DAQmx Create Virtual Channel.vi
+DAQmx Stop Task.vi
+Dynamic To Waveform Array.vi
+DAQmx Create Virtual Channel.vi
+DAQmx Clear Task.vi
+Concatenate Strings
+DAQmx Stop Task.vi
+Flat Sequence
+  Frame 0:
+    DAQmx Read.vi
+    DAQmx Read.vi
+    Select [prim 1516]
+    DAQmx Timing.vi
+    DAQmx Timing.vi
+    Select [prim 1516]
+    Build Array
+    DAQmx Read.vi
+    DAQmx Read.vi
+    Index Array
+    Mean.vi
+    Turbo 2 Pressure calculation (mBar) [Formula Node]
+    Index Array
+    Mean.vi
+    Turbo 3 Pressure calculation (mBar) [Formula Node]
+    Index Array
+    Index Array
+    Select [prim 1516]
+    Index Array
+    Mean.vi
+    Ion gauge Pressure calculation (mBar) [Formula Node]
+    Select [prim 1516]
+    Mean.vi
+    Foreline 1 Pressure calculation (mBar) [Formula Node]
+    Select [prim 1516]
+    Mean.vi
+    Turbo 1 Pressure calculation (mBar) [Formula Node]
+    Select [prim 1516]
+    Case Structure (2 frames)
+      Frame "False":
+        (unnamed): DBL = 0.0
+      Frame "True":
+        Backlight Command.vi
+        Read (Single Point).vi
+        Clear Errors.vi
+        (unnamed): I32 = 1073676294
+    Multiply [prim 1052]
+    Number To Decimal String [prim 1180]
+    Index Array
+    Mean.vi
+    Air Compressor Pressure Calc (Bar) [Formula Node]
+    DAQmx Read.vi
+    Index Array
+    Mean.vi
+    Index Array
+    Mean.vi
+    Multiply [prim 1052]
+    Number To Decimal String [prim 1180]
+    DAQmx Read.vi
+    Index Array
+    Merge Errors [prim 2147]
+    Merge Errors [prim 2147]
+    Merge Errors [prim 2147]
+    Merge Errors [prim 2147]
+    Index Array
+    Array Subset
+    Array To Cluster [prim 1168]
+    Unbundle
+    Bundle/Unbundle By Name
+    Multiply [prim 1052]
+    Number To Decimal String [prim 1180]
+    (unnamed): I32 = 3
+    (unnamed): I32 = 6
+    (unnamed): I32 = 4
+    (unnamed): I32 = 0
+    (unnamed): I32 = 1
+    (unnamed): I32 = 2
+    (unnamed): I16 = 0
+    (unnamed): I32 = 7
+    (unnamed): I32 = 7
+    (unnamed): DBL = 4000.0
+    (unnamed): I32 = 10178
+    (unnamed): I32 = 2000
+    (unnamed): I32 = 10178
+    (unnamed): I32 = 0
+    (unnamed): I32 = 6
+    (unnamed): I16 = 0
+    (unnamed): DBL = 10.0
+    (unnamed): TF = False
+    (unnamed): I32 = 5
+    (unnamed): I32 = 6
+    (unnamed): I16 = 0
+    (unnamed): DBL = 10.0
+    (unnamed): DBL = 0.0
+    (unnamed): DBL = 10.0
+  Frame 1:
+    Build Array
+    Index Array
+    Exclusive Or [prim 1063]
+    Select [prim 1516]
+    Index Array
+    Exclusive Or [prim 1063]
+    Select [prim 1516]
+    Index Array
+    Exclusive Or [prim 1063]
+    Select [prim 1516]
+    Bundle/Unbundle By Name
+    Select [prim 1516]
+    Exclusive Or [prim 1063]
+    Select [prim 1516]
+    Case Structure (3 frames)
+      Frame "0":
+        (unnamed): String = 'Chiller is Off'
+        (unnamed): U32 = 12632256
+      Frame "1":
+        (unnamed): U32 = 6618880
+        (unnamed): String = 'Chiller is On'
+      Frame "2":
+        (unnamed): String = 'Chiller error'
+        (unnamed): U32 = 16711680
+    Index Array
+    Index Array
+    Bundle/Unbundle By Name
+    Bundle/Unbundle By Name
+    Index Array
+    Bundle/Unbundle By Name
+    Bundle/Unbundle By Name
+    Bundle/Unbundle By Name
+    Bundle/Unbundle By Name
+    Or [prim 1062]
+    Select [prim 1516]
+    Select [prim 1516]
+    Select [prim 1516]
+    Select [prim 1516]
+    Index Array
+    Exclusive Or [prim 1063]
+    Select [prim 1516]
+    Not [prim 1064]
+    Exclusive Or [prim 1063]
+    Select [prim 1516]
+    Exclusive Or [prim 1063]
+    Select [prim 1516]
+    Select [prim 1516]
+    Build Array
+    Build Array
+    Not [prim 1064]
+    Select [prim 1516]
+    Select [prim 1516]
+    Case Structure (7 frames)
+      Frame "0":
+        (unnamed): U32 = 12632256
+        (unnamed): String = 'Off'
+      Frame "1":
+        (unnamed): U32 = 3381759
+        (unnamed): String = 'Accel'
+      Frame "2":
+        (unnamed): U32 = 6618880
+        (unnamed): String = 'Normal'
+      Frame "3":
+        (unnamed): U32 = 10650795
+        (unnamed): String = 'Decel'
+      Frame "4":
+        (unnamed): U32 = 16514929
+        (unnamed): String = 'In Standby'
+      Frame "5":
+        (unnamed): String = 'Warning'
+        (unnamed): U32 = 16757266
+      Frame "6":
+        (unnamed): U32 = 16711680
+        (unnamed): String = 'Error'
+    Concatenate Strings
+    Divide [prim 1053]
+    Build Array
+    Index Array
+    Less? [prim 1111]
+    Index Array
+    Build Array
+    Exclusive Or [prim 1063]
+    Select [prim 1516]
+    Is Value Changed.vim
+    Case Structure (2 frames)
+      Frame "False":
+        (unnamed): DBL = 0.0
+        (unnamed): TF = False
+      Frame "True":
+        Elapsed Time5
+        (unnamed): TF = False
+    Index Array
+    Or [prim 1062]
+    Build Array
+    Exclusive Or [prim 1063]
+    Select [prim 1516]
+    Build Array
+    Case Structure (2 frames)
+      Frame "False":
+        (pass-through)
+      Frame "True":
+        Select [prim 1516]
+        Concatenate Strings
+        Bundle/Unbundle By Name
+        (unnamed): TF = True
+        (unnamed): String = ' Alarm'
+        (unnamed): I32 = 5005
+        (unnamed): String = ' Warning'
+        (unnamed): String = 'Turbo'
+        (unnamed): String = '1'
+    Merge Errors [prim 2147]
+    Build Array
+    For Loop
+      Greater? [prim 1110]
+      Select [prim 1516]
+      Greater? [prim 1110]
+      Equal? [prim 1102]
+      Select [prim 1516]
+      Greater? [prim 1110]
+      And [prim 1061]
+      Select [prim 1516]
+      Select [prim 1516]
+      Select [prim 1516]
+      Not [prim 1064]
+      And [prim 1061]
+      Or [prim 1062]
+      Select [prim 1516]
+      Case Structure (6 frames)
+        Frame "0":
+          (unnamed): String = ' Off'
+          (unnamed): U32 = 12632256
+        Frame "1":
+          (unnamed): U32 = 3381759
+          (unnamed): String = ' Accel'
+        Frame "2":
+          (unnamed): U32 = 6618880
+          (unnamed): String = ' Normal'
+        Frame "3":
+          (unnamed): U32 = 10650795
+          (unnamed): String = ' Decel'
+        Frame "4":
+          (unnamed): String = ' In Standby'
+          (unnamed): U32 = 16757266
+        Frame "5":
+          (unnamed): String = ' Error'
+          (unnamed): U32 = 16711680
+      Select [prim 1516]
+      Concatenate Strings
+      Bundle/Unbundle By Name
+      Select [prim 1516]
+      Merge Errors [prim 2147]
+      Turbo Speed Reached 
+Threshold: DBL = 95.0
+      (unnamed): enum{Off, Spinning Up, Speed Reached, Spinning Down, Turbo in Standby, Error} = 1
+      Turbo Slow Speed 
+Threshold: DBL = 5.0
+      (unnamed): String = ' Turbo 3 '
+      (unnamed): enum{Off, Spinning Up, Speed Reached, Spinning Down, Turbo in Standby, Error} = 3
+      (unnamed): enum{Off, Spinning Up, Speed Reached, Spinning Down, Turbo in Standby, Error} = 4
+      (unnamed): enum{Off, Spinning Up, Speed Reached, Spinning Down, Turbo In Standby, Error} = 2
+      (unnamed): enum{Off, Spinning Up, Speed Reached, Spinning Down, Turbo In Standby, Error} = 5
+      (unnamed): enum{Off, Spinning Up, Speed Reached, Spinning Down, Turbo in Standby, Error} = 0
+      (unnamed): DBL = 40.0
+      (unnamed): String = 'Turbo 3 Error.'
+      (unnamed): String = ' Turbo 2 '
+      (unnamed): TF = False
+      No Error: Error = no error
+      (unnamed): String = 'Turbo 2 Error.'
+      (unnamed): I32 = 5007
+      (unnamed): TF = True
+      (unnamed): I32 = 0
+    Merge Errors [prim 2147]
+    Index Array
+    Index Array
+    Index Array
+    Index Array
+    Low Compressor Pressure! [Property Node]
+    Select [prim 1516]
+    Merge Errors [prim 2147]
+    Case Structure (2 frames)
+      Frame "False":
+        Select [prim 1516]
+        Exclusive Or [prim 1063]
+        Select [prim 1516]
+        Case Structure (3 frames)
+          Frame "0":
+            (unnamed): String = 'is Off'
+            (unnamed): U32 = 12632256
+          Frame "1":
+            (unnamed): String = 'is On'
+            (unnamed): U32 = 6618880
+          Frame "2":
+            (unnamed): String = 'Error'
+            (unnamed): U32 = 16711680
+        Select [prim 1516]
+        Merge Errors [prim 2147]
+        Concatenate Strings
+        (unnamed): enum{Off, On, Error} = 1
+        (unnamed): enum{Off, On, Error} = 0
+        (unnamed): enum{Off, On, Error} = 2
+        Pump Error: Error = code 5000: "Conflict between Primary pump command and read!"
+        (unnamed): String = 'Primary Pump '
+        No Error: Error = no error
+        (unnamed): TF = False
+      Frame "True":
+        Greater? [prim 1110]
+        Select [prim 1516]
+        Select [prim 1516]
+        Case Structure (3 frames)
+          Frame "0":
+            (unnamed): String = 'is Off'
+            (unnamed): U32 = 12632256
+          Frame "1":
+            (unnamed): String = 'is On'
+            (unnamed): U32 = 6618880
+          Frame "2":
+            (unnamed): String = 'Accelerating'
+            (unnamed): U32 = 3381759
+        Concatenate Strings
+        (unnamed): DBL = 90.0
+        (unnamed): String = 'Primary Pump '
+        (unnamed): enum{Off, On, Accelerating} = 1
+        (unnamed): enum{Off, On, Accelerating} = 0
+        (unnamed): enum{Off, On, Accelerating} = 2
+        (unnamed): TF = True
+    Merge Errors [prim 2147]
+    Merge Errors [prim 2147]
+    Ecodry Speed [Property Node]
+    Valve Vent Error: Error = code 5003: "Conflict between Vent Valve command and read!"
+    Valve Turbo 1 Error: Error = code 5001: "Conflict between turbo 1 valve command and read!"
+    No Error: Error = no error
+    Valve Bypass Error: Error = code 5002: "Conflict between Bypass Valve command and read!"
+    (unnamed): I32 = 1
+    (unnamed): I32 = 0
+    (unnamed): I32 = 2
+    (unnamed): enum{Off, On, Error} = 1
+    (unnamed): enum{Off, On, Error} = 0
+    (unnamed): enum{Off, On, Error} = 2
+    No Error: Error = no error
+    Chiller Error: Error = code 5004: "Conflict between Chiller command and read!"
+    (unnamed): enum{Off, Spinning Up, Speed Reached, Spinning Down, Turbo in Standby, Turbo Warning, Error} = 2
+    Valve Gate Error: Error = code 5010: "Conflict between Gate 1 Valve command and read!"
+    (unnamed): enum{Off, Spinning Up, Speed Reached, Spinning Down, Turbo in Standby, Turbo Warning, Error} = 3
+    (unnamed): I32 = 0
+    (unnamed): I32 = 3
+    (unnamed): enum{Off, Spinning Up, Speed Reached, Spinning Down, Turbo in Standby, Turbo Warning, Error} = 4
+    (unnamed): enum{Off, Spinning Up, Speed Reached, Spinning Down, Turbo in Standby, Turbo Warning, Error} = 1
+    (unnamed): enum{Off, Spinning Up, Speed Reached, Spinning Down, Turbo in Standby, Turbo Warning, Error} = 6
+    (unnamed): String = 'Turbo '
+    (unnamed): I32 = 5
+    (unnamed): enum{Off, Spinning Up, Speed Reached, Spinning Down, Turbo in Standby, Turbo Warning, Error} = 0
+    (unnamed): I32 = 6
+    Valve Gate Error: Error = code 5010: "Conflict between Gate 1 Valve command and read!"
+    Valve Turbo 2 Error: Error = code 5001: "Conflict between turbo 2 valve command and read!"
+    (unnamed): enum{Off, Spinning Up, Speed Reached, Spinning Down, Turbo in Standby, Turbo Warning, Error} = 5
+    Compressor Threashold (Bar): DBL = 5.0
+    (unnamed): String = ' '
+    (unnamed): DBL = 1.33322368
+    (unnamed): I32 = 4
+    Valve Turbo 3 Error: Error = code 5001: "Conflict between turbo 3 valve command and read!"
+    Min time below threshhold (s): DBL = 5.0
+    (unnamed): I32 = 1
+    (unnamed): Error = no error
+    (unnamed): I32 = 2
+    (unnamed): I32 = 7
+    Valve Gate Error: Error = code 5010: "Conflict between Gate 1 Valve command and read!"
+    (unnamed): I32 = 1
+    (unnamed): I32 = 0
+    (unnamed): I32 = 1
+    (unnamed): String = '1'
+    Compressor Error: Error = code 5010: "Compressor Pressure Below 5 Bar!"
+    (unnamed): Error = no error
+  Frame 2:
+    Case Structure (2 frames)
+      Frame "False":
+        (pass-through)
+      Frame "True":
+        Clear Errors.vi
+    Case Structure (2 frames)
+      Frame "False":
+        Bundle/Unbundle By Name
+        (unnamed): TF = False
+        (unnamed): TF = False
+      Frame "True":
+        Three Button Dialog.vi
+        Case Structure (3 frames)
+          Frame "0":
+            Bundle/Unbundle By Name
+            (unnamed): TF = True
+            (unnamed): TF = False
+          Frame "1":
+            (unnamed): TF = True
+          Frame "2":
+            (unnamed): TF = False
+        (unnamed): String = 'No'
+        (unnamed): String = 'Reset Turbo?'
+        (unnamed): String = 'Yes, Reset Shimadzu'
+        (unnamed): String = 'Yes, Reset  Both HiPaces'
+    Wait (ms) [prim 1302]
+    (unnamed): U32 = 10
+  Frame 3:
+    Select [prim 1516]
+    Case Structure (4 frames)
+      Frame "1":
+        Build Array
+        Case Structure (2 frames)
+          Frame "False":
+            (pass-through)
+          Frame "True":
+            Case Structure (2 frames)
+              Frame "False":
+                Two Button Dialog [prim 1341]
+                (unnamed): String = 'Open Bypass Valve?'
+                (unnamed): String = 'Yes'
+                (unnamed): String = 'No'
+              Frame "True":
+                Two Button Dialog [prim 1341]
+                Not [prim 1064]
+                (unnamed): String = 'Close Bypass Valve?'
+                (unnamed): String = 'Yes'
+                (unnamed): String = 'No'
+        Build Array
+        Case Structure (2 frames)
+          Frame "False":
+            (pass-through)
+          Frame "True":
+            Case Structure (2 frames)
+              Frame "False":
+                Two Button Dialog [prim 1341]
+                (unnamed): String = 'Turn on Primary Pump?'
+                (unnamed): String = 'Yes'
+                (unnamed): String = 'No'
+              Frame "True":
+                Two Button Dialog [prim 1341]
+                Not [prim 1064]
+                (unnamed): String = 'No'
+                (unnamed): String = 'Yes'
+                (unnamed): String = 'Turn Off Primary Pump?'
+        Case Structure (2 frames)
+          Frame "False":
+            (pass-through)
+          Frame "True":
+            Case Structure (2 frames)
+              Frame "False":
+                Two Button Dialog [prim 1341]
+                (unnamed): String = 'Turn on Chiller?'
+                (unnamed): String = 'Yes'
+                (unnamed): String = 'No'
+              Frame "True":
+                Two Button Dialog [prim 1341]
+                Not [prim 1064]
+                (unnamed): String = 'Turn Off Chiller?'
+                (unnamed): String = 'Yes'
+                (unnamed): String = 'No'
+        Case Structure (2 frames)
+          Frame "False":
+            (pass-through)
+          Frame "True":
+            Case Structure (2 frames)
+              Frame "False":
+                Two Button Dialog [prim 1341]
+                (unnamed): String = 'Open Vent Valve?'
+                (unnamed): String = 'Yes'
+                (unnamed): String = 'No'
+              Frame "True":
+                Two Button Dialog [prim 1341]
+                Not [prim 1064]
+                (unnamed): String = 'Close Vent Valve?'
+                (unnamed): String = 'Yes'
+                (unnamed): String = 'No'
+        Bundle/Unbundle By Name
+        Build Array
+        Index Array
+        Index Array
+        Greater? [prim 1110]
+        Build Array
+        For Loop
+          Increment [prim 1057]
+          Number To Decimal String [prim 1180]
+          Concatenate Strings
+          Case Structure (2 frames)
+            Frame "False":
+              (pass-through)
+            Frame "True":
+              Case Structure (2 frames)
+                Frame "False":
+                  Two Button Dialog [prim 1341]
+                  (unnamed): String = 'Start Turbo Pump?'
+                  (unnamed): String = 'Yes'
+                  (unnamed): String = 'No'
+                  (unnamed): TF = False
+                Frame "True":
+                  Case Structure (2 frames)
+                    Frame "False":
+                      Concatenate Strings
+                      Three Button Dialog.vi
+                      Case Structure (4 frames)
+                        Frame "0":
+                          (unnamed): TF = False
+                          (unnamed): TF = False
+                        Frame "Default" (default):
+                          (unnamed): TF = True
+                          (unnamed): TF = False
+                        Frame "2":
+                          (unnamed): TF = True
+                          (unnamed): TF = True
+                        Frame "3":
+                          (unnamed): TF = True
+                          (unnamed): TF = False
+                      (unnamed): String = ' Pump?'
+                      (unnamed): String = ' Activate Standby'
+                      (unnamed): String = 'No'
+                      (unnamed): String = 'Yes'
+                      (unnamed): String = 'Stop '
+                    Frame "True":
+                      Concatenate Strings
+                      Three Button Dialog.vi
+                      Case Structure (4 frames)
+                        Frame "0":
+                          (unnamed): TF = True
+                          (unnamed): TF = False
+                        Frame "Default" (default):
+                          (unnamed): TF = True
+                          (unnamed): TF = True
+                        Frame "2":
+                          (unnamed): TF = False
+                          (unnamed): TF = False
+                        Frame "3":
+                          (unnamed): TF = True
+                          (unnamed): TF = True
+                      (unnamed): String = ' Exit '
+                      (unnamed): String = ' Standby Mode? '
+                      (unnamed): String = 'Yes, Spin Up'
+                      (unnamed): String = 'No'
+                      (unnamed): String = ' Yes, Spin Down'
+          (unnamed): String = 'Turbo '
+        Index Array
+        Index Array
+        Index Array
+        Index Array
+        Index Array
+        Bundle/Unbundle By Name
+        For Loop
+          Increment [prim 1057]
+          Number To Decimal String [prim 1180]
+          Case Structure (2 frames)
+            Frame "False":
+              (pass-through)
+            Frame "True":
+              Case Structure (2 frames)
+                Frame "False":
+                  Concatenate Strings
+                  Two Button Dialog [prim 1341]
+                  (unnamed): String = 'Yes'
+                  (unnamed): String = 'No'
+                  (unnamed): String = 'Open Turbo '
+                  (unnamed): String = ' Valve?'
+                Frame "True":
+                  Concatenate Strings
+                  Two Button Dialog [prim 1341]
+                  Not [prim 1064]
+                  (unnamed): String = 'Yes'
+                  (unnamed): String = 'No'
+                  (unnamed): String = 'Close Turbo '
+                  (unnamed): String = ' Valve?'
+        Greater? [prim 1110]
+        Or [prim 1062]
+        Build Array
+        For Loop
+          Increment [prim 1057]
+          Number To Decimal String [prim 1180]
+          Case Structure (2 frames)
+            Frame "False":
+              (pass-through)
+            Frame "True":
+              Case Structure (2 frames)
+                Frame "False":
+                  Concatenate Strings
+                  Two Button Dialog [prim 1341]
+                  (unnamed): String = 'Yes'
+                  (unnamed): String = 'No'
+                  (unnamed): String = 'Open Gate '
+                  (unnamed): String = ' Valve'
+                Frame "True":
+                  Concatenate Strings
+                  Two Button Dialog [prim 1341]
+                  Not [prim 1064]
+                  (unnamed): String = 'Close Gate '
+                  (unnamed): String = 'Yes'
+                  (unnamed): String = 'No'
+                  (unnamed): String = ' Valve?'
+        Case Structure (2 frames)
+          Frame "False":
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 0
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 0
+            (unnamed): TF = False
+          Frame "True":
+            Not [prim 1064]
+            Index Array
+            And Array Elements [prim 1911]
+            Not Exclusive Or [prim 1073]
+            And Array Elements [prim 1911]
+            Or [prim 1062]
+            Not Exclusive Or [prim 1073]
+            Index Array
+            Case Structure (2 frames)
+              Frame "False":
+                Not [prim 1064]
+                Not [prim 1064]
+                Not [prim 1064]
+                Not [prim 1064]
+                Not [prim 1064]
+                Compound Arithmetic
+                Case Structure (2 frames)
+                  Frame "False":
+                    (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 0
+                    (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 0
+                    (unnamed): String = ''
+                    (unnamed): TF = False
+                  Frame "True":
+                    (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 0
+                    (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 0
+                    (unnamed): String = 'Facility off'
+                    (unnamed): TF = True
+              Frame "True":
+                Case Structure (2 frames)
+                  Frame "False":
+                    Case Structure (2 frames)
+                      Frame "False":
+                        Not [prim 1064]
+                        Not [prim 1064]
+                        Not [prim 1064]
+                        Compound Arithmetic
+                        Case Structure (2 frames)
+                          Frame "False":
+                            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 0
+                            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 0
+                            (unnamed): String = ''
+                            (unnamed): TF = False
+                          Frame "True":
+                            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 1
+                            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 4
+                            (unnamed): String = 'Pumping to Rough'
+                            (unnamed): TF = True
+                      Frame "True":
+                        Case Structure (2 frames)
+                          Frame "False":
+                            Not [prim 1064]
+                            Not [prim 1064]
+                            Compound Arithmetic
+                            Case Structure (2 frames)
+                              Frame "False":
+                                (unnamed): TF = False
+                                (unnamed): String = '0'
+                                (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 0
+                                (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 0
+                              Frame "True":
+                                (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 8
+                                (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 8
+                                (unnamed): String = 'Venting'
+                                (unnamed): TF = True
+                          Frame "True":
+                            Not [prim 1064]
+                            Not [prim 1064]
+                            Not [prim 1064]
+                            Compound Arithmetic
+                            Case Structure (2 frames)
+                              Frame "False":
+                                (unnamed): TF = False
+                                (unnamed): String = ''
+                                (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 0
+                                (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 0
+                              Frame "True":
+                                (unnamed): String = 'Pumping to Rough'
+                                (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 1
+                                (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 4
+                                (unnamed): TF = True
+                  Frame "True":
+                    Not [prim 1064]
+                    Not [prim 1064]
+                    Compound Arithmetic
+                    Case Structure (2 frames)
+                      Frame "False":
+                        (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 0
+                        (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 0
+                        (unnamed): String = ''
+                        (unnamed): TF = False
+                      Frame "True":
+                        (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 4
+                        (unnamed): String = 'Pumping to High Vac'
+                        (unnamed): TF = True
+                        (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 4
+            And Array Elements [prim 1911]
+            Not [prim 1064]
+            And Array Elements [prim 1911]
+            Or [prim 1062]
+            And [prim 1061]
+            And [prim 1061]
+            Case Structure (2 frames)
+              Frame "False":
+                Display Message to User
+                (unnamed): TF = False
+                (unnamed): String = 'Target State Not Recognised! '
+                (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 0
+              Frame "True":
+                Concatenate Strings
+                Two Button Dialog [prim 1341]
+                (unnamed): String = ''
+                (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 0
+                (unnamed): String = 'No'
+                (unnamed): String = 'Yes'
+                (unnamed): String = '"?'
+                (unnamed): String = '"'
+                (unnamed): String = 'Go to State: '
+            Select [prim 1516]
+            Select [prim 1516]
+            Select [prim 1516]
+            (unnamed): Facility_State{Intialize, Admin, Manual, Auto} = 1
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 0
+            (unnamed): Facility_State{Intialize, Admin, Manual, Auto} = 3
+        Equal? [prim 1102]
+        Equal? [prim 1102]
+        Compound Arithmetic
+        Select [prim 1516]
+        Index Array
+        (unnamed): DBL = 15.0
+        (unnamed): I32 = 0
+        (unnamed): I32 = 0
+        (unnamed): I32 = 1
+        (unnamed): I32 = 0
+        (unnamed): TF = False
+        (unnamed): I32 = 1
+        (unnamed): I32 = 0
+        (unnamed): TF = True
+        (unnamed): I32 = 2
+        (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 1
+        (unnamed): I32 = 1
+        (unnamed): Facility_State{Intialize, Admin, Manual, Auto} = 3
+        (unnamed): I32 = 2
+        (unnamed): I32 = 2
+      Frame "0":
+        Two Button Dialog [prim 1341]
+        Case Structure (2 frames)
+          Frame "False":
+            (unnamed): Facility_State{Intialize, Admin, Manual, Auto} = 1
+          Frame "True":
+            (unnamed): Facility_State{Intialize, Admin, Manual, Auto} = 3
+        Defualt Turbo Cluseter: cluster{Turbo Rotating Read, Turbo Accelarating Read, Turbo At Speed Read, Turbo Breaking Read, Turbo Alarm Read, Turbo Warning Read, Turbo Motor SYS CMD, Turbo Standby SYS CMD, Turbo Reset  SYS CMD} = {'Turbo Rotating Read': False, 'Turbo Accelarating Read': False, 'Turbo At Speed Read': False, 'Turbo Breaking Read': False, 'Turbo Alarm Read': False, 'Turbo Warning Read': False, 'Turbo Motor SYS CMD': False, 'Turbo Standby SYS CMD': False, 'Turbo Reset  SYS CMD': False}
+        (unnamed): TF = False
+        (unnamed): TF = False
+        (unnamed): TF = False
+        (unnamed): TF = False
+        (unnamed): TF = False
+        (unnamed): TF = False
+        (unnamed): String = 'Select Control Mode'
+        (unnamed): String = 'Admin'
+        (unnamed): String = 'Auto'
+        (unnamed): I32 = 0
+        (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 0
+        (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 0
+        (unnamed): Error = no error
+        (unnamed): TF = False
+        (unnamed): [TF] = [False, False, False]
+        (unnamed): [TF] = [False, False, False]
+      Frame "2":
+        Two Button Dialog [prim 1341]
+        Case Structure (2 frames)
+          Frame "False":
+            (unnamed): Facility_State{Intialize, Admin, Manual, Auto} = 1
+          Frame "True":
+            (unnamed): Facility_State{Intialize, Admin, Manual, Auto} = 3
+        (unnamed): TF = False
+        (unnamed): I32 = 0
+        (unnamed): Error = no error
+        (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 0
+        (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 0
+        (unnamed): TF = False
+        (unnamed): TF = False
+        (unnamed): String = 'Auto'
+        (unnamed): String = 'Admin'
+        (unnamed): String = 'Select Control Mode'
+        (unnamed): TF = False
+        (unnamed): TF = False
+        (unnamed): TF = False
+        (unnamed): TF = False
+        (unnamed): TF = False
+        (unnamed): TF = False
+        (unnamed): TF = False
+        (unnamed): TF = False
+        (unnamed): [TF] = [False, False, False]
+      Frame "3":
+        Index Array
+        Index Array
+        Index Array
+        Index Array
+        Index Array
+        Simple Error Handler.vi
+        Simple Error Handler.vi
+        Greater Or Equal? [prim 1103]
+        Less Or Equal? [prim 1104]
+        And [prim 1061]
+        Or [prim 1062]
+        Select [prim 1516]
+        Select [prim 1516]
+        Case Structure (2 frames)
+          Frame "False":
+            (pass-through)
+          Frame "True":
+            Get Date/Time String [prim 1600]
+            Concatenate Strings
+            (unnamed): TF = True
+            (unnamed): String = ''
+            (unnamed): String = 'Shutt down due to error at '
+        Is Value Changed.vim
+        Case Structure (8 frames)
+          Frame "0":
+            Select [prim 1516]
+            Select [prim 1516]
+            Select [prim 1516]
+            Select [prim 1516]
+            Select [prim 1516]
+            Select [prim 1516]
+            Select [prim 1516]
+            Select [prim 1516]
+            Compound Arithmetic
+            Select [prim 1516]
+            Select [prim 1516]
+            Select [prim 1516]
+            Select [prim 1516]
+            (unnamed): I32 = 0
+            (unnamed): TF = False
+            (unnamed): TF = False
+            (unnamed): TF = False
+            (unnamed): TF = False
+            (unnamed): TF = False
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 8
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 2
+            (unnamed): [TF] = [False, False, False]
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 0
+            (unnamed): [TF] = [False, False, False]
+            Defualt Turbo Cluseter: cluster{Turbo Rotating Read, Turbo Accelarating Read, Turbo At Speed Read, Turbo Breaking Read, Turbo Alarm Read, Turbo Warning Read, Turbo Motor SYS CMD, Turbo Standby SYS CMD, Turbo Reset  SYS CMD} = {'Turbo Rotating Read': False, 'Turbo Accelarating Read': False, 'Turbo At Speed Read': False, 'Turbo Breaking Read': False, 'Turbo Alarm Read': False, 'Turbo Warning Read': False, 'Turbo Motor SYS CMD': False, 'Turbo Standby SYS CMD': False, 'Turbo Reset  SYS CMD': False}
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 1
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 6
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 4
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 1
+            (unnamed): enum{Facility Off, Pumping to Rough, Holding at Rough, Overnight Pump, Engaging Turbo, Pumping to Hig Vac, Closing Gate, Venting, Turbo Slowing} = 0
+            (unnamed): TF = False
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 0
+            (unnamed): TF = False
+            (unnamed): TF = False
+            (unnamed): TF = False
+            (unnamed): TF = False
+          Frame "1":
+            Select [prim 1516]
+            Equal? [prim 1102]
+            Equal? [prim 1102]
+            Index Array
+            Greater? [prim 1110]
+            Select [prim 1516]
+            Equal? [prim 1102]
+            Select [prim 1516]
+            Select [prim 1516]
+            Equal? [prim 1102]
+            Compound Arithmetic
+            Case Structure (2 frames)
+              Frame "False":
+                (pass-through)
+              Frame "True":
+                Bundle/Unbundle By Name
+                (unnamed): TF = False
+            Case Structure (2 frames)
+              Frame "False":
+                (pass-through)
+              Frame "True":
+                Index Array
+                Index Array
+                Index Array
+                Bundle/Unbundle By Name
+                (unnamed): I32 = 0
+                (unnamed): I32 = 1
+                (unnamed): I32 = 2
+            Select [prim 1516]
+            Select [prim 1516]
+            Equal? [prim 1102]
+            Bundle/Unbundle By Name
+            Select [prim 1516]
+            Select [prim 1516]
+            Equal? [prim 1102]
+            Elapsed Time3
+            And [prim 1061]
+            Compound Arithmetic
+            Case Structure (3 frames)
+              Frame "0":
+                Select [prim 1516]
+                Select [prim 1516]
+                (unnamed): I32 = 1
+                (unnamed): TF = False
+                (unnamed): TF = False
+                (unnamed): TF = True
+                (unnamed): I32 = 2
+                (unnamed): I32 = 1
+              Frame "1":
+                Select [prim 1516]
+                (unnamed): I32 = 1
+                (unnamed): I32 = 2
+                (unnamed): TF = False
+              Frame "2":
+                Less? [prim 1111]
+                Is Value Changed.vim
+                Case Structure (2 frames)
+                  Frame "False":
+                    (unnamed): DBL = 0.0
+                    (unnamed): TF = False
+                  Frame "True":
+                    Elapsed Time
+                    (unnamed): TF = False
+                (unnamed): TF = True
+                (unnamed): I32 = 2
+                Min time below threshhold (s): DBL = 30.0
+            For Loop
+              Less? [prim 1111]
+              And [prim 1061]
+              Compound Arithmetic
+            And [prim 1061]
+            Select [prim 1516]
+            And [prim 1061]
+            Select [prim 1516]
+            Less? [prim 1111]
+            And [prim 1061]
+            Select [prim 1516]
+            Index Array
+            Greater? [prim 1110]
+            Compound Arithmetic
+            Select [prim 1516]
+            Compound Arithmetic
+            Or [prim 1062]
+            Select [prim 1516]
+            And [prim 1061]
+            Select [prim 1516]
+            Select [prim 1516]
+            Equal? [prim 1102]
+            And [prim 1061]
+            Or [prim 1062]
+            Select [prim 1516]
+            Select [prim 1516]
+            Not Equal? [prim 1105]
+            Case Structure (2 frames)
+              Frame "False":
+                (pass-through)
+              Frame "True":
+                (unnamed): I32 = 0
+            Not Equal? [prim 1105]
+            And [prim 1061]
+            Compound Arithmetic
+            Select [prim 1516]
+            Select [prim 1516]
+            (unnamed): TF = False
+            (unnamed): [TF] = [False, False, False]
+            (unnamed): enum{Facility Off, Pumping to Rough, Holding at Rough, Overnight Pump, Engaging Turbo, Pumping to Hig Vac, Closing Gate, Venting, Turbo Slowing} = 1
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 2
+            (unnamed): DBL = 15.0
+            (unnamed): TF = False
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 3
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 4
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 8
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 0
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 2
+            (unnamed): TF = True
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 1
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 8
+            (unnamed): TF = False
+            (unnamed): TF = False
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 0
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 1
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 4
+            (unnamed): DBL = 20.0
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 2
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 1
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 0
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 1
+            (unnamed): TF = False
+            (unnamed): TF = False
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 7
+            (unnamed): TF = False
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 1
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 4
+            (unnamed): TF = False
+            (unnamed): I32 = 0
+            Turbo_hot_start_threshold_(mbar): DBL = 5.0
+            (unnamed): TF = False
+            (unnamed): I32 = 1
+            (unnamed): TF = False
+            (unnamed): [TF] = [False, False, False]
+            (unnamed): I32 = 0
+          Frame "2":
+            Select [prim 1516]
+            Select [prim 1516]
+            Get Date/Time In Seconds [prim 1303]
+            Greater? [prim 1110]
+            Select [prim 1516]
+            Select [prim 1516]
+            Bundle/Unbundle By Name
+            Case Structure (2 frames)
+              Frame "False":
+                (pass-through)
+              Frame "True":
+                Get Date/Time String [prim 1600]
+                Concatenate Strings
+                (unnamed): TF = True
+                (unnamed): String = ''
+                (unnamed): String = 'Timestamp reached, turning on pumps at '
+            Index Array
+            Index Array
+            Greater? [prim 1110]
+            Select [prim 1516]
+            Select [prim 1516]
+            Select [prim 1516]
+            Select [prim 1516]
+            Not Equal? [prim 1105]
+            Select [prim 1516]
+            Select [prim 1516]
+            Select [prim 1516]
+            Greater? [prim 1110]
+            Compound Arithmetic
+            Build Array
+            And [prim 1061]
+            Select [prim 1516]
+            (unnamed): TF = False
+            (unnamed): TF = False
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 4
+            (unnamed): TF = False
+            (unnamed): enum{Facility Off, Pumping to Rough, Holding at Rough, Overnight Pump, Engaging Turbo, Pumping to Hig Vac, Closing Gate, Venting, Turbo Slowing} = 3
+            (unnamed): I32 = 0
+            (unnamed): [TF] = [False, False, False]
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 1
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 2
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 4
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 1
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 1
+            (unnamed): TF = False
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 8
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 2
+            (unnamed): TF = False
+            (unnamed): TF = False
+            (unnamed): [TF] = [False, False, False]
+            (unnamed): I32 = 0
+            (unnamed): I32 = 1
+            (unnamed): TF = False
+          Frame "3":
+            And [prim 1061]
+            Case Structure (6 frames)
+              Frame "0":
+                (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 4
+                (unnamed): [TF] = [False, False, False]
+                (unnamed): TF = True
+                (unnamed): I32 = 1
+                (unnamed): TF = False
+                (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 3
+              Frame "1":
+                Multiply [prim 1052]
+                Less? [prim 1111]
+                Less? [prim 1111]
+                And [prim 1061]
+                Select [prim 1516]
+                Select [prim 1516]
+                Index Array
+                Index Array
+                Greater? [prim 1110]
+                Greater? [prim 1110]
+                Bundle/Unbundle By Name
+                Compound Arithmetic
+                Case Structure (2 frames)
+                  Frame "False":
+                    Select [prim 1516]
+                    Concatenate Strings
+                    (unnamed): String = 'Pressure NOT low enough to turn on turbos!'
+                    (unnamed): String = 'Pressure NOT low enough to open gates!'
+                    (unnamed): String = ''
+                  Frame "True":
+                    Select [prim 1516]
+                    Concatenate Strings
+                    (unnamed): String = 'Pressure low enough to turn on turbos'
+                    (unnamed): String = ''
+                    (unnamed): String = 'Pressure low enough to open gates'
+                (unnamed): TF = True
+                (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 4
+                (unnamed): DBL = 15.0
+                Threshold_wiggle_room_multiplier: DBL = 5.0
+                (unnamed): I32 = 0
+                (unnamed): I32 = 1
+                (unnamed): I32 = 0
+                (unnamed): I32 = 2
+                (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 1
+                (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 3
+                (unnamed): [TF] = [False, False, False]
+              Frame "2":
+                (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 3
+                (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 4
+                (unnamed): I32 = 3
+                (unnamed): TF = True
+                (unnamed): TF = False
+                (unnamed): [TF] = [False, False, False]
+              Frame "3":
+                (unnamed): I32 = 4
+                (unnamed): TF = False
+                (unnamed): TF = False
+                (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 4
+                (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 3
+                (unnamed): [TF] = [False, False, False]
+              Frame "4":
+                (unnamed): TF = True
+                (unnamed): TF = False
+                (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 4
+                (unnamed): I32 = 5
+                (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 3
+                (unnamed): [TF] = [True, True, True]
+              Frame "5":
+                Index Array
+                Index Array
+                Index Array
+                Bundle/Unbundle By Name
+                (unnamed): I32 = 0
+                (unnamed): [TF] = [True, True, True]
+                (unnamed): I32 = 0
+                (unnamed): TF = False
+                (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 4
+                (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 4
+                (unnamed): I32 = 2
+                (unnamed): I32 = 1
+            And [prim 1061]
+            (unnamed): enum{Facility Off, Pumping to Rough, Holding at Rough, Overnight Pump, Engaging Turbo, Pumping to Hig Vac, Closing Gate, Venting, Turbo Slowing} = 4
+            (unnamed): TF = False
+            (unnamed): TF = True
+            (unnamed): TF = True
+            (unnamed): TF = False
+            (unnamed): [TF] = [True, True, True]
+          Frame "4":
+            And [prim 1061]
+            Select [prim 1516]
+            Select [prim 1516]
+            Select [prim 1516]
+            Select [prim 1516]
+            Select [prim 1516]
+            And [prim 1061]
+            Index Array
+            Index Array
+            Index Array
+            Select [prim 1516]
+            Select [prim 1516]
+            Select [prim 1516]
+            Select [prim 1516]
+            Compound Arithmetic
+            Select [prim 1516]
+            Select [prim 1516]
+            Not [prim 1064]
+            And [prim 1061]
+            And [prim 1061]
+            Bundle/Unbundle By Name
+            Select [prim 1516]
+            And [prim 1061]
+            Select [prim 1516]
+            Select [prim 1516]
+            Select [prim 1516]
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 8
+            (unnamed): [TF] = [True, True, True]
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 4
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 0
+            (unnamed): TF = True
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 5
+            (unnamed): TF = False
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 5
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 5
+            (unnamed): TF = True
+            (unnamed): enum{Facility Off, Pumping to Rough, Holding at Rough, Overnight Pump, Engaging Turbo, Pumping to Hig Vac, Closing Gate, Venting, Turbo Slowing} = 5
+            (unnamed): [TF] = [True, True, True]
+            (unnamed): I32 = 0
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 5
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 5
+            (unnamed): TF = False
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 1
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 2
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 6
+            (unnamed): I32 = 2
+            (unnamed): I32 = 0
+            (unnamed): TF = False
+            (unnamed): I32 = 1
+            (unnamed): TF = True
+            (unnamed): TF = False
+            (unnamed): TF = False
+            (unnamed): TF = False
+            (unnamed): TF = False
+          Frame "5":
+            Case Structure (3 frames)
+              Frame "0":
+                And [prim 1061]
+                (unnamed): I32 = 1
+                (unnamed): TF = False
+                (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 5
+                (unnamed): [TF] = [True, True, True]
+                (unnamed): [TF] = [False, False, False]
+              Frame "1":
+                Elapsed Time2
+                Select [prim 1516]
+                And [prim 1061]
+                (unnamed): TF = False
+                (unnamed): DBL = 1.0
+                (unnamed): TF = True
+                (unnamed): I32 = 2
+                (unnamed): I32 = 1
+                (unnamed): TF = False
+                (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 5
+                (unnamed): [TF] = [True, True, True]
+                (unnamed): [TF] = [False, False, False]
+              Frame "2":
+                Equal? [prim 1102]
+                Equal? [prim 1102]
+                Select [prim 1516]
+                Equal? [prim 1102]
+                Equal? [prim 1102]
+                Select [prim 1516]
+                Equal? [prim 1102]
+                Or [prim 1062]
+                Select [prim 1516]
+                Select [prim 1516]
+                Select [prim 1516]
+                And [prim 1061]
+                (unnamed): I32 = 0
+                (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 8
+                (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 7
+                (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 1
+                (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 6
+                (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 1
+                (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 8
+                (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 0
+                (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 2
+                (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 2
+                (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 7
+                (unnamed): TF = False
+                (unnamed): [TF] = [True, True, True]
+                (unnamed): [TF] = [False, False, False]
+                (unnamed): [TF] = [False, False, False]
+            (unnamed): enum{Facility Off, Pumping to Rough, Holding at Rough, Overnight Pump, Engaging Turbo, Pumping to Hig Vac, Closing Gate, Venting, Turbo Slowing} = 6
+            (unnamed): TF = True
+            (unnamed): TF = True
+            (unnamed): TF = False
+          Frame "8":
+            Equal? [prim 1102]
+            Select [prim 1516]
+            Select [prim 1516]
+            Equal? [prim 1102]
+            Bundle/Unbundle By Name
+            Equal? [prim 1102]
+            Multiply [prim 1052]
+            Elapsed Time4
+            Case Structure (3 frames)
+              Frame "0":
+                (unnamed): I32 = 1
+                (unnamed): TF = True
+              Frame "1":
+                Select [prim 1516]
+                (unnamed): TF = True
+                (unnamed): I32 = 2
+                (unnamed): I32 = 1
+              Frame "2":
+                (unnamed): I32 = 2
+                (unnamed): TF = False
+            Equal? [prim 1102]
+            Or [prim 1062]
+            Select [prim 1516]
+            Select [prim 1516]
+            Index Array
+            Index Array
+            Greater? [prim 1110]
+            Greater? [prim 1110]
+            Compound Arithmetic
+            Select [prim 1516]
+            Build Array
+            For Loop
+              Less? [prim 1111]
+              Or [prim 1062]
+              And [prim 1061]
+            And [prim 1061]
+            Select [prim 1516]
+            Select [prim 1516]
+            Select [prim 1516]
+            Select [prim 1516]
+            Select [prim 1516]
+            Select [prim 1516]
+            Select [prim 1516]
+            Select [prim 1516]
+            Select [prim 1516]
+            Not Equal? [prim 1105]
+            Or [prim 1062]
+            Select [prim 1516]
+            Compound Arithmetic
+            Select [prim 1516]
+            Select [prim 1516]
+            Select [prim 1516]
+            Compound Arithmetic
+            Case Structure (2 frames)
+              Frame "False":
+                (pass-through)
+              Frame "True":
+                Bundle/Unbundle By Name
+                (unnamed): TF = False
+                (unnamed): TF = False
+            Or [prim 1062]
+            Select [prim 1516]
+            Select [prim 1516]
+            Select [prim 1516]
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 8
+            (unnamed): I32 = 0
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 8
+            (unnamed): enum{Facility Off, Pumping to Rough, Holding at Rough, Overnight Pump, Engaging Turbo, Pumping to Hig Vac, Closing Gate, Venting, Turbo Slowing} = 7
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 0
+            (unnamed): I32 = 0
+            (unnamed): TF = True
+            (unnamed): DBL = 15.0
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 6
+            (unnamed): [TF] = [False, False, False]
+            (unnamed): DBL = 60.0
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 1
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 0
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 0
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 4
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 7
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 1
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 1
+            (unnamed): I32 = 0
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 7
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 2
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 8
+            (unnamed): TF = False
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 0
+            (unnamed): TF = False
+            (unnamed): [TF] = [False, False, False]
+            (unnamed): I32 = 0
+            (unnamed): I32 = 1
+            (unnamed): TF = False
+            (unnamed): TF = False
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 1
+            (unnamed): TF = False
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 0
+            (unnamed): TF = False
+            (unnamed): TF = False
+            (unnamed): TF = False
+          Frame "7":
+            Select [prim 1516]
+            Select [prim 1516]
+            Select [prim 1516]
+            Select [prim 1516]
+            Bundle/Unbundle By Name
+            Bundle/Unbundle By Name
+            Index Array
+            Index Array
+            Greater? [prim 1110]
+            Greater? [prim 1110]
+            Compound Arithmetic
+            Select [prim 1516]
+            Build Array
+            For Loop
+              Less? [prim 1111]
+              Or [prim 1062]
+              And [prim 1061]
+            And [prim 1061]
+            Equal? [prim 1102]
+            Select [prim 1516]
+            Select [prim 1516]
+            Not Equal? [prim 1105]
+            Or [prim 1062]
+            Select [prim 1516]
+            Select [prim 1516]
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 0
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 0
+            (unnamed): I32 = 0
+            (unnamed): TF = False
+            (unnamed): TF = True
+            (unnamed): TF = True
+            (unnamed): TF = False
+            (unnamed): TF = True
+            (unnamed): enum{Facility Off, Pumping to Rough, Holding at Rough, Overnight Pump, Engaging Turbo, Pumping to Hig Vac, Closing Gate, Venting, Turbo Slowing} = 8
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 1
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 7
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 4
+            (unnamed): TF = False
+            (unnamed): [TF] = [False, False, False]
+            (unnamed): TF = False
+            (unnamed): TF = False
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 7
+            (unnamed): I32 = 0
+            (unnamed): I32 = 1
+            (unnamed): [TF] = [False, False, False]
+            (unnamed): I32 = 0
+            (unnamed): I32 = 1
+            (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 8
+            (unnamed): TF = False
+        Index Array
+        Not [prim 1064]
+        And [prim 1061]
+        And [prim 1061]
+        Equal? [prim 1102]
+        Case Structure (2 frames)
+          Frame "False":
+            (unnamed): TF = False
+          Frame "True":
+            Less? [prim 1111]
+            Case Structure (2 frames)
+              Frame "False":
+                Get Date/Time String [prim 1600]
+                Concatenate Strings
+                (unnamed): String = 'High pressure turbo 3 shuttoff triggered at'
+                (unnamed): TF = True
+              Frame "True":
+                (pass-through)
+            (unnamed): DBL = 5.0
+        Index Array
+        Not [prim 1064]
+        Index Array
+        Not [prim 1064]
+        And [prim 1061]
+        Get Date/Time In Seconds [prim 1303]
+        Subtract [prim 1051]
+        Divide [prim 1053]
+        Divide [prim 1053]
+        Quotient & Remainder [prim 1056]
+        Number To Decimal String [prim 1180]
+        Number To Decimal String [prim 1180]
+        Concatenate Strings
+        Is Value Changed.vim
+        Elapsed Time6
+        And [prim 1061]
+        Select [prim 1516]
+        Equal? [prim 1102]
+        Bundle/Unbundle By Name
+        And [prim 1061]
+        Case Structure (2 frames)
+          Frame "False":
+            (unnamed): TF = False
+          Frame "True":
+            Less? [prim 1111]
+            Case Structure (2 frames)
+              Frame "False":
+                Get Date/Time String [prim 1600]
+                Concatenate Strings
+                (unnamed): String = 'High pressure turbo 1 shuttoff triggered at'
+                (unnamed): TF = True
+              Frame "True":
+                (pass-through)
+            (unnamed): DBL = 5.0
+        Or [prim 1062]
+        Countdown [Property Node]
+        And [prim 1061]
+        And [prim 1061]
+        Bundle/Unbundle By Name
+        And [prim 1061]
+        Case Structure (2 frames)
+          Frame "False":
+            (unnamed): TF = False
+          Frame "True":
+            Less? [prim 1111]
+            Case Structure (2 frames)
+              Frame "False":
+                Get Date/Time String [prim 1600]
+                Concatenate Strings
+                (unnamed): String = 'High pressure turbo 1 shuttoff triggered at'
+                (unnamed): TF = True
+              Frame "True":
+                (pass-through)
+            (unnamed): DBL = 5.0
+        And [prim 1061]
+        And [prim 1061]
+        (unnamed): I32 = 2
+        (unnamed): I32 = 2
+        (unnamed): TF = False
+        (unnamed): I32 = 0
+        (unnamed): I32 = 2
+        (unnamed): I32 = 0
+        (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 0
+        (unnamed): I32 = 5000
+        (unnamed): I32 = 5010
+        (unnamed): I32 = 1
+        (unnamed): DBL = 3.0
+        (unnamed): DBL = 24.0
+        (unnamed): String = ' days and '
+        (unnamed): String = ' hours until turn on.'
+        (unnamed): DBL = 60.0
+        (unnamed): DBL = 60.0
+        (unnamed): I32 = 1
+        (unnamed): enum{Facility Off, Pumping to Rough, Holding at Rough, Overnight Pump, Engaging Turbo, Pumping to Hig Vac, Closing Gate, Venting, Turbo Slowing} = 2
+        (unnamed): enum{Facility Off, Pumping to Rough, Holding at Rough, Overnight Pump, Engaging Turbo, Pumping to Hig Vac, Closing Gate, Venting, Turbo Slowing} = 3
+        (unnamed): Current_Facility_State{Facility Off, Pumping to Rough, Overnight Pump, Engage Turbo, Pumping to High Vac, Disengage Turbo, Vent and Shutdown, Turbo slowing, Venting} = 2
+        (unnamed): TF = False
+        (unnamed): I32 = 1
+    Valve_Turbo_1_User_Cmd [Property Node]
+    Primary_User_Cmd [Property Node]
+    Valve_Gate_1_User_Cmd [Property Node]
+    Equal? [prim 1102]
+    Control Level [Property Node]
+    Select [prim 1516]
+    Select [prim 1516]
+    Valve_Turbo_3_User_Cmd [Property Node]
+    Valve_Turbo_2_User_Cmd [Property Node]
+    Get Date/Time String [prim 1600]
+    Concatenate Strings
+    Chiller_User_Cmd [Property Node]
+    Valve_Vent_User_Cmd [Property Node]
+    Turbo_1_Motor_User_Cmd [Property Node]
+    Valve_Gate_2_User_Cmd [Property Node]
+    Change to Auto [Property Node]
+    Valve_Gate_3_User_Cmd [Property Node]
+    (unnamed): enum{Admin, Debug, Automatic} = 2
+    (unnamed): enum{Admin, Debug, Automatic} = 0
+    (unnamed): Facility_State{Intialize, Admin, Manual, Auto} = 3
+    (unnamed): String = 'Auto Control Mode'
+    (unnamed): TF = True
+    (unnamed): String = 'Admin Control Mode Enabled'
+    (unnamed): Facility_State{Intialize, Admin, Manual, Auto} = 1
+    (unnamed): String = 'Admin Control Mode'
+    (unnamed): String = '       '
+  Frame 4:
+    DAQmx Write.vi
+    Build Array
+    DAQmx Write.vi
+    DAQmx Write.vi
+    Index Array
+    Bundle/Unbundle By Name
+    Feedback Node [Feedback Node]
+    Feedback Node [Feedback Node]
+    Not Equal? [prim 1105]
+    Or Array Elements [prim 1910]
+    Feedback Node [Feedback Node]
+    Index Array
+    Feedback Node [Feedback Node]
+    Not Equal? [prim 1105]
+    Feedback Node [Feedback Node]
+    Feedback Node [Feedback Node]
+    Not Equal? [prim 1105]
+    Case Structure (2 frames)
+      Frame "False":
+        (pass-through)
+      Frame "True":
+        Wait (ms) [prim 1302]
+        (unnamed): U32 = 10000
+    Index Array
+    Index Array
+    Index Array
+    Or Array Elements [prim 1910]
+    Select [prim 1516]
+    Index Array
+    Build Array
+    Index Array
+    Select [prim 1516]
+    Case Structure (2 frames)
+      Frame "False":
+        (pass-through)
+      Frame "True":
+        Wait (ms) [prim 1302]
+    Feedback Node [Feedback Node]
+    Feedback Node [Feedback Node]
+    Not Equal? [prim 1105]
+    And [prim 1061]
+    Case Structure (2 frames)
+      Frame "False":
+        (pass-through)
+      Frame "True":
+        Wait (ms) [prim 1302]
+        (unnamed): U32 = 10000
+    DAQmx Write.vi
+    Merge Errors [prim 2147]
+    Merge Errors [prim 2147]
+    Merge Errors [prim 2147]
+    Merge Errors [prim 2147]
+    Merge Errors [prim 2147]
+    Turbo Valve Delay: U32 = 1000
+    Gate Delay: U32 = 9000
+    (unnamed): I32 = 0
+    (unnamed): I32 = 1
+    (unnamed): I32 = 2
+    (unnamed): I32 = 1
+    (unnamed): [TF] = [False, False, False]
+    (unnamed): I32 = 0
+    Bypass Delay: U32 = 2000
+    (unnamed): I32 = 0
+    (unnamed): I32 = 2
+  Frame 5:
+    Feedback Node [Feedback Node]
+    Feedback Node [Feedback Node]
+    Feedback Node [Feedback Node]
+    Not Equal? [prim 1105]
+    Feedback Node [Feedback Node]
+    Not Equal? [prim 1105]
+    Feedback Node [Feedback Node]
+    Feedback Node [Feedback Node]
+    Not Equal? [prim 1105]
+    For Loop
+      Increment [prim 1057]
+      Number To Decimal String [prim 1180]
+      Concatenate Strings
+      Case Structure (2 frames)
+        Frame "False":
+          (pass-through)
+        Frame "True":
+          Get Date/Time String [prim 1600]
+          Select [prim 1516]
+          Concatenate Strings
+          (unnamed): String = ''
+          (unnamed): TF = True
+      (unnamed): String = 'Opened'
+      (unnamed): String = 'Closed'
+      (unnamed): String = ' Turbo '
+      (unnamed): String = ' Valve at '
+    Wait Until Next ms Multiple [prim 1327]
+    Feedback Node [Feedback Node]
+    Feedback Node [Feedback Node]
+    Not Equal? [prim 1105]
+    Case Structure (2 frames)
+      Frame "False":
+        (pass-through)
+      Frame "True":
+        Get Date/Time String [prim 1600]
+        Select [prim 1516]
+        Concatenate Strings
+        (unnamed): TF = True
+        (unnamed): String = ''
+    Feedback Node [Feedback Node]
+    Feedback Node [Feedback Node]
+    Not Equal? [prim 1105]
+    Case Structure (2 frames)
+      Frame "False":
+        (pass-through)
+      Frame "True":
+        Get Date/Time String [prim 1600]
+        Select [prim 1516]
+        Concatenate Strings
+        (unnamed): TF = True
+        (unnamed): String = ''
+    Feedback Node [Feedback Node]
+    Feedback Node [Feedback Node]
+    Not Equal? [prim 1105]
+    For Loop
+      Increment [prim 1057]
+      Number To Decimal String [prim 1180]
+      Concatenate Strings
+      Case Structure (2 frames)
+        Frame "False":
+          (pass-through)
+        Frame "True":
+          Get Date/Time String [prim 1600]
+          Select [prim 1516]
+          Concatenate Strings
+          (unnamed): TF = True
+          (unnamed): String = ''
+      (unnamed): String = 'Opened'
+      (unnamed): String = 'Closed'
+      (unnamed): String = ' Gate Valve '
+      (unnamed): String = ' at '
+    Case Structure (2 frames)
+      Frame "False":
+        (pass-through)
+      Frame "True":
+        Get Date/Time String [prim 1600]
+        Select [prim 1516]
+        Concatenate Strings
+        (unnamed): String = ''
+        (unnamed): TF = True
+    Feedback Node [Feedback Node]
+    Feedback Node [Feedback Node]
+    Not Equal? [prim 1105]
+    Case Structure (2 frames)
+      Frame "False":
+        (pass-through)
+      Frame "True":
+        Get Date/Time String [prim 1600]
+        Select [prim 1516]
+        Concatenate Strings
+        (unnamed): TF = True
+        (unnamed): String = ''
+    Case Structure (2 frames)
+      Frame "False":
+        (pass-through)
+      Frame "True":
+        Get Date/Time String [prim 1600]
+        Select [prim 1516]
+        Concatenate Strings
+        (unnamed): String = ''
+        (unnamed): TF = True
+    Feedback Node [Feedback Node]
+    Feedback Node [Feedback Node]
+    Not Equal? [prim 1105]
+    Case Structure (2 frames)
+      Frame "False":
+        (pass-through)
+      Frame "True":
+        Get Date/Time String [prim 1600]
+        Select [prim 1516]
+        Concatenate Strings
+        (unnamed): TF = True
+        (unnamed): String = ''
+    (unnamed): String = 'Started'
+    (unnamed): String = 'Opened'
+    (unnamed): String = ' Turbo Pump 2 at '
+    (unnamed): String = 'Stopped'
+    (unnamed): U32 = 100
+    (unnamed): String = ' Bypass Valve at '
+    (unnamed): String = 'Closed'
+    (unnamed): String = 'Started'
+    (unnamed): String = 'Opened'
+    (unnamed): String = ' Vent Valve at '
+    (unnamed): String = 'Closed'
+    (unnamed): String = ' Primary Pump at '
+    (unnamed): String = 'Stopped'
+    (unnamed): String = 'Started'
+    (unnamed): String = ' Chiller at '
+    (unnamed): String = 'Stopped'
+    (unnamed): String = 'Started'
+    (unnamed): String = ' Turbo Pump 3 at '
+    (unnamed): String = 'Stopped'
+DAQmx Create Task.vi
+DAQmx Create Virtual Channel.vi
+While Loop
+  Not [prim 1064]
+  Feedback Node [Feedback Node]
+  Feedback Node [Feedback Node]
+  Search and Replace String [prim 3914]
+DAQmx Stop Task.vi
+Concatenate Strings
+Concatenate Strings
+Merge Errors [prim 2147]
+Merge Errors [prim 2147]
+Merge Errors [prim 2147]
+Merge Errors [prim 2147]
+Merge Errors [prim 2147]
+DAQmx Clear Task.vi
+Concatenate Strings
+DAQmx Stop Task.vi
+Merge Errors [prim 2147]
+Concatenate Strings
+Concatenate Strings
+Concatenate Strings
+DAQmx Create Task.vi
+Merge Errors [prim 2147]
+Merge Errors [prim 2147]
+DAQmx Clear Task.vi
+For Loop
+  Add [prim 1050]
+  Number To Decimal String [prim 1180]
+  Concatenate Strings
+  Concatenate Strings
+  DAQmx Create Virtual Channel.vi
+  (unnamed): String = 'Mod2/port0/line'
+  (unnamed): I32 = 10
+  (unnamed): String = 'Turbo 1 '
+DAQmx Create Task.vi
+DAQmx Create Virtual Channel.vi
+DAQmx Create Virtual Channel.vi
+DAQmx Create Virtual Channel.vi
+For Loop
+  Add [prim 1050]
+  Number To Decimal String [prim 1180]
+  Concatenate Strings
+  Concatenate Strings
+  DAQmx Create Virtual Channel.vi
+  (unnamed): String = 'Mod3/port0/line'
+  (unnamed): I32 = 0
+  (unnamed): String = 'Turbo 1 '
+DAQmx Create Task.vi
+DAQmx Create Virtual Channel.vi
+DAQmx Create Virtual Channel.vi
+DAQmx Create Virtual Channel.vi
+Case Structure (2 frames)
+  Frame "False":
+    (unnamed): Error = no error
+  Frame "True":
+    DAQmx Write.vi
+    (unnamed): TF = False
+DAQmx Clear Task.vi
+For Loop
+  Add [prim 1050]
+  Number To Decimal String [prim 1180]
+  Concatenate Strings
+  Concatenate Strings
+  DAQmx Create Virtual Channel.vi
+  (unnamed): String = 'Mod3/port0/line'
+  (unnamed): I32 = 6
+  (unnamed): String = 'Turbo 3 '
+DAQmx Create Virtual Channel.vi
+Concatenate Strings
+DAQmx Stop Task.vi
+DAQmx Clear Task.vi
+Merge Errors [prim 2147]
+DAQmx Clear Task.vi
+Merge Errors [prim 2147]
+Merge Errors [prim 2147]
+Merge Errors [prim 2147]
+Clear Errors.vi
+Merge Errors [prim 2147]
+Concatenate Strings
+DAQmx Create Task.vi
+DAQmx Create Virtual Channel.vi
+While Loop
+  Boolean To (0,1) [prim 1167]
+  To Double Precision Float [prim 1147]
+  Waveform Chart 2 [Property Node]
+  Waveform Chart 2 [Property Node]
+  Waveform Chart 2 [Property Node]
+  Waveform Chart 2 [Property Node]
+  Boolean To (0,1) [prim 1167]
+  To Double Precision Float [prim 1147]
+  Waveform Chart 2 [Property Node]
+  Boolean To (0,1) [prim 1167]
+  To Double Precision Float [prim 1147]
+  Waveform Chart 2 [Property Node]
+  Boolean To (0,1) [prim 1167]
+  To Double Precision Float [prim 1147]
+  Waveform Chart 2 [Property Node]
+  Waveform Chart 2 [Property Node]
+  Waveform Chart 2 [Property Node]
+  Boolean To (0,1) [prim 1167]
+  To Double Precision Float [prim 1147]
+  Waveform Chart 2 [Property Node]
+  Boolean To (0,1) [prim 1167]
+  To Double Precision Float [prim 1147]
+  Build Array
+  Boolean To (0,1) [prim 1167]
+  To Double Precision Float [prim 1147]
+  Build Array
+  Waveform Chart 2 [Property Node]
+  Waveform Chart 2 [Property Node]
+  Boolean To (0,1) [prim 1167]
+  To Double Precision Float [prim 1147]
+  Build Array
+  Boolean To (0,1) [prim 1167]
+  To Double Precision Float [prim 1147]
+  Build Array
+  Boolean To (0,1) [prim 1167]
+  To Double Precision Float [prim 1147]
+  Build Array
+  Waveform Chart 2 [Property Node]
+  Build Array
+  Build Array
+  Multiply [prim 1052]
+  Wait Until Next ms Multiple [prim 1327]
+  DAQmx Read.vi
+  Bundle/Unbundle By Name
+  Bundle/Unbundle By Name
+  Bundle/Unbundle By Name
+  Bundle/Unbundle By Name
+  Bundle/Unbundle By Name
+  Bundle/Unbundle By Name
+  Bundle/Unbundle By Name
+  Build Array
+  Bundle/Unbundle By Name
+  Build Array
+  Bundle/Unbundle By Name
+  Build Array
+  Bundle/Unbundle By Name
+  Build Array
+  Bundle/Unbundle By Name
+  Build Array
+  Bundle/Unbundle By Name
+  Build Array
+  Bundle/Unbundle By Name
+  Build Array
+  Bundle/Unbundle By Name
+  Build Array
+  Bundle/Unbundle By Name
+  Build Array
+  Waveform Chart 2 [Property Node]
+  Waveform Chart 2 [Property Node]
+  (unnamed): String = 'Turbo 3 Gauge'
+  (unnamed): U32 = 4
+  (unnamed): U32 = 0
+  (unnamed): String = 'Main Gauge'
+  (unnamed): U32 = 1
+  (unnamed): String = 'Turbo 1 Gauge'
+  (unnamed): U32 = 2
+  (unnamed): String = 'Foreline Convectron'
+  (unnamed): String = 'Primary Pump'
+  (unnamed): U32 = 5
+  (unnamed): String = 'Turbo 2 Gauge'
+  (unnamed): String = 'Turbo 1 Valve'
+  (unnamed): U32 = 7
+  (unnamed): String = 'Bypass Valve'
+  (unnamed): U32 = 10
+  (unnamed): String = 'Gate 1 Valve'
+  (unnamed): U32 = 11
+  (unnamed): U32 = 3
+  (unnamed): String = 'Turbo Pump'
+  (unnamed): U32 = 6
+  (unnamed): String = 'Gate 2 Valve'
+  (unnamed): U32 = 12
+  (unnamed): String = 'Gate 3 Valve'
+  (unnamed): U32 = 13
+  (unnamed): String = 'Vent Valve'
+  (unnamed): U32 = 14
+  (unnamed): DBL = 1000.0
+  (unnamed): String = 'Turbo 2 Valve'
+  (unnamed): U32 = 8
+  (unnamed): String = 'Turbo 3 Valve'
+  (unnamed): U32 = 9
+Divide [prim 1053]
+DAQmx Create Virtual Channel.vi
+Case Structure (2 frames)
+  Frame "False":
+    (unnamed): Error = no error
+  Frame "True":
+    DAQmx Write.vi
+    (unnamed): TF = False
+Concatenate Strings
+DAQmx Create Task.vi
+Merge Errors [prim 2147]
+DAQmx Create Virtual Channel.vi
+Concatenate Strings
+Merge Errors [prim 2147]
+DAQmx Create Task.vi
+Merge Errors [prim 2147]
+DAQmx Timing.vi
+Property Node [Property Node]
+DAQmx Create Virtual Channel.vi
+Concatenate Strings
+DAQmx Create Virtual Channel.vi
+Concatenate Strings
+Select [prim 1516]
+Select [prim 1516]
+Build Array
+Case Structure (2 frames)
+  Frame "False":
+    (unnamed): VisaRef refnum{Tag} = None
+    (unnamed): Error = no error
+  Frame "True":
+    Initialize.vi
+    Measurement Configuration.vi
+    Backlight Command.vi
+    (unnamed): TF = True
+    (unnamed): TF = True
+    (unnamed): Voltage Range{5V, 50V, 500V, 1000V, Auto} = 1
+    (unnamed): TF = True
+DAQmx Create Virtual Channel.vi
+Concatenate Strings
+DAQmx Create Virtual Channel.vi
+DAQmx Create Virtual Channel.vi
+DAQmx Create Virtual Channel.vi
+Concatenate Strings
+Concatenate Strings
+Concatenate Strings
+DAQmx Create Virtual Channel.vi
+Concatenate Strings
+Case Structure (2 frames)
+  Frame "False":
+    (unnamed): Error = no error
+  Frame "True":
+    DAQmx Write.vi
+    (unnamed): [TF] = [False, False, False, False, False, False, False, False]
+DAQmx Create Virtual Channel.vi
+Case Structure (2 frames)
+  Frame "False":
+    (pass-through)
+  Frame "True":
+    Close.vi
+DAQmx Control Task.vi
+DAQmx Timing.vi
+Merge Errors [prim 2147]
+Close File [prim 8052]
+DAQmx Create Virtual Channel.vi
+Concatenate Strings
+Index Array
+Set Waveform Attribute [prim 8207]
+Set Waveform Attribute [prim 8207]
+Set Waveform Attribute [prim 8207]
+SetT0.vi
+Replace Array Subset
+sub Set StartTimeStamp.vi
+Waveform Array To Dynamic.vi
+Index Array
+Set Waveform Attribute [prim 8207]
+Set Waveform Attribute [prim 8207]
+Set Waveform Attribute [prim 8207]
+SetT0.vi
+DAQmx Create Virtual Channel.vi
+Replace Array Subset
+Concatenate Strings
+sub Set StartTimeStamp.vi
+Waveform Array To Dynamic.vi
+Index Array
+Get Waveform Attribute [prim 8208]
+DAQmx Create Virtual Channel.vi
+DAQmx Create Virtual Channel.vi
+DAQmx Create Virtual Channel.vi
+DAQmx Stop Task.vi
+DAQmx Clear Task.vi
+For Loop
+  Add [prim 1050]
+  Number To Decimal String [prim 1180]
+  Concatenate Strings
+  Concatenate Strings
+  DAQmx Create Virtual Channel.vi
+  (unnamed): String = 'Mod3/port0/line'
+  (unnamed): I32 = 3
+  (unnamed): String = 'Turbo 2 '
+Countdown [Property Node]
+Concatenate Strings
+Concatenate Strings
+Concatenate Strings
+DAQmx Create Virtual Channel.vi
+Concatenate Strings
+timeLoop
+xDataNode
+xDataNode
+xDataNode
+xDataNode
+Template unbundler
+Template unbundler
+DAQmx Create Virtual Channel.vi
+Concatenate Strings
+Bundle
+DAQmx Create Virtual Channel.vi
+Concatenate Strings
+Case Structure (2 frames)
+  Frame "False":
+    Convert from Dynamic Data
+    Array Size [prim 1809]
+    For Loop
+      Get Dynamic Data Attributes
+    Array Size [prim 1809]
+    Increment [prim 1057]
+    Array Size [prim 1809]
+    Insert Into Array
+    Insert Into Array
+    Write Delimited Spreadsheet.vi
+    (unnamed): [String] = ['Log', 'Error', 'Current State', 'Target State']
+    (unnamed): TF = True
+    (unnamed): TF = False
+    (unnamed): String = ','
+  Frame "True":
+    (pass-through)
+Check if File or Folder Exists.vi
+Build Array
+Get Date/Time String [prim 1600]
+Concatenate Strings
+Build Array
+Case Structure (2 frames)
+  Frame "False":
+    Bundle/Unbundle By Name
+    Target Facility State [Property Node]
+    Build Array
+    Current Facility State [Property Node]
+    Build Array
+    Search and Replace String [prim 3914]
+    Build Array
+    Build Array
+    Build Array
+    Convert from Dynamic Data3
+    Array Size [prim 1809]
+    Increment [prim 1057]
+    For Loop
+      Convert from Dynamic Data2
+      Number To Exponential String [prim 1505]
+      (unnamed): I16 = 5
+    Array Size [prim 1809]
+    For Loop
+      Index Array
+      Build Array
+      Insert Into Array
+    Insert Into Array
+    Write Delimited Spreadsheet.vi
+    (unnamed): TF = True
+    (unnamed): String = ''
+    (unnamed): TF = True
+    (unnamed): String = ','
+    (unnamed): TF = True
+    (unnamed): TF = True
+  Frame "True":
+    Display Message to User2
+    (unnamed): TF = False
+Open/Create/Replace File [prim 8050]
+Bundle/Unbundle By Name
+Equal? [prim 1102]
+Build Path [prim 1419]
+Get Date/Time String [prim 1600]
+Concatenate Strings
+Search and Replace String [prim 3914]
+For Loop
+  Equal? [prim 1102]
+  Bundle/Unbundle By Name
+  Array Size [prim 1809]
+  Decrement [prim 1058]
+  Index Array
+  Set Dynamic Data Attributes
+  Set Dynamic Data Attributes
+  mergeSignal
+  Select [prim 1516]
+  (unnamed): I32 = 0
+  (unnamed): I32 = 0
+DAQmx Stop Task.vi
+DAQmx Clear Task.vi
+DAQmx Stop Task.vi
+DAQmx Clear Task.vi
+Merge Errors [prim 2147]
+DAQmx Stop Task.vi
+DAQmx Clear Task.vi
+Case Structure (2 frames)
+  Frame "False":
+    (unnamed): Error = no error
+  Frame "True":
+    DAQmx Write.vi
+    (unnamed): [TF] = [False, False, False, False, False, False, False, False]

@@ -1,0 +1,40 @@
+### Case 12494: frames ['False', 'True'], 4 tunnels
+  SELECTOR <- FP[Turbo_Reset_Cmd]
+  IN  Bundle<>(SR(31354), Unbundle(Array To Cluster(Array Subset#27485)), Unbundle(Array To Cluster(Array Subset#27485)), Unbundle(Array To Cluster(Array Subset#27485)), Unbundle(Array To Cluster(Array Subset#27485)), Unbundle(Array To Cluster(Array Subset#27485)), Unbundle(Array To Cluster(Array Subset#27485)))   (used in frames: ['False', 'True'])
+  OUT ⇢(flatSeqTun)→unknown#644.45258
+       frame False: Bundle<>(Bundle<>(SR(31354), Unbundle#36544, Unbundle#36544, Unbundle#36544, Unbundle#36544, Unbundle#36544, Unbundle#36544), 0)
+       frame True: Case Structure#8019
+  OUT ⇢(flatSeqTun)→unknown#644.12686
+       frame False: 0
+       frame True: Case Structure#8019
+### Case 32946: frames ['False', 'True'], 5 tunnels
+  SELECTOR <- (Select#11405 < FP[Turbo on Threshold (torr) 2])
+  IN  Is Value Changed.vim#33357   (used in frames: ['True'])
+  OUT ⇢(selTun)→And#27653.x →For Loop#18338.47242 →And#26792.x →And#36424.y
+       frame False: 0
+       frame True: Elapsed Time.out(30.0, _)
+  OUT →FP[Elapsed Time (s)]
+       frame False: '\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+       frame True: Elapsed Time.out(30.0, _)
+  IN  30.0   (used in frames: ['True'])
+### Case 29819: frames ['False', 'True'], 7 tunnels
+  SELECTOR <- Compound Arithmetic[or]((2 == (Or(Simple Error Handler.vi#30838, And((Simple Error Handler.vi#42024 <= 5010), (Simple Error Handler.vi#42024 >= 5000))) ? 0 : SR(TARGET))), ((Or(Simple Error Handler.vi#30838, And((Simple Error Handler.vi#42024 <= 5010), (Simple Error Handler.vi#42024 >= 5000))) ? 0 : SR(TARGET)) == 1), ((Or(Simple Error Handler.vi#30838, And((Simple Error Handler.vi#42024 <= 5010), (Simple Error Handler.vi#42024 >= 5000))) ? 0 : SR(TARGET)) == 0))
+  IN  SR(2316)   (used in frames: ['False'])
+  IN  Case Structure#12494   (used in frames: ['False', 'True'])
+  OUT →Case Structure#679.700
+       frame False: SR(2316)
+       frame True: 0
+  OUT →Case Structure#679.25522
+       frame False: Case Structure#12494
+       frame True: Bundle<>(Case Structure#12494, 0)
+  IN  SR(49850)   (used in frames: ['False'])
+  OUT →Case Structure#679.58417
+       frame False: SR(49850)
+       frame True: 0
+### Case 35966: frames ['False', 'True'], 4 tunnels
+  SELECTOR <- And((Select#5233 < Multiply(5.0, Turbo on Threshold (torr))), (Select#11405 < Multiply(5.0, Turbo on Threshold (torr))))
+  IN  Case Structure#31632   (used in frames: ['False', 'True'])
+  OUT ⇢(selTun)⇢(selTun)→Case Structure#37926.31314
+       frame False: Concatenate Strings(Case Structure#31632, '\r', (Compound Arithmetic[or](Case Structure#12494.Turbo Rotating Read, (Index Array(Build Array#71607, 0) > 15.0), (Index Array(Build Array#71607, 1) > 15.0)) ? 'Pressure NOT low enough to open gates!' : 'Pressure NOT low enough to turn on turbos!'))
+       frame True: Concatenate Strings(Case Structure#31632, '\r', (Compound Arithmetic[or](Case Structure#12494.Turbo Rotating Read, (Index Array(Build Array#71607, 0) > 15.0), (Index Array(Build Array#71607, 1) > 15.0)) ? 'Pressure low enough to open gates' : 'Pressure low enough to turn on turbos'))
+  IN  Compound Arithmetic[or](Case Structure#12494.Turbo Rotating Read, (Index Array(Build Array#71607, 0) > 15.0), (Index Array(Build Array#71607, 1) > 15.0))   (used in frames: ['False', 'True'])

@@ -29,11 +29,12 @@ import time
 from dataclasses import dataclass, field, replace
 from typing import Callable, Dict, List, Optional, Protocol, Set, Tuple
 
-from .automode import AutoInput, AutoStateMachine
-from .config import FacilityConfig
+from .automode import SUB_ROUGH_ENTRY, SUB_ROUGH_WAIT, AutoInput, AutoStateMachine
+from .config import TURBO_ERROR_DEFAULTS, FacilityConfig
 from .hal.base import HardwareBackend
 from .interlocks import Interlocks
 from .logging_csv import CsvLogger
+from .runhours import RunHours
 from .model import (AUTO_ERROR_CODE_MAX, AUTO_ERROR_CODE_MIN, ERR_BRT_DEVICE, ERR_BYPASS_CONFLICT,
                     ERR_CHILLER_CONFLICT, ERR_COMPRESSOR_LOW, ERR_DAQ, ERR_GATE_CONFLICT, ERR_PRIMARY_CONFLICT,
                     ERR_TURBO_DEVICE, ERR_TURBO_MOTOR_CONFLICT, ERR_TURBO_VALVE_CONFLICT, ERR_VENT_CONFLICT,
@@ -120,6 +121,10 @@ class PendingDialog:
 
 
 IMMEDIATE_KINDS = {"stop", "clear_error", "set_threshold", "set_engage_time", "set_unit"}
+# Auto buttons that start a pump-down.  The test engineer asked for a confirmation that the *manual*
+# vent valve (a hand valve, not on the DAQ) is closed before any of these runs.
+VENT_CONFIRM_BUTTONS = {"pump_to_rough", "pump_to_high_vac", "overnight_pump", "shut_off_once_rough"}
+MANUAL_VENT_QUESTION = "Is the manual vent valve closed?"
 VALVE_ERROR_CODES = {"turbo": ERR_TURBO_VALVE_CONFLICT, "bypass": ERR_BYPASS_CONFLICT,
                      "vent": ERR_VENT_CONFLICT, "gate": ERR_GATE_CONFLICT}
 
@@ -127,11 +132,14 @@ VALVE_ERROR_CODES = {"turbo": ERR_TURBO_VALVE_CONFLICT, "bypass": ERR_BYPASS_CON
 class Controller:
     def __init__(self, cfg: FacilityConfig, backend: HardwareBackend, dialogs: Optional[DialogProvider] = None,
                  csv_logger: Optional[CsvLogger] = None, initial_mode: Optional[Mode] = None,
-                 sleep: Callable[[float], None] = time.sleep, clock: Callable[[], float] = time.time):
+                 sleep: Callable[[float], None] = time.sleep, clock: Callable[[], float] = time.time,
+                 run_hours: Optional[RunHours] = None):
         self.cfg = cfg
         self.backend = backend
         self.dialogs: DialogProvider = dialogs or AutoAnswerDialogs()
         self.csv = csv_logger
+        self.run_hours = run_hours if run_hours is not None else RunHours(None)
+        self._last_hours_t: Optional[float] = None
         self.sleep = sleep
         self.clock = clock
         self.auto = AutoStateMachine(cfg)
@@ -177,6 +185,7 @@ class Controller:
         self._primary_status = OnOffError.OFF
         self._chiller_status = OnOffError.OFF
         self._last_csv = 0.0
+        self._compressor_low_since: Optional[float] = None
         self.pressure_unit = cfg.pressure_unit_default
         self.finished = threading.Event()
 
@@ -250,6 +259,7 @@ class Controller:
             pass
         if self.csv:
             self.csv.close()
+        self.run_hours.save(force=True, now=self.clock())
         self._publish()
 
     # ------------------------------------------------------------------ one iteration
@@ -336,9 +346,23 @@ class Controller:
             self.cmds = new                          # indicators show the new command during the wait
             self._command(prev, new, now)
             self._event_log_changes(prev, new)
-        # ---- frame 5: csv + publish (always)
+        # ---- frame 5: run-hour meters, csv, publish (always)
+        self._accumulate_run_hours(inp, now)
         self._csv_row()
         self._publish()
+
+    def _accumulate_run_hours(self, inp: Inputs, now: float) -> None:
+        """Count the time the primary pump actually ran (read-back), for the maintenance meter."""
+        last, self._last_hours_t = self._last_hours_t, now
+        if last is None:
+            return
+        dt = now - last
+        if dt <= 0 or dt > 60.0:          # clock jump / long freeze – don't credit it to the pump
+            return
+        running = inp.primary_read if self.cfg.primary.read else bool(self.cmds.primary)
+        if running:
+            self.run_hours.add("primary", dt)
+        self.run_hours.save(now=now)
 
     # ------------------------------------------------------------------ frame 1
     def _suppressed(self, key: str, now: float) -> bool:
@@ -377,35 +401,92 @@ class Controller:
             ti = inp.turbos.get(tc.id)
             if ti is None:
                 continue
+            status, turbo_error, err = self._turbo_status(tc, ti, err)
             motor_read = ti.motor_read if tc.control_mode == "hipace_rs485" else bool(self.cmds.turbo_motor.get(tc.id, False))
             standby = bool(self.cmds.turbo_standby.get(tc.id, False))
-            turbo_error = bool(ti.error) and bool(self.cmds.chiller)     # "Ignore Turbo Error if chiller off"
-            if motor_read:
-                status = TurboStatus.STANDBY if standby else (
-                    TurboStatus.SPEED_REACHED if ti.speed_pct > th.turbo_speed_reached_pct else TurboStatus.SPINNING_UP)
-            else:
-                status = TurboStatus.SPINNING_DOWN if ti.speed_pct > th.turbo_slow_speed_pct else TurboStatus.OFF
-            if turbo_error:
-                status = TurboStatus.ERROR
-                if tc.control_mode == "bigred_dsub15":
-                    err = err.merge(ErrorCluster.make(ERR_BRT_DEVICE, "BRT Error. See Device LEDs for more info "))
-                elif tc.control_mode == "hipace_rs485":
-                    err = err.merge(ErrorCluster.make(ERR_TURBO_DEVICE, f"HP2300 Error Code: {ti.error_text}"))
-                else:
-                    err = err.merge(ErrorCluster.make(ERR_TURBO_DEVICE, "HP2300 Error. See Device LEDs for more info "))
             if (tc.control_mode == "hipace_rs485" and ti.motor_read != bool(self.cmds.turbo_motor.get(tc.id, False))
                     and not self._suppressed(f"turbo:{tc.id}", now)):
                 err = err.merge(ErrorCluster.make(ERR_TURBO_MOTOR_CONFLICT, "Conflict between Turbo Motor command and read!"))
             self._turbo_views[tc.id] = TurboView(status, TURBO_COLORS[status], ti.speed_pct, turbo_error, motor_read,
-                                                 standby, tc.in_use, ti.still_spinning)
-        # compressor pressure (VC100 feature, only if configured)
-        if th.compressor_min_bar is not None and inp.compressor_bar is not None and inp.compressor_bar < th.compressor_min_bar:
-            err = err.merge(ErrorCluster.make(ERR_COMPRESSOR_LOW, f"Compressor pressure low ({inp.compressor_bar:.1f} bar)"))
+                                                 standby, tc.in_use, ti.still_spinning, tc.has_speed, dict(ti.contacts))
+        # compressor pressure (VC100: < 5 bar for 5 s -> error; only if the profile has the sensor)
+        if th.compressor_min_bar is not None and inp.compressor_bar is not None:
+            low = inp.compressor_bar < th.compressor_min_bar
+            if low and self._compressor_low_since is None:
+                self._compressor_low_since = now
+            elif not low:
+                self._compressor_low_since = None
+            if low and now - self._compressor_low_since >= th.compressor_low_time_s:
+                err = err.merge(ErrorCluster.make(ERR_COMPRESSOR_LOW,
+                                                  f"Compressor Pressure Below {th.compressor_min_bar:g} Bar! ({inp.compressor_bar:.1f} bar)"))
         key = f"{err.code}:{err.source}" if err.status else ""
         if key and key != self.last_error_seen:
             self._log(f"ERROR {err.code}: {err.source}")
         self.last_error_seen = key
         return err
+
+    def _turbo_status(self, tc, ti, err: ErrorCluster) -> Tuple[TurboStatus, bool, ErrorCluster]:
+        """Turbo status word + device error for one turbo (VI 'Turbo Status' case structures).
+
+        Speed-signal modes (Main_V4.4 / VC100 HiPace):  error DI -> Error; motor commanded -> Speed
+        Reached above turbo_speed_reached_pct, Standby if the standby line is set (VC100 additionally
+        needs the speed above `standby_speed_min_pct`), else Spinning Up; motor off -> Spinning Down
+        above turbo_slow_speed_pct else Off.  Main_V4.4 ignores the error while the chiller is off
+        (`error_requires_chiller`, default true); the VC100 VI does not.
+
+        Contact interface (VC100 Turbo 1 'Turbo 1 Cluseter'):  ¬Alarm -> Error; ¬Warning -> Warning;
+        Accelerating -> Spinning Up; standby commanded -> Standby; At Speed -> Speed Reached;
+        Rotating ∨ Braking -> Spinning Down; else Off.  Alarm (and, if `warning_is_error`, Warning) raise
+        the turbo error code (5005 '<Turbo> Alarm/Warning' in the VI), which stops Auto mode."""
+        th, p = self.cfg.thresholds, tc.params
+        code, message = TURBO_ERROR_DEFAULTS[tc.control_mode]
+        code = int(p.get("error_code", code))
+        message = str(p.get("error_message", message))
+        motor_cmd = bool(self.cmds.turbo_motor.get(tc.id, False))
+        standby_cmd = bool(self.cmds.turbo_standby.get(tc.id, False))
+        if tc.control_mode == "shimadzu_contacts":
+            alarm, warning = ti.contact("alarm"), ti.contact("warning")
+            if alarm:
+                status = TurboStatus.ERROR
+            elif warning:
+                status = TurboStatus.WARNING
+            elif ti.contact("accelerating"):
+                status = TurboStatus.SPINNING_UP
+            elif standby_cmd:
+                status = TurboStatus.STANDBY
+            elif ti.contact("at_speed"):
+                status = TurboStatus.SPEED_REACHED
+            elif ti.contact("rotating") or ti.contact("braking"):
+                status = TurboStatus.SPINNING_DOWN
+            else:
+                status = TurboStatus.OFF
+            turbo_error = alarm or (warning and bool(p.get("warning_is_error", True)))
+            if turbo_error:
+                what = "Alarm" if alarm else "Warning"
+                err = err.merge(ErrorCluster.make(code, message.format(label=tc.label, what=what, error_text="")
+                                                  if "{" in message else f"{message} ({what})"))
+            return status, turbo_error, err
+        turbo_error = bool(ti.error)
+        if bool(p.get("error_requires_chiller", True)):
+            turbo_error = turbo_error and bool(self.cmds.chiller)      # "Ignore Turbo Error if chiller off"
+        motor_read = ti.motor_read if tc.control_mode == "hipace_rs485" else motor_cmd
+        if motor_read:
+            sb_min = p.get("standby_speed_min_pct")
+            standby_ok = standby_cmd and (sb_min is None or ti.speed_pct > float(sb_min))
+            if standby_ok and sb_min is None:
+                status = TurboStatus.STANDBY          # Main_V4.4: standby line set -> 'In Standby'
+            elif ti.speed_pct > th.turbo_speed_reached_pct:
+                status = TurboStatus.SPEED_REACHED
+            elif standby_ok:
+                status = TurboStatus.STANDBY          # VC100: 'In Standby' only above 40 % and below full speed
+            else:
+                status = TurboStatus.SPINNING_UP
+        else:
+            status = TurboStatus.SPINNING_DOWN if ti.speed_pct > th.turbo_slow_speed_pct else TurboStatus.OFF
+        if turbo_error:
+            status = TurboStatus.ERROR
+            err = err.merge(ErrorCluster.make(code, message.format(label=tc.label, what="Error", error_text=ti.error_text)))
+        return status, turbo_error, err
 
     # ------------------------------------------------------------------ waits (the VI's Wait (ms) / dialogs)
     def _freeze(self, seconds: float, reason: str) -> None:
@@ -531,6 +612,8 @@ class Controller:
             tid = target.split(":", 1)[1]
             motor = new.turbo_motor.get(tid, False)
             standby = new.turbo_standby.get(tid, False)
+            # one turbo: the VI's texts; several: 'Stop Turbo 2?' etc. (VC100 concatenates the number)
+            tname = "Turbo Pump" if len(cfg.turbos) == 1 else cfg.turbo(tid).label
             if not motor:
                 if manual:
                     verdict = self.interlocks.turbo_motor(tid, True, new, inp)
@@ -541,7 +624,7 @@ class Controller:
                 def apply(result, cmds, tid=tid):
                     if result == 0:
                         cmds.turbo_motor[tid], cmds.turbo_standby[tid] = True, False
-                self._open_dialog("two", "Start Turbo Pump?", ["Yes", "No"], apply)
+                self._open_dialog("two", f"Start {tname}?", ["Yes", "No"], apply)
             elif not standby:
                 def apply(result, cmds, tid=tid):
                     if result == 0:                       # Yes -> stop
@@ -550,7 +633,7 @@ class Controller:
                         cmds.turbo_motor[tid], cmds.turbo_standby[tid] = True, True
                     else:                                 # No / window closed
                         cmds.turbo_motor[tid], cmds.turbo_standby[tid] = True, False
-                self._open_dialog("three", "Stop Turbo Pump?", ["Yes", "No", " Activate Standby"], apply)
+                self._open_dialog("three", f"Stop {tname}?", ["Yes", "No", " Activate Standby"], apply)
             else:
                 def apply(result, cmds, tid=tid):
                     if result == 0:                       # Yes, Spin Up
@@ -559,7 +642,7 @@ class Controller:
                         cmds.turbo_motor[tid], cmds.turbo_standby[tid] = False, False
                     else:
                         cmds.turbo_motor[tid], cmds.turbo_standby[tid] = True, True
-                self._open_dialog("three", " Exit Turbo Standby Mode?", ["Yes, Spin Up", "No", " Yes, Spin Down"], apply)
+                self._open_dialog("three", f" Exit {tname} Standby Mode?", ["Yes, Spin Up", "No", " Yes, Spin Down"], apply)
 
     def recognise_state(self, c: Commands) -> Optional[Tuple[FacilityState, FacilityState, str]]:
         """Admin → Auto state recognition (exactly the VI's decision tree, on commanded states)."""
@@ -595,7 +678,8 @@ class Controller:
         self.mode = Mode.AUTO
         self.current, self.target = cur, tgt
         bp = any(cmds.valves.get(v.id, False) for v in self.cfg.valves_of_kind("bypass"))
-        self.substate = 2 if (cur == FacilityState.PUMPING_TO_ROUGH and bp) else 0
+        # recognised mid-roughing (bypass already open) -> straight to the below-threshold wait
+        self.substate = SUB_ROUGH_WAIT if (cur == FacilityState.PUMPING_TO_ROUGH and bp) else SUB_ROUGH_ENTRY
         self.auto.mem.below_prev = None
         self._log(f"Auto Control Mode – recognised state '{name}', target '{tgt.label}'")
 
@@ -619,6 +703,26 @@ class Controller:
             self._open_dialog("two", f'Go to State: \n"{name}"?', ["Yes", "No"], apply)
 
     def _decide_auto(self, new: Commands, inp: Inputs, reqs: List[Request]) -> Commands:
+        # --- manual vent valve confirmation: a pump-down button is only passed to the state machine
+        #     after the operator confirms the hand vent valve is closed (arg2 == "confirmed").
+        gated: List[Request] = []
+        kept: List[Request] = []
+        for r in reqs:
+            if r.kind == "auto_button" and str(r.arg) in VENT_CONFIRM_BUTTONS and r.arg2 != "confirmed":
+                gated.append(r)
+            else:
+                kept.append(r)
+        if gated:                                     # ask about the first; ignore any others in this batch
+            name = str(gated[0].arg)
+
+            def apply(result, _cmds, name=name):
+                if result == 0:                       # Yes -> run the button on the next iteration
+                    self._deferred.append(Request("auto_button", name, "confirmed"))
+                else:
+                    self._log(f"{name.replace('_', ' ').title()} cancelled – manual vent valve not confirmed")
+            self._open_dialog("two", MANUAL_VENT_QUESTION, ["Yes", "No"], apply, MANUAL_VENT_QUESTION)
+            reqs = kept
+
         buttons: Set[str] = {str(r.arg) for r in reqs if r.kind == "auto_button"}
         for r in reqs:
             if r.kind == "turbo_error_ack":            # port addition: Reset Turbos works in Auto too
@@ -651,21 +755,30 @@ class Controller:
         except Exception as exc:
             self.error = ErrorCluster.make(ERR_DAQ, f"DAQ write failed: {exc}")
             self._log(f"ERROR {ERR_DAQ}: DAQ write failed: {exc}")
-        # HiPace / BRT error acknowledge: 1 s pulse on the ack line
+        # HiPace / BRT error acknowledge, Shimadzu 'Reset': 1 s pulse on the ack line
         pulses: List[Tuple[object, float]] = [
             (tc, int(tc.params.get("error_ack_pulse_ms", 1000)) / 1000.0) for tc in cfg.turbos
-            if new.turbo_error_ack.get(tc.id) and tc.control_mode in ("hipace_dsub25", "bigred_dsub15")]
-        # the VI's settle waits, sequential: valves (9 s if a gate moved) + chiller + primary
+            if new.turbo_error_ack.get(tc.id) and (tc.control_mode in ("hipace_dsub25", "bigred_dsub15") or tc.params.get("error_ack_do"))]
+        # the VI's settle waits, sequential: valves (9 s if a gate moved, VC100: 2 s if the bypass moved,
+        # else 1 s) + chiller + primary (VC100: 10 s when switched on, none when switched off)
         waits: List[Tuple[float, str]] = []
         changed_valves = [v for v in cfg.valve_ids if prev.valves.get(v) != new.valves.get(v)]
         gate_changed = any(cfg.valves[v].kind == "gate" for v in changed_valves)
+        bypass_changed = any(cfg.valves[v].kind == "bypass" for v in changed_valves)
         if changed_valves:
-            waits.append(((tm.gate_settle_ms if gate_changed else tm.valve_settle_ms) / 1000.0,
-                          ", ".join(cfg.valves[v].label for v in changed_valves) + " moving"))
+            ms = tm.valve_settle_ms
+            if bypass_changed and tm.bypass_settle_ms is not None:
+                ms = max(ms, tm.bypass_settle_ms)
+            if gate_changed:
+                ms = tm.gate_settle_ms
+            waits.append((ms / 1000.0, ", ".join(cfg.valves[v].label for v in changed_valves) + " moving"))
         if prev.chiller != new.chiller:
             waits.append((tm.chiller_settle_ms / 1000.0, f"{cfg.chiller.label} {'starting' if new.chiller else 'stopping'}"))
         if prev.primary != new.primary:
-            waits.append((tm.primary_settle_ms / 1000.0, f"{cfg.primary.label} {'starting' if new.primary else 'stopping'}"))
+            ms = tm.primary_settle_ms if new.primary else (
+                tm.primary_settle_ms if tm.primary_settle_off_ms is None else tm.primary_settle_off_ms)
+            if ms > 0:
+                waits.append((ms / 1000.0, f"{cfg.primary.label} {'starting' if new.primary else 'stopping'}"))
 
         if self.blocking:
             # ---- exactly the VI: pulse high – Wait – low; then Wait for every device that moved.
@@ -767,7 +880,7 @@ class Controller:
             hardware=self.backend.describe(), skip_primary_warm=self.skip_primary_warm,
             compressor_bar=self.inputs.compressor_bar,
             hold_remaining_s=max(0.0, self._hold_until - now), hold_reason=self._hold_reason if now < self._hold_until else "",
-            loop_blocked=self._blocked,
+            loop_blocked=self._blocked, primary_run_hours=self.run_hours.hours("primary"),
         )
 
     def _publish(self) -> None:

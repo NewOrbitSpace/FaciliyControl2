@@ -18,7 +18,7 @@ def test_config_channel_map_is_the_vi_map(cfg):
     t = cfg.turbo("turbo1")
     assert t.control_mode == "bigred_dsub15"
     assert cfg.phys(t.params["motor_do"]) == "cDAQ1Mod3/port0/line4"
-    assert cfg.thresholds.turbo_on_threshold_torr == 0.25
+    assert cfg.thresholds.turbo_on_threshold_torr == pytest.approx(0.150012)   # 2e-1 mBar
     assert cfg.timings.gate_settle_ms == 9000
 
 
@@ -31,8 +31,8 @@ def test_config_rejects_unknown_formula(cfg):
 
 
 def test_three_turbo_profile_loads_and_recognises_states():
-    """The config layer must accept a VC100-like 3-turbo facility (structure only, not verified hardware)."""
-    cfg = load_config(str(CONFIG_DIR / "facility_vc100_template.yaml"))
+    """The config layer must accept the VC100 3-turbo facility (full checks in test_vc100.py)."""
+    cfg = load_config(str(CONFIG_DIR / "facility_vc100.yaml"))
     assert len(cfg.turbos) == 3 and len(cfg.valves) == 8
     h = Harness(cfg, mode=Mode.ADMIN)
     c = Commands.all_off(cfg.valve_ids, cfg.turbo_ids)

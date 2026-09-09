@@ -56,12 +56,13 @@ class TurboStatus(IntEnum):
     SPINNING_DOWN = 3
     STANDBY = 4
     ERROR = 5
+    WARNING = 6          # Shimadzu contact interface 'Warning' output (VC100)
 
     @property
     def label(self) -> str:
         return {
             0: "Turbo Off", 1: "Turbo Spinning Up", 2: "Turbo Speed Reached",
-            3: "Turbo Spinning Down", 4: "Turbo In Standby", 5: "Turbo Error",
+            3: "Turbo Spinning Down", 4: "Turbo In Standby", 5: "Turbo Error", 6: "Turbo Warning",
         }[int(self)]
 
 
@@ -82,11 +83,12 @@ COLOR_ERROR = lv_color(16711680)      # red    #FF0000
 COLOR_SPIN_UP = lv_color(3381759)     # blue   #339AFF
 COLOR_SPIN_DOWN = lv_color(10650795)  # purple #A286AB
 COLOR_STANDBY = lv_color(16757266)    # yellow #FFB612
+COLOR_WARNING = lv_color(16744192)    # orange #FF8C00 (VC100 shows Warning in the standby yellow; kept distinct here)
 
 TURBO_COLORS = {
     TurboStatus.OFF: COLOR_OFF, TurboStatus.SPINNING_UP: COLOR_SPIN_UP,
     TurboStatus.SPEED_REACHED: COLOR_ON, TurboStatus.SPINNING_DOWN: COLOR_SPIN_DOWN,
-    TurboStatus.STANDBY: COLOR_STANDBY, TurboStatus.ERROR: COLOR_ERROR,
+    TurboStatus.STANDBY: COLOR_STANDBY, TurboStatus.ERROR: COLOR_ERROR, TurboStatus.WARNING: COLOR_WARNING,
 }
 
 # LabVIEW error codes used by the VI
@@ -99,9 +101,9 @@ ERR_TURBO_MOTOR_CONFLICT = 5005
 ERR_TURBO_DEVICE = 5006
 ERR_BRT_DEVICE = 5007
 ERR_GATE_CONFLICT = 5010
-ERR_COMPRESSOR_LOW = 5011          # port addition (VC100 compressor check), not in Main_V4.4
+ERR_COMPRESSOR_LOW = 5011          # compressor air low (the VC100 VI reports it as 5010 = gate code; 5011 keeps it apart)
 ERR_DAQ = 5020                      # port addition: hardware/DAQ read-write failure
-AUTO_ERROR_CODE_MIN, AUTO_ERROR_CODE_MAX = 5000, 5010   # Auto mode: these force Facility Off
+AUTO_ERROR_CODE_MIN, AUTO_ERROR_CODE_MAX = 5000, 5011   # Auto mode: these force Facility Off (the VIs use 5000-5010)
 
 
 @dataclass
@@ -127,10 +129,20 @@ class ErrorCluster:
 class TurboInputs:
     speed_pct: float = 0.0
     error: bool = False
-    motor_read: bool = False       # RS485 only; D-SUB modes echo the command
+    motor_read: bool = False       # RS485 only; D-SUB / contact modes echo the command
     still_spinning: Optional[bool] = None
     error_text: str = ""
     temps: Dict[str, str] = field(default_factory=dict)
+    # Shimadzu contact interface (VC100 Turbo 1): the six status contacts, already de-inverted
+    # (True = the condition is present).  Empty for turbos with a speed signal.
+    contacts: Dict[str, bool] = field(default_factory=dict)
+
+    @property
+    def has_contacts(self) -> bool:
+        return bool(self.contacts)
+
+    def contact(self, name: str) -> bool:
+        return bool(self.contacts.get(name, False))
 
 
 @dataclass
@@ -189,6 +201,8 @@ class TurboView:
     standby: bool = False
     in_use: bool = True
     still_spinning: Optional[bool] = None
+    has_speed: bool = True          # False for the contact interface (status words only)
+    contacts: Dict[str, bool] = field(default_factory=dict)
 
 
 @dataclass
@@ -224,3 +238,4 @@ class Snapshot:
     hold_remaining_s: float = 0.0      # time left of a settle wait (blocking: loop frozen; else DECIDE held)
     hold_reason: str = ""
     loop_blocked: bool = False         # True while the loop is frozen in a settle wait / dialog (VI behaviour)
+    primary_run_hours: float = 0.0     # persistent 'Primary pump total operating hours' meter

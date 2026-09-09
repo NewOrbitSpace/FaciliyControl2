@@ -6,7 +6,8 @@ Tasks (as in the VI's "Setup of Main Loop"):
   DI  valve reads       one channel per line
   DI  primary, chiller  single line each
   AI  gauges + extras + turbo speed(s)   finite acquisition, `rate` x `samples per channel`, mean per channel
-  per turbo: DO motor (+ standby | + error-ack), DI error (+ still spinning)
+  per turbo: DO motor (+ standby | + error-ack/reset), DI error (+ still spinning)
+             contact interface (VC100 Turbo 1): DI rotating/accelerating/at-speed/braking/alarm/warning
 
 `read_only=True` creates the input tasks only – nothing is ever written (no DO task is even
 reserved), for bring-up checks with `tools/daq_check.py` while the facility is in any state.
@@ -37,6 +38,10 @@ _TERMINAL_CONFIG = {
     "default": TerminalConfiguration.DEFAULT, "pseudo_diff": TerminalConfiguration.PSEUDO_DIFF,
     "pseudodifferential": TerminalConfiguration.PSEUDO_DIFF,
 }
+
+
+# order of the Shimadzu status lines in the turbo DI task (= the VI's 'Turbo 1 <name>' channel names)
+CONTACT_NAMES = ("rotating", "accelerating", "at_speed", "braking", "alarm", "warning")
 
 
 class NiDaqmxBackend(HardwareBackend):
@@ -123,15 +128,20 @@ class NiDaqmxBackend(HardwareBackend):
                 self.ai_channels.append(f"{tc.id}_speed")
         ai.timing.cfg_samp_clk_timing(cfg.ai_sample_rate_hz, sample_mode=AcquisitionType.FINITE, samps_per_chan=cfg.ai_samples_per_channel)
         self.tasks["analog_in"] = ai
-        # --- turbo DI (error, still spinning)
+        # --- turbo DI (error, still spinning | the six contacts of the Shimadzu interface)
         for tc in cfg.turbos:
             p = tc.params
             if tc.control_mode == "hipace_rs485":
                 raise NotImplementedError("HiPace RS485 control (Pfeiffer PV library) is not ported; use a D-SUB mode")
             t = nidaqmx.Task(f"{tc.id}_read")
-            t.di_channels.add_di_chan(cfg.phys(p["error_di"]), name_to_assign_to_lines=f"{tc.id}_error", line_grouping=LineGrouping.CHAN_PER_LINE)
-            if "still_spinning_di" in p:
-                t.di_channels.add_di_chan(cfg.phys(p["still_spinning_di"]), name_to_assign_to_lines=f"{tc.id}_spinning", line_grouping=LineGrouping.CHAN_PER_LINE)
+            if tc.control_mode == "shimadzu_contacts":
+                for name in CONTACT_NAMES:
+                    t.di_channels.add_di_chan(cfg.phys(p[f"{name}_di"]), name_to_assign_to_lines=f"{tc.id}_{name}",
+                                              line_grouping=LineGrouping.CHAN_PER_LINE)
+            else:
+                t.di_channels.add_di_chan(cfg.phys(p["error_di"]), name_to_assign_to_lines=f"{tc.id}_error", line_grouping=LineGrouping.CHAN_PER_LINE)
+                if "still_spinning_di" in p:
+                    t.di_channels.add_di_chan(cfg.phys(p["still_spinning_di"]), name_to_assign_to_lines=f"{tc.id}_spinning", line_grouping=LineGrouping.CHAN_PER_LINE)
             self.tasks[f"{tc.id}_read"] = t
 
     def close(self) -> None:
@@ -206,7 +216,8 @@ class NiDaqmxBackend(HardwareBackend):
             for ea in cfg.extra_analog:
                 inp.extra_analog[ea["id"]] = volts[ea["id"]]
             if cfg.compressor_ai:
-                inp.compressor_bar = volts["compressor"]  # calibrate in config if a real sensor is fitted
+                # VC100 'Air Compressor Pressure Calc (Bar)': Pressure_Bar = V/5*10  -> scale 2, offset 0
+                inp.compressor_bar = volts["compressor"] * cfg.compressor_scale + cfg.compressor_offset
             for tc in cfg.turbos:
                 p = tc.params
                 ti = TurboInputs()
@@ -215,13 +226,22 @@ class NiDaqmxBackend(HardwareBackend):
                 dr = self.tasks[f"{tc.id}_read"].read()
                 if not isinstance(dr, list):
                     dr = [dr]
-                err = bool(dr[0])
-                if p.get("error_di_inverted", False):
-                    err = not err          # HiPace: 24 V = healthy
-                ti.error = err
-                if "still_spinning_di" in p and len(dr) > 1:
-                    ti.still_spinning = bool(dr[1])
-                # D-SUB modes have no motor feedback: the VI echoes the command (Turbo_Motor_Sys_Cmd)
+                if tc.control_mode == "shimadzu_contacts":
+                    # Alarm and Warning are normally-closed contacts in the VI (read FALSE = condition
+                    # present): `<name>_di_inverted` (default true for those two) de-inverts them here
+                    for name, raw in zip(CONTACT_NAMES, dr):
+                        inv = bool(p.get(f"{name}_di_inverted", name in ("alarm", "warning")))
+                        ti.contacts[name] = (not bool(raw)) if inv else bool(raw)
+                    ti.error = ti.contacts.get("alarm", False)
+                    ti.still_spinning = ti.contacts.get("rotating", False)
+                else:
+                    err = bool(dr[0])
+                    if p.get("error_di_inverted", False):
+                        err = not err          # HiPace: 24 V = healthy
+                    ti.error = err
+                    if "still_spinning_di" in p and len(dr) > 1:
+                        ti.still_spinning = bool(dr[1])
+                # D-SUB / contact modes have no motor feedback: the VI echoes the command (Turbo_Motor_Sys_Cmd)
                 ti.motor_read = bool(self._last_written.turbo_motor.get(tc.id, False)) if self._last_written else False
                 inp.turbos[tc.id] = ti
         except Exception as exc:  # DAQmx error -> surfaces in the error cluster (code 5020)

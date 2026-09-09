@@ -1,0 +1,137 @@
+{
+"8": [
+"Bypass Valve"
+],
+"9": [
+"Vent Valve"
+],
+"11": [
+"Wide Range Gauge Pressure "
+],
+"12": [
+"Foreline Gauge"
+],
+"17": [
+"stop"
+],
+"18": [
+"error out"
+],
+"22": [
+"Turbo 1 Valve"
+],
+"24": [
+"DAQ_Name"
+],
+"25": [
+"Primary_Sys_Cmd"
+],
+"27": [
+"Use_real_Values?"
+],
+"32": [
+"Valve_Turbo_1_Sys_Cmd"
+],
+"33": [
+"Valve_Bypass_Sys_Cmd"
+],
+"34": [
+"Valve_Vent_Sys_Cmd"
+],
+"39": [
+"Chiller_Sys_Cmd"
+],
+"40": [
+"Turbo_3_Motor_Sys_Cmd"
+],
+"42": [
+"Waveform Chart 2"
+],
+"43": [
+"Primary_Pump_Read"
+],
+"44": [
+"Turbo 3 Motor Read"
+],
+"46": [
+"Valve_Gate_1_Sys_Cmd"
+],
+"48": [
+"Gate 1 Valve"
+],
+"51": [
+"Turbo 1 Gauge"
+],
+"63": [
+"Tab Control"
+],
+"64": [
+"Turbo Engage time"
+],
+"88": [
+"Turbo 2 Valve"
+],
+"90": [
+"Turbo 3 Valve"
+],
+"93": [
+"Gate 2 Valve"
+],
+"94": [
+"Gate 3 Valve"
+],
+"101": [
+"Turbo 2 Gauge "
+],
+"102": [
+"Turbo 3 Gauge"
+],
+"103": [
+"Valve_Turbo_2_Sys_Cmd"
+],
+"104": [
+"Valve_Turbo_3_Sys_Cmd"
+],
+"105": [
+"Valve_Gate_2_Sys_Cmd"
+],
+"106": [
+"Valve_Gate_3_Sys_Cmd"
+],
+"111": [
+"Which_Turbos_used?"
+],
+"112": [
+"Index_of_working_turbo"
+],
+"119": [
+"Turbo on Threshold (torr)"
+],
+"128": [
+"New_State?"
+],
+"129": [
+"New log"
+],
+"136": [
+"New_State? 2"
+],
+"141": [
+"Turbo_2_Motor_Sys_Cmd"
+],
+"142": [
+"Turbo 2 Motor Read"
+],
+"143": [
+"Turbo 2 Standby?"
+],
+"144": [
+"Turbo 3 Standby?"
+],
+"145": [
+"Use Ecodry As Primary?"
+],
+"146": [
+"Turbo slowing Threshold (%)"
+]
+}

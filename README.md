@@ -10,11 +10,16 @@ own LabVIEW source and notes.
   `run.bat --config config/facility_main_v4.4.yaml`. A fix or safety change here helps every chamber.
 - `chambers/small/` — the **small chamber** (VC40/VC80-class, single turbo, BigRed D-SUB15).
   LabVIEW source and support VIs in `chambers/small/labview/`; notes in its README.
-  Runs on the shared engine with profile `config/facility_main_v4.4.yaml`
-  (to be renamed `small_chamber.yaml` once hardware bring-up is finished).
-- `chambers/medium/`, `chambers/big/` — VC100 / VC140, added the same way when their VIs are ported.
+  Runs on the shared engine with profile `config/facility_main_v4.4.yaml`.
+- `chambers/medium/` — the **medium chamber** (VC100, three turbos: Shimadzu contact interface +
+  two HiPace D-SUB, chassis cDAQ3). `VC100_Facility_Control_V1.0.vi` + support VIs, the decoded
+  block-diagram listings in `analysis/`, panel screenshots, and a README with the differences to the
+  small chamber. Runs on the shared engine with profile `config/facility_vc100.yaml`
+  (full reference: `python_facility_control/docs/VC100_REFERENCE.md`).
+- `chambers/big/` — VC140, to be added the same way when its VI is ported.
 - `tooling/` — LabVIEW→JSON export tooling (lvkit, `vi2json.py`) used to reverse-engineer the VIs.
 
-## Running (small chamber, lab PC)
+## Running (lab PC)
 See `python_facility_control/README.md`. In PowerShell, from `python_facility_control/`:
-`.\run.bat --daq` (real cDAQ) or `.\run.bat --sim` (simulator).
+`.\run.bat --daq` (small chamber, real cDAQ) · `.\run.bat --config config\facility_vc100.yaml --daq`
+(medium chamber) · add `--sim` for the simulator on any PC.
