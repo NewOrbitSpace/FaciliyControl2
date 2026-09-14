@@ -69,7 +69,7 @@ class DialogProvider(Protocol):
         ...
 
 
-DEFER = object()   # sentinel for AutoAnswerDialogs: leave the dialog open until the test resolves it
+DEFER = object()   # sentinel for AutoAnswerDialogs: leave the dialog open until the test resolves it yes good idea
 
 
 class AutoAnswerDialogs:
