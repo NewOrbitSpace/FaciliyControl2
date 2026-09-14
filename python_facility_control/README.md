@@ -128,6 +128,49 @@ feedback, pump/chiller feedback, turbo spin-up/down and gauge voltages through t
 The panel at the bottom injects faults (stuck valve, turbo error, chiller/primary fault, WRG fault, power
 cut; "compressor air low" only for a facility with a `compressor:` block) and sets the plant speed-up.
 
+## Primary pump: two relays and a frequency feedback (small chamber, 2026-09-14)
+
+The small chamber's primary pump is no longer one command line with a reed read-back.  Mains power
+and the run command now go to **two separate relays**, and the pump reports its **drive frequency**
+on an analog input:
+
+| Signal | Channel | Note |
+|---|---|---|
+| Power relay | `Mod3/port0/line6` | mains power to the pump |
+| Run relay | `Mod3/port0/line7` | start/run – no effect until the pump is powered |
+| Drive frequency | `Mod1/ai6` | 0-10 V = 0-210 Hz (this input used to carry 'Com Potential') |
+
+The old command line `Mod3/port0/line0` and the DI run read-back `Mod2/port0/line0` are retired.
+
+Because the run relay does nothing on an unpowered pump, the controller **sequences** the two:
+
+* start: power on → `timings.primary_power_to_run_gap_s` (**5 s**) → run on
+* stop: run off → `timings.primary_run_to_power_off_gap_s` (**5 s**) → power off
+
+The control loop keeps reading during those gaps – they sequence two relays, they are not
+cross-check settle windows – and the sequence also advances while a dialog is open.  Program exit
+and the STOP button are the exception: the safe state drops **both** relays at once.
+
+Auto mode, Manual mode and the operator still deal with a single pump: the state machine only ever
+sets the *demand* (`Commands.primary`) and the controller expands it into the two lines, so
+`automode.py` and the VC100 profile are untouched.  On the diagram the pump is still one click.
+
+**"Running" now means really turning.**  The frequency above `frequency.running_above_hz` (5 Hz) is
+what drives the status colour, the Manual-mode interlocks (so a turbo can only start once the backing
+pump is actually spinning, not merely commanded) and the operating-hour meter.  While the pump is
+mid-sequence the panel says "Primary Pump powering up (5 s)" and the symbol is blue.
+
+**New fault indication.**  `cross_check` is now meaningful on this chamber: if the run relay is
+closed and the frequency stays below the running threshold for `timings.primary_spinup_timeout_s`
+(**30 s**), the controller raises **error 5000** – "Primary Pump commanded to run but not turning
+(0.0 Hz)" – which stops Auto mode like any other 5000-series error.  Main_V4.4 hard-wired this check
+to False, so 5000 could never fire before.  A pump *coasting down* after the run command was removed
+is normal and is never flagged.  The simulator's "Primary fault" injection reproduces the failure.
+
+Any facility can use either wiring: give the pump block `cmd` (one relay, as the VC100 does) or
+`power_cmd` + `run_cmd`, with an optional `frequency:` block.  The CSV gains `primary_power_cmd`,
+`primary_run_cmd`, `primary_hz` and `primary_running` columns when they apply.
+
 ## Changes requested by the test engineer (2026-09-08)
 
 These deviate from the VI on purpose and are all driven by the facility profile:

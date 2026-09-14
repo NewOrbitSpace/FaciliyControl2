@@ -15,7 +15,7 @@ from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPainterPath, QPen, Q
 from PySide6.QtWidgets import QWidget
 
 from ..config import FacilityConfig
-from ..model import COLOR_ERROR, COLOR_OFF, COLOR_ON, Mode, Snapshot
+from ..model import COLOR_ERROR, COLOR_OFF, COLOR_ON, COLOR_SPIN_UP, Mode, Snapshot
 from ..units import format_pressure, unit_label
 
 GRID = QColor("#E4E4E4")
@@ -201,8 +201,11 @@ class SchematicWidget(QWidget):
         if self.snap:
             st = self.snap.primary_status
             col = QColor({0: COLOR_OFF, 1: COLOR_ON, 2: COLOR_ERROR}[int(st)])
-            if self.snap.inputs.primary_read and int(st) != 2:
-                col = QColor(COLOR_ON)
+            if int(st) != 2:
+                if self.snap.primary_running:
+                    col = QColor(COLOR_ON)
+                elif self.snap.primary_phase in ("powering", "stopping"):
+                    col = QColor(COLOR_SPIN_UP)      # powered, not turning yet / running down
         p.setPen(QPen(QColor("#303030"), 2))
         p.setBrush(QBrush(col))
         p.drawEllipse(QPointF(cx, cy), r, r)
@@ -333,6 +336,14 @@ class SchematicWidget(QWidget):
         self._primary(p, 185, 600)
         pbox = QRectF(2, 596, 142, 30)
         self._box(p, pbox, [(snap.primary_text if snap else "Primary Pump is Off", 10, False)])
+        # VFD-driven pump: show the drive frequency next to it (the only feedback this pump gives)
+        if cfg.primary.has_frequency:
+            hz = snap.primary_hz if snap else None
+            self._label(p, 236, 582, "Pump frequency", 9)
+            self._box(p, QRectF(236, 590, 92, 24),
+                      [("–" if hz is None else f"{hz:.1f} Hz", 10, False)])
+            self.hits.append(Hit(QRectF(236, 590, 92, 24), "primary",
+                                 f"Primary pump drive frequency (0-{cfg.primary.frequency.max_hz:g} Hz)"))
         # ---- state / mode badge (VI: Current/Target Facility State rings)
         if snap:
             badge = QRectF(ch_rect.left() - 60, 220, 250, 20)

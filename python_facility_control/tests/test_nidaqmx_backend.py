@@ -124,12 +124,15 @@ def test_tasks_follow_the_vi_channel_map(cfg, fake_daq):
                                                         "cDAQ1Mod4/port0/line2", "cDAQ1Mod4/port0/line3"]
     assert [c.phys for c in t["valve_read"].channels] == ["cDAQ1Mod2/port0/line2", "cDAQ1Mod2/port0/line3",
                                                          "cDAQ1Mod2/port0/line4", "cDAQ1Mod2/port0/line5"]
-    assert t["primary_cmd"].channels[0].phys == "cDAQ1Mod3/port0/line0"
-    assert t["primary_read"].channels[0].phys == "cDAQ1Mod2/port0/line0"
+    # two-relay primary pump: one DO task carrying [power, run]; no DI read-back any more
+    assert [c.phys for c in t["primary_cmd"].channels] == ["cDAQ1Mod3/port0/line6", "cDAQ1Mod3/port0/line7"]
+    assert "primary_read" not in t
     assert t["chiller_cmd"].channels[0].phys == "cDAQ1Mod3/port0/line1"
     assert t["chiller_read"].channels[0].phys == "cDAQ1Mod2/port0/line1"
     ai = t["analog_in"]
-    assert [c.phys for c in ai.channels] == ["cDAQ1Mod1/ai5", "cDAQ1Mod1/ai2", "cDAQ1Mod1/ai1", "cDAQ1Mod1/ai4"]
+    # gauges, then the primary-pump frequency, then the turbo speed
+    assert [c.phys for c in ai.channels] == ["cDAQ1Mod1/ai5", "cDAQ1Mod1/ai2", "cDAQ1Mod1/ai1",
+                                             "cDAQ1Mod1/ai6", "cDAQ1Mod1/ai4"]
     assert ai.timing.cfg == (1000.0, "finite", 200)
     assert ai.channels[-1].kw["min_val"] == -10.0 and ai.channels[-1].kw["max_val"] == 10.0   # BRT speed ±10 V
     # every AI channel must use the VI's terminal configuration (DIFFERENTIAL, value 10106) – not RSE
@@ -141,7 +144,7 @@ def test_tasks_follow_the_vi_channel_map(cfg, fake_daq):
     assert "turbo1_ack" not in t                      # BigRed has no error-ack line
     # open() ends with the safe state: everything off, one write per DO task
     assert t["valve_cmd"].writes == [[False, False, False, False]]
-    assert t["primary_cmd"].writes == [False] and t["chiller_cmd"].writes == [False]
+    assert t["primary_cmd"].writes == [[False, False]] and t["chiller_cmd"].writes == [False]
     assert t["turbo1_cmd"].writes == [[False, False]]
 
 
@@ -150,22 +153,25 @@ def test_write_and_read_decoding(cfg, fake_daq):
     b.open()
     cmds = Commands.all_off(cfg.valve_ids, cfg.turbo_ids)
     cmds.valves["bypass"] = True
-    cmds.primary = True
+    cmds.set_primary(True)
     cmds.turbo_motor["turbo1"] = True
     b.write(cmds)
     t = FakeTask.registry
     assert t["valve_cmd"].writes[-1] == [False, True, False, False]
-    assert t["primary_cmd"].writes[-1] is True and t["chiller_cmd"].writes[-1] is False
+    assert t["primary_cmd"].writes[-1] == [True, True] and t["chiller_cmd"].writes[-1] is False
     assert t["turbo1_cmd"].writes[-1] == [True, False]
-    # plant answers: bypass open, primary on, WRG at 1e-3 Torr, foreline 0.5 Torr, turbo 45 % speed, error line high
-    FakeTask.di_values.update({"cDAQ1Mod2/port0/line3": True, "cDAQ1Mod2/port0/line0": True, "cDAQ1Mod2/port0/line7": True})
+    # plant answers: bypass open, WRG at 1e-3 Torr, foreline 0.5 Torr, turbo 45 % speed, error line high,
+    # and the pump's drive reporting 105 Hz (= 5 V of the 0-10 V / 0-210 Hz range)
+    FakeTask.di_values.update({"cDAQ1Mod2/port0/line3": True, "cDAQ1Mod2/port0/line7": True})
     from facility_control.gauges import torr_to_v
     FakeTask.ai_volts.update({"cDAQ1Mod1/ai5": torr_to_v("ion_gauge", 1e-3), "cDAQ1Mod1/ai2": torr_to_v("convectron", 0.5),
-                              "cDAQ1Mod1/ai1": torr_to_v("convectron", 1e-3), "cDAQ1Mod1/ai4": 4.5})
+                              "cDAQ1Mod1/ai1": torr_to_v("convectron", 1e-3), "cDAQ1Mod1/ai4": 4.5,
+                              "cDAQ1Mod1/ai6": 5.0})
     inp = b.read()
     assert not inp.daq_error
     assert inp.valve_reads == {"turbo_valve": False, "bypass": True, "vent": False, "gate": False}
-    assert inp.primary_read is True and inp.chiller_read is False
+    assert inp.primary_hz == pytest.approx(105.0)
+    assert inp.primary_read is True and inp.chiller_read is False   # derived from the frequency
     assert inp.pressures_torr["wrg"] == pytest.approx(1e-3, rel=1e-6)
     assert inp.pressures_torr["conv2"] == pytest.approx(0.5, rel=1e-6)
     ti = inp.turbos["turbo1"]
@@ -189,7 +195,7 @@ def test_read_only_mode_creates_no_output_task(cfg, fake_daq):
     b.open()
     kinds = {name: task.kind for name, task in FakeTask.registry.items()}
     assert "do" not in kinds.values(), kinds
-    assert {"valve_read", "primary_read", "chiller_read", "analog_in", "turbo1_read"} <= set(kinds)
+    assert {"valve_read", "chiller_read", "analog_in", "turbo1_read"} <= set(kinds)
     b.write(Commands.all_off(cfg.valve_ids, cfg.turbo_ids))      # no-op, must not fail
     b.safe_state()
     b.turbo_error_ack("turbo1", True)
@@ -206,5 +212,9 @@ def test_daq_check_channel_inventory_matches_profile(cfg):
     inv = channel_inventory(cfg)
     phys = {p for _, p, _ in inv}
     assert {"cDAQ1Mod4/port0/line0", "cDAQ1Mod2/port0/line5", "cDAQ1Mod1/ai5", "cDAQ1Mod3/port0/line4",
-            "cDAQ1Mod2/port0/line8", "cDAQ1Mod1/ai4"} <= phys
-    assert len(inv) == 20 and len(phys) == 20          # no duplicate lines in the Main_V4.4 map
+            "cDAQ1Mod2/port0/line8", "cDAQ1Mod1/ai4",
+            # two-relay primary pump + its frequency feedback (hardware change 2026-09-14)
+            "cDAQ1Mod3/port0/line6", "cDAQ1Mod3/port0/line7", "cDAQ1Mod1/ai6"} <= phys
+    # the retired single command line and DI run read-back are gone from the map
+    assert "cDAQ1Mod3/port0/line0" not in phys and "cDAQ1Mod2/port0/line0" not in phys
+    assert len(inv) == 21 and len(phys) == 21          # no duplicate lines in the map

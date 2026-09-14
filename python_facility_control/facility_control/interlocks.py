@@ -41,6 +41,14 @@ class Interlocks:
             return cmds.turbo_motor.get(tid, False)
         return any(cmds.turbo_motor.values())
 
+    def _primary_running(self, cmds: Commands, inp: Inputs) -> bool:
+        """Is the pump actually turning?  Frequency feedback where the facility has it (the small
+        chamber since the 2026-09-14 rewiring), otherwise the boolean read-back."""
+        pc = self.cfg.primary
+        if pc.has_frequency:
+            return inp.primary_hz is not None and inp.primary_hz > pc.frequency.running_above_hz
+        return bool(inp.primary_read)
+
     def _valve(self, cmds: Commands, inp: Inputs, kind: str) -> bool:
         """Commanded OR read open, for any valve of that kind (conservative)."""
         for v in self.cfg.valves_of_kind(kind):
@@ -80,7 +88,7 @@ class Interlocks:
             return Verdict(True)
         if v.kind == "vent":
             if want_open:
-                if cmds.primary or inp.primary_read:
+                if cmds.primary or self._primary_running(cmds, inp):
                     return Verdict(False, "Please Stop Primary Pump First")
                 if self._valve(cmds, inp, "bypass"):
                     return Verdict(False, "Please Close Bypass Valve first")
@@ -111,7 +119,9 @@ class Interlocks:
         t = self.cfg.turbo(tid)
         if self._valve(cmds, inp, "vent"):
             return Verdict(False, "Please Close Vent Valve first")
-        if not (cmds.primary and inp.primary_read):
+        # the turbo may only start once the backing pump is really turning – with the two-relay
+        # wiring that means after power, the run command and the spin-up, not just the demand
+        if not (cmds.primary and self._primary_running(cmds, inp)):
             return Verdict(False, "Please Turn Primary Pump On first")
         if self._valve(cmds, inp, "bypass"):
             return Verdict(False, "Please Close Bypass Valve first")

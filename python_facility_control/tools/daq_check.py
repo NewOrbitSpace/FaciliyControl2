@@ -32,8 +32,16 @@ def channel_inventory(cfg):
         items.append(("do", cfg.phys(v.cmd), f"{v.label} command"))
         items.append(("di", cfg.phys(v.read), f"{v.label} read (reed)"))
     for pump in (cfg.primary, cfg.chiller):
-        items.append(("do", cfg.phys(pump.cmd), f"{pump.label} command"))
-        items.append(("di", cfg.phys(pump.read), f"{pump.label} read"))
+        if pump.two_stage:
+            items.append(("do", cfg.phys(pump.power_cmd), f"{pump.label} power relay"))
+            items.append(("do", cfg.phys(pump.run_cmd), f"{pump.label} run relay"))
+        else:
+            items.append(("do", cfg.phys(pump.cmd), f"{pump.label} command"))
+        if pump.has_read:
+            items.append(("di", cfg.phys(pump.read), f"{pump.label} read"))
+        if pump.has_frequency:
+            items.append(("ai", cfg.phys(pump.frequency.channel),
+                          f"{pump.label} frequency (0-{pump.frequency.max_hz:g} Hz)"))
     for g in cfg.gauges:
         items.append(("ai", cfg.phys(g.channel), f"{g.label} ({g.formula})"))
     for ea in cfg.extra_analog:
@@ -115,7 +123,10 @@ def live_readings(cfg, seconds: float) -> None:
             if inp.compressor_bar is not None:
                 parts.append(f"compressor={inp.compressor_bar:.2f}")
             valves = " ".join(f"{vid}={'OPEN' if inp.valve_reads.get(vid) else 'closed'}" for vid in cfg.valve_ids)
-            pumps = f"primary={'ON' if inp.primary_read else 'off'} chiller={'ON' if inp.chiller_read else 'off'}"
+            pumps = f"primary={'ON' if inp.primary_read else 'off'}"
+            if inp.primary_hz is not None:
+                pumps += f" ({inp.primary_hz:.1f} Hz)"
+            pumps += f" chiller={'ON' if inp.chiller_read else 'off'}"
             turbos = " ".join(
                 (f"{tid}: " + " ".join(f"{k}={'Y' if v else 'n'}" for k, v in ti.contacts.items()))
                 if ti.contacts else

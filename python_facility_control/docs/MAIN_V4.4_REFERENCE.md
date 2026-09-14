@@ -234,6 +234,26 @@ Overnight Pump, Vent, Shut Off, Vent 2, Overnight Pump 3, Pump to Rough Only, Pu
 Pump to Rough 3, Pump to High Vac 3, Shutdown, Pump to Rough 4, Overnight Pump 2, Vent and shutdonw,
 Vent 5, Overnight Pump 5, Pump to Rough 5, Pump to Hi vac, Pump to High Vac 2, Skip Primary Warm).
 
+## 6b. Hardware change after the VI was written (2026-09-14) — primary pump
+
+The facility was rewired: the primary pump is driven through **two relays** and reports its drive
+frequency, so the VI's single `Primary_Pump_Cmd` / `Primary_Pump_Read` pair no longer describes it.
+
+| VI (above) | Now |
+|---|---|
+| `Primary_Pump_Cmd` DO `Mod3/port0/line0` | **power** relay DO `Mod3/port0/line6` + **run** relay DO `Mod3/port0/line7` |
+| `Primary_Pump_Read` DI `Mod2/port0/line0` | retired — no boolean read-back |
+| `Com Potential` AI `Mod1/ai6` (display only) | **pump drive frequency** AI `Mod1/ai6`, 0-10 V = 0-210 Hz |
+
+The run relay is inert until the power relay is closed, so the port sequences power → 5 s → run on
+start and run → 5 s → power off on stop (`timings.primary_power_to_run_gap_s` /
+`primary_run_to_power_off_gap_s`); the safe state on exit still drops both at once.  "Primary pump
+running" is the frequency above 5 Hz rather than a DI line, and error **5000** — which the VI wired
+to a constant False and could never raise — now fires when the pump is commanded to run but has not
+reached that frequency within `timings.primary_spinup_timeout_s` (30 s).  Everything above this
+section still describes the VI as written; this is the one place the small chamber's hardware has
+moved on from it.
+
 ## 7. Differences the port deliberately adds (all switchable in config)
 * CSV daily logging (VC100 behaviour), zoomable history plots.
 * Manual mode (interlocked manual control) actually implemented.

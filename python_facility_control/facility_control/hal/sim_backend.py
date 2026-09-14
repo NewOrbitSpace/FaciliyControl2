@@ -4,7 +4,8 @@ The plant is deliberately simple but physically sensible:
 
 * three gas nodes – chamber (WRG), turbo body (turbo convectron), foreline (foreline convectron)
 * valves with actuation delay and reed-switch feedback (open only when fully open)
-* primary pump / chiller with delayed run feedback
+* primary pump / chiller with delayed run feedback; a VFD-driven pump additionally reports a
+  frequency and needs both its relays (power *and* run) before it will turn
 * turbo with spin-up / spin-down dynamics; effective pumping speed ~ (speed %)^2
 * gauge voltages produced with the *inverse* of the VI's formula nodes (+ a little noise)
 * fault injection (stuck valve, turbo error/warning, chiller/primary fault, compressor low, gauge fault, power cut)
@@ -46,7 +47,10 @@ class _Turbo:
 class SimState:
     p_chamber: float = 760.0
     p_foreline: float = 760.0
-    primary_cmd: bool = False
+    primary_cmd: bool = False      # single-relay facility: the one command
+    primary_power: bool = False    # two-relay facility: mains power relay
+    primary_run: bool = False      # two-relay facility: start/run relay (needs power to do anything)
+    primary_hz: float = 0.0        # drive frequency of a VFD-driven pump
     primary_on: float = 0.0        # 0..1 ramp (run feedback when > 0.5)
     chiller_cmd: bool = False
     chiller_on: float = 0.0
@@ -120,6 +124,8 @@ class SimBackend(HardwareBackend):
             for v in self.state.valves.values():
                 v.cmd = False
             self.state.primary_cmd = False
+            self.state.primary_power = False
+            self.state.primary_run = False
             self.state.chiller_cmd = False
             for t in self.state.turbos.values():
                 t.motor = False
@@ -134,7 +140,11 @@ class SimBackend(HardwareBackend):
             return
         for vid, want in cmds.valves.items():
             st.valves[vid].cmd = bool(want)
-        st.primary_cmd = bool(cmds.primary)
+        # the backend follows the *physical* lines the controller decided (on a single-relay
+        # facility they both simply mirror the demand)
+        st.primary_power = bool(cmds.primary_power)
+        st.primary_run = bool(cmds.primary_run)
+        st.primary_cmd = bool(cmds.primary_run)
         st.chiller_cmd = bool(cmds.chiller)
         for tid, t in st.turbos.items():
             t.motor = bool(cmds.turbo_motor.get(tid, False))
@@ -164,10 +174,23 @@ class SimBackend(HardwareBackend):
             rate = dt / max(sim.valve_actuation_s, 1e-3)
             v.position += max(-rate, min(rate, target - v.position))
             v.position = min(1.0, max(0.0, v.position))
-        # pumps
-        prim_target = 1.0 if (st.primary_cmd and not st.faults.get("primary_fault")) else 0.0
-        st.primary_on += max(-dt / 1.0, min(dt / 1.5, prim_target - st.primary_on))
-        st.primary_on = min(1.0, max(0.0, st.primary_on))
+        # pumps.  A two-relay pump needs BOTH relays: closing the run relay with no power does
+        # nothing, which is exactly the failure the sequencing is there to avoid.
+        spinning_allowed = st.primary_run and (st.primary_power or not cfg.primary.two_stage)
+        spinning_allowed = spinning_allowed and not st.faults.get("primary_fault")
+        if cfg.primary.has_frequency:
+            fq = cfg.primary.frequency
+            nominal = sim.primary_run_hz if sim.primary_run_hz is not None else fq.max_hz
+            target_hz = nominal if spinning_allowed else 0.0
+            up = nominal * dt / max(sim.primary_spinup_s, 1e-3)
+            down = nominal * dt / max(sim.primary_spindown_s, 1e-3)
+            st.primary_hz += max(-down, min(up, target_hz - st.primary_hz))
+            st.primary_hz = min(fq.max_hz, max(0.0, st.primary_hz))
+            st.primary_on = st.primary_hz / nominal if nominal > 0 else 0.0
+        else:
+            prim_target = 1.0 if spinning_allowed else 0.0
+            st.primary_on += max(-dt / 1.0, min(dt / 1.5, prim_target - st.primary_on))
+            st.primary_on = min(1.0, max(0.0, st.primary_on))
         chil_target = 1.0 if (st.chiller_cmd and not st.faults.get("chiller_fault")) else 0.0
         st.chiller_on += max(-dt / 0.5, min(dt / 0.5, chil_target - st.chiller_on))
         st.chiller_on = min(1.0, max(0.0, st.chiller_on))
@@ -276,7 +299,12 @@ class SimBackend(HardwareBackend):
         power = not st.faults.get("power_cut")
         for vid, v in st.valves.items():
             inp.valve_reads[vid] = bool(v.position > 0.95) and power
-        inp.primary_read = (st.primary_on > 0.5) and power
+        if cfg.primary.has_frequency:
+            fq = cfg.primary.frequency
+            inp.primary_hz = st.primary_hz if power else 0.0
+            inp.primary_read = inp.primary_hz > fq.running_above_hz
+        else:
+            inp.primary_read = (st.primary_on > 0.5) and power
         inp.chiller_read = (st.chiller_on > 0.5) and power
         # gauges
         for g in cfg.gauges:

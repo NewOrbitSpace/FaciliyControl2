@@ -69,11 +69,24 @@ class NiDaqmxBackend(HardwareBackend):
             t.do_channels.add_do_chan(cfg.phys(v.cmd), name_to_assign_to_lines=f"{vid}_cmd",
                                       line_grouping=LineGrouping.CHAN_PER_LINE)
         self.tasks["valve_cmd"] = t
-        # --- DO primary / chiller
-        for key, pump in (("primary_cmd", cfg.primary), ("chiller_cmd", cfg.chiller)):
-            t = nidaqmx.Task(key)
-            t.do_channels.add_do_chan(cfg.phys(pump.cmd), name_to_assign_to_lines=key, line_grouping=LineGrouping.CHAN_PER_LINE)
-            self.tasks[key] = t
+        # --- DO primary / chiller.  A two-relay pump (small chamber: power on Mod3/port0/line6,
+        #     run on Mod3/port0/line7) gets one task with both lines, written [power, run].
+        if cfg.primary.two_stage:
+            t = nidaqmx.Task("primary_cmd")
+            t.do_channels.add_do_chan(cfg.phys(cfg.primary.power_cmd), name_to_assign_to_lines="primary_power",
+                                      line_grouping=LineGrouping.CHAN_PER_LINE)
+            t.do_channels.add_do_chan(cfg.phys(cfg.primary.run_cmd), name_to_assign_to_lines="primary_run",
+                                      line_grouping=LineGrouping.CHAN_PER_LINE)
+            self.tasks["primary_cmd"] = t
+        else:
+            t = nidaqmx.Task("primary_cmd")
+            t.do_channels.add_do_chan(cfg.phys(cfg.primary.cmd), name_to_assign_to_lines="primary_cmd",
+                                      line_grouping=LineGrouping.CHAN_PER_LINE)
+            self.tasks["primary_cmd"] = t
+        t = nidaqmx.Task("chiller_cmd")
+        t.do_channels.add_do_chan(cfg.phys(cfg.chiller.cmd), name_to_assign_to_lines="chiller_cmd",
+                                  line_grouping=LineGrouping.CHAN_PER_LINE)
+        self.tasks["chiller_cmd"] = t
         # --- turbo DO (motor + standby, error acknowledge)
         for tc in cfg.turbos:
             p = tc.params
@@ -95,6 +108,8 @@ class NiDaqmxBackend(HardwareBackend):
             t.di_channels.add_di_chan(cfg.phys(v.read), name_to_assign_to_lines=f"{vid}_read", line_grouping=LineGrouping.CHAN_PER_LINE)
         self.tasks["valve_read"] = t
         for key, pump in (("primary_read", cfg.primary), ("chiller_read", cfg.chiller)):
+            if not pump.has_read:          # no boolean run read-back on this facility (frequency instead)
+                continue
             t = nidaqmx.Task(key)
             ch = t.di_channels.add_di_chan(cfg.phys(pump.read), name_to_assign_to_lines=key, line_grouping=LineGrouping.CHAN_PER_LINE)
             if pump.read_inverted:
@@ -119,6 +134,11 @@ class NiDaqmxBackend(HardwareBackend):
             ai.ai_channels.add_ai_voltage_chan(cfg.phys(cfg.compressor_ai), name_to_assign_to_channel="compressor",
                                                terminal_config=term, min_val=cfg.ai_min_v, max_val=cfg.ai_max_v)
             self.ai_channels.append("compressor")
+        if cfg.primary.has_frequency:
+            fq = cfg.primary.frequency
+            ai.ai_channels.add_ai_voltage_chan(cfg.phys(fq.channel), name_to_assign_to_channel="primary_hz",
+                                               terminal_config=term, min_val=fq.min_v, max_val=fq.max_v)
+            self.ai_channels.append("primary_hz")
         for tc in cfg.turbos:
             p = tc.params
             if "speed_ai" in p:
@@ -165,7 +185,12 @@ class NiDaqmxBackend(HardwareBackend):
         if self.read_only:
             return
         self.tasks["valve_cmd"].write([bool(cmds.valves.get(v, False)) for v in cfg.valve_ids], auto_start=True)
-        self.tasks["primary_cmd"].write(bool(cmds.primary), auto_start=True)
+        if cfg.primary.two_stage:
+            # order matters only on the wire, not here: the controller has already decided which of
+            # the two relays may be closed this iteration (power -> gap -> run, and the reverse).
+            self.tasks["primary_cmd"].write([bool(cmds.primary_power), bool(cmds.primary_run)], auto_start=True)
+        else:
+            self.tasks["primary_cmd"].write(bool(cmds.primary_run), auto_start=True)
         self.tasks["chiller_cmd"].write(bool(cmds.chiller), auto_start=True)
         for tc in cfg.turbos:
             vals = [bool(cmds.turbo_motor.get(tc.id, False))]
@@ -191,8 +216,10 @@ class NiDaqmxBackend(HardwareBackend):
                 vr = [vr]
             for vid, val in zip(cfg.valve_ids, vr):
                 inp.valve_reads[vid] = bool(val)
-            inp.primary_read = bool(self.tasks["primary_read"].read())
-            inp.chiller_read = bool(self.tasks["chiller_read"].read())
+            if "primary_read" in self.tasks:
+                inp.primary_read = bool(self.tasks["primary_read"].read())
+            if "chiller_read" in self.tasks:
+                inp.chiller_read = bool(self.tasks["chiller_read"].read())
             ai = self.tasks["analog_in"]
             # finite acquisition: DAQmx Read auto-starts the task and stops it after the last sample
             # (the VI reads the same way, without an explicit Start Task); stop() is a harmless safeguard
@@ -218,6 +245,11 @@ class NiDaqmxBackend(HardwareBackend):
             if cfg.compressor_ai:
                 # VC100 'Air Compressor Pressure Calc (Bar)': Pressure_Bar = V/5*10  -> scale 2, offset 0
                 inp.compressor_bar = volts["compressor"] * cfg.compressor_scale + cfg.compressor_offset
+            if cfg.primary.has_frequency:
+                # small chamber: 0-10 V from the pump's drive = 0-210 Hz
+                inp.primary_hz = cfg.primary.frequency.hz(volts["primary_hz"])
+                if not cfg.primary.has_read:      # no boolean feedback – derive one from the frequency
+                    inp.primary_read = inp.primary_hz > cfg.primary.frequency.running_above_hz
             for tc in cfg.turbos:
                 p = tc.params
                 ti = TurboInputs()

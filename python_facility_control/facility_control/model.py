@@ -157,6 +157,7 @@ class Inputs:
     extra_analog: Dict[str, float] = field(default_factory=dict)
     turbos: Dict[str, TurboInputs] = field(default_factory=dict)
     compressor_bar: Optional[float] = None
+    primary_hz: Optional[float] = None      # drive frequency of the primary pump (None = no such sensor)
     daq_error: Optional[str] = None
 
     def pressure(self, gauge_id: str) -> float:
@@ -165,23 +166,39 @@ class Inputs:
 
 @dataclass
 class Commands:
-    """Everything the controller commands (the *_Sys_Cmd shift registers)."""
+    """Everything the controller commands (the *_Sys_Cmd shift registers).
+
+    `primary` is the *demand*: what Auto mode, Manual mode or the operator asked for.  On a facility
+    whose pump has separate power and run relays the controller expands that demand into the two
+    physical lines below, with the configured gap between them; on a single-relay facility both
+    simply follow `primary`.  The state machine only ever touches `primary`, so nothing in
+    automode.py or a second facility's profile has to know which wiring is fitted."""
     valves: Dict[str, bool] = field(default_factory=dict)  # valve id -> open
-    primary: bool = False
+    primary: bool = False                                  # demand ("the pump should be running")
     chiller: bool = False
     turbo_motor: Dict[str, bool] = field(default_factory=dict)
     turbo_standby: Dict[str, bool] = field(default_factory=dict)
     turbo_error_ack: Dict[str, bool] = field(default_factory=dict)
+    primary_power: bool = False                            # physical relay 1 (mains power)
+    primary_run: bool = False                              # physical relay 2 (start/run)
 
     def copy(self) -> "Commands":
         return Commands(dict(self.valves), self.primary, self.chiller,
-                        dict(self.turbo_motor), dict(self.turbo_standby), dict(self.turbo_error_ack))
+                        dict(self.turbo_motor), dict(self.turbo_standby), dict(self.turbo_error_ack),
+                        self.primary_power, self.primary_run)
+
+    def set_primary(self, on: bool) -> "Commands":
+        """Set the demand *and* both relay lines together.  The controller normally derives the
+        relay lines from the demand (see Controller._sequence_primary); this is for code that talks
+        to a backend directly and wants the pump simply on or off."""
+        self.primary = self.primary_power = self.primary_run = bool(on)
+        return self
 
     @staticmethod
     def all_off(valve_ids: List[str], turbo_ids: List[str]) -> "Commands":
         return Commands({v: False for v in valve_ids}, False, False,
                         {t: False for t in turbo_ids}, {t: False for t in turbo_ids},
-                        {t: False for t in turbo_ids})
+                        {t: False for t in turbo_ids}, False, False)
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, Commands):
@@ -235,6 +252,10 @@ class Snapshot:
     hardware: str = "simulation"
     skip_primary_warm: bool = False
     compressor_bar: Optional[float] = None
+    primary_hz: Optional[float] = None     # drive frequency of the primary pump
+    primary_running: bool = False          # derived: frequency above running_above_hz (or the DI read-back)
+    primary_phase: str = ""                # '', 'powering', 'running', 'stopping' (two-relay pump)
+    primary_phase_remaining_s: float = 0.0 # time left of the power->run / run->power-off gap
     hold_remaining_s: float = 0.0      # time left of a settle wait (blocking: loop frozen; else DECIDE held)
     hold_reason: str = ""
     loop_blocked: bool = False         # True while the loop is frozen in a settle wait / dialog (VI behaviour)

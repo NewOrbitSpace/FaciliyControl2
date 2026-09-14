@@ -128,6 +128,8 @@ def test_manual_mode_interlocks(cfg):
     h.dialogs.answers.put(True); h.ctl.request_user_cmd("valve:vent"); h.step()          # close vent
     h.dialogs.answers.put(True); h.ctl.request_user_cmd("primary"); s = h.step()
     assert s.commands.primary
+    # two-relay pump: the interlocks want it actually turning, so let the sequence and spin-up finish
+    s, _ = h.run_until(lambda s: s.primary_running, 4000)
     h.dialogs.answers.put(True); h.ctl.request_user_cmd("valve:turbo_valve"); s = h.step()
     assert s.commands.valves["turbo_valve"]
     h.ctl.request_user_cmd("turbo:turbo1"); s = h.step()

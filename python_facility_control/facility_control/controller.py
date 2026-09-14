@@ -186,6 +186,10 @@ class Controller:
         self._chiller_status = OnOffError.OFF
         self._last_csv = 0.0
         self._compressor_low_since: Optional[float] = None
+        # ---- primary pump relay sequencer (two-relay wiring; inert on a single-relay facility)
+        self._primary_phase: str = ""            # '' | 'powering' | 'running' | 'stopping'
+        self._primary_phase_until: float = 0.0   # end of the power->run / run->power-off gap
+        self._primary_run_since: Optional[float] = None   # when the run relay went high (spin-up timeout)
         self.pressure_unit = cfg.pressure_unit_default
         self.finished = threading.Event()
 
@@ -346,6 +350,8 @@ class Controller:
             self.cmds = new                          # indicators show the new command during the wait
             self._command(prev, new, now)
             self._event_log_changes(prev, new)
+        else:
+            self._advance_primary_only(now)          # the relay sequence runs on its own clock
         # ---- frame 5: run-hour meters, csv, publish (always)
         self._accumulate_run_hours(inp, now)
         self._csv_row()
@@ -359,10 +365,87 @@ class Controller:
         dt = now - last
         if dt <= 0 or dt > 60.0:          # clock jump / long freeze – don't credit it to the pump
             return
-        running = inp.primary_read if self.cfg.primary.read else bool(self.cmds.primary)
-        if running:
+        if self.primary_running(inp):
             self.run_hours.add("primary", dt)
         self.run_hours.save(now=now)
+
+    # ------------------------------------------------------------------ primary pump
+    def primary_running(self, inp: Inputs) -> bool:
+        """Is the pump actually turning?
+
+        With a frequency feedback (small chamber, since the 2026-09-14 rewiring) this is the drive
+        frequency above `running_above_hz` – real evidence of rotation, so the status colour, the
+        Manual interlocks and the operating-hour meter all reflect what the pump is really doing.
+        Otherwise the boolean read-back, and failing that the command (the VI's behaviour)."""
+        pc = self.cfg.primary
+        if pc.has_frequency:
+            hz = inp.primary_hz
+            return hz is not None and hz > pc.frequency.running_above_hz
+        if pc.has_read:
+            return bool(inp.primary_read)
+        return bool(self.cmds.primary)
+
+    def _sequence_primary(self, cmds: Commands, now: float) -> bool:
+        """Expand the primary-pump *demand* (`cmds.primary`) into its physical relay lines.
+
+        Single-relay facility (VC100): both lines simply follow the demand.
+
+        Two-relay facility (small chamber): mains power and the run command go to different relays
+        and the run relay only has an effect once the pump is powered, so
+            start:  power on  -> primary_power_to_run_gap_s     -> run on
+            stop:   run off   -> primary_run_to_power_off_gap_s -> power off
+        The control loop keeps reading throughout – these gaps sequence two relays, they are not
+        cross-check settle windows, and the sequence also advances while a dialog is open.
+
+        Returns True when a physical line changed (so the caller knows it has to write)."""
+        pc, tm = self.cfg.primary, self.cfg.timings
+        before = (cmds.primary_power, cmds.primary_run)
+        if not pc.two_stage:
+            cmds.primary_power = cmds.primary_run = bool(cmds.primary)
+            self._primary_phase = "running" if cmds.primary else ""
+            if not cmds.primary:
+                self._primary_run_since = None
+            elif self._primary_run_since is None:
+                self._primary_run_since = now
+            return (cmds.primary_power, cmds.primary_run) != before
+
+        phase = self._primary_phase
+        if cmds.primary:
+            if phase in ("", "stopping"):
+                phase = "powering"
+                self._primary_phase_until = now + tm.primary_power_to_run_gap_s
+                self._log(f"{pc.label}: powered – run command in {tm.primary_power_to_run_gap_s:.0f} s")
+            if phase == "powering" and now >= self._primary_phase_until:
+                phase = "running"
+                self._primary_run_since = now
+                self._log(f"{pc.label}: run commanded")
+            cmds.primary_power = True
+            cmds.primary_run = phase == "running"
+        else:
+            if phase in ("powering", "running"):
+                phase = "stopping"
+                self._primary_phase_until = now + tm.primary_run_to_power_off_gap_s
+                self._primary_run_since = None
+                self._log(f"{pc.label}: run command removed – power off in {tm.primary_run_to_power_off_gap_s:.0f} s")
+            if phase == "stopping" and now >= self._primary_phase_until:
+                phase = ""
+                self._log(f"{pc.label}: powered down")
+            cmds.primary_run = False
+            cmds.primary_power = phase == "stopping"
+        self._primary_phase = phase
+        return (cmds.primary_power, cmds.primary_run) != before
+
+    def _advance_primary_only(self, now: float) -> None:
+        """No decision was made this iteration (a dialog is open, or a settle hold is running), but
+        the relay sequence runs on its own clock – advance it and write if a line moved."""
+        if not self.cfg.primary.two_stage:
+            return
+        if self._sequence_primary(self.cmds, now):
+            try:
+                self.backend.write(self.cmds)
+            except Exception as exc:
+                self.error = ErrorCluster.make(ERR_DAQ, f"DAQ write failed: {exc}")
+                self._log(f"ERROR {ERR_DAQ}: DAQ write failed: {exc}")
 
     # ------------------------------------------------------------------ frame 1
     def _suppressed(self, key: str, now: float) -> bool:
@@ -382,12 +465,32 @@ class Controller:
             if conflict:
                 code = VALVE_ERROR_CODES.get(v.kind, ERR_GATE_CONFLICT)
                 err = err.merge(ErrorCluster.make(code, f"Conflict between {v.label} command and read!"))
-        # primary: check disabled in Main_V4.4 (cross_check: false)
-        prim_conf = (cfg.primary.cross_check and (bool(self.cmds.primary) != bool(inp.primary_read))
-                     and not self._suppressed("primary", now))
-        self._primary_status = OnOffError.ERROR if prim_conf else (OnOffError.ON if self.cmds.primary else OnOffError.OFF)
+        # primary pump.  Two checks, depending on what feedback the facility has:
+        #   * boolean read-back (VC100, and Main_V4.4's old wiring): the VI's XOR(cmd, read).
+        #     Main_V4.4 hard-wired this to False, so 5000 could never fire there.
+        #   * frequency feedback (small chamber since 2026-09-14): commanded to run but still below
+        #     `running_above_hz` after `primary_spinup_timeout_s` -> 5000.  A pump that is *coasting
+        #     down* after the run command was removed is normal and is never flagged.
+        running = self.primary_running(inp)
+        prim_conf = False
+        if cfg.primary.cross_check and not self._suppressed("primary", now):
+            if cfg.primary.has_frequency:
+                timeout = cfg.timings.primary_spinup_timeout_s
+                if (timeout is not None and self.cmds.primary_run and self._primary_run_since is not None
+                        and not running and (now - self._primary_run_since) >= timeout):
+                    prim_conf = True
+            elif cfg.primary.has_read:
+                prim_conf = bool(self.cmds.primary) != bool(inp.primary_read)
+        on = running if cfg.primary.has_frequency else bool(self.cmds.primary)
+        self._primary_status = OnOffError.ERROR if prim_conf else (OnOffError.ON if on else OnOffError.OFF)
         if prim_conf:
-            err = err.merge(ErrorCluster.make(ERR_PRIMARY_CONFLICT, "Conflict between Primary pump command and read!"))
+            if cfg.primary.has_frequency:
+                hz = inp.primary_hz
+                source = (f"{cfg.primary.label} commanded to run but not turning"
+                          + (f" ({hz:.1f} Hz)" if hz is not None else ""))
+            else:
+                source = "Conflict between Primary pump command and read!"
+            err = err.merge(ErrorCluster.make(ERR_PRIMARY_CONFLICT, source))
         # chiller
         chil_conf = (cfg.chiller.cross_check and (bool(self.cmds.chiller) != bool(inp.chiller_read))
                      and not self._suppressed("chiller", now))
@@ -750,6 +853,7 @@ class Controller:
                 new.turbo_standby[tc.id] = False
                 new.valves[tc.gate_valve] = False
                 new.valves[tc.turbo_valve] = False
+        self._sequence_primary(new, now)          # demand -> physical relay line(s)
         try:
             self.backend.write(new)
         except Exception as exc:
@@ -774,7 +878,10 @@ class Controller:
             waits.append((ms / 1000.0, ", ".join(cfg.valves[v].label for v in changed_valves) + " moving"))
         if prev.chiller != new.chiller:
             waits.append((tm.chiller_settle_ms / 1000.0, f"{cfg.chiller.label} {'starting' if new.chiller else 'stopping'}"))
-        if prev.primary != new.primary:
+        # settle wait whenever a *physical* primary line moved (on a single-relay facility that is
+        # exactly the old 'the command changed'; with two relays each relay gets its own wait)
+        primary_moved = (prev.primary_power != new.primary_power) or (prev.primary_run != new.primary_run)
+        if primary_moved:
             ms = tm.primary_settle_ms if new.primary else (
                 tm.primary_settle_ms if tm.primary_settle_off_ms is None else tm.primary_settle_off_ms)
             if ms > 0:
@@ -814,7 +921,7 @@ class Controller:
                 self._suppress_until[f"valve:{v}"] = until
             if prev.chiller != new.chiller:
                 self._suppress_until["chiller"] = until
-            if prev.primary != new.primary:
+            if primary_moved:
                 self._suppress_until["primary"] = until
             for tc in cfg.turbos:
                 if prev.turbo_motor.get(tc.id) != new.turbo_motor.get(tc.id):
@@ -867,6 +974,14 @@ class Controller:
         ptxt = {OnOffError.OFF: "is Off", OnOffError.ON: "is On", OnOffError.ERROR: "Error"}[ps]
         ctxt = {OnOffError.OFF: "Chiller is Off", OnOffError.ON: "Chiller is On", OnOffError.ERROR: "Chiller error"}[cs]
         now = self.clock()
+        # two-relay pump: show the sequencing phase rather than a bare Off while it is mid-sequence
+        phase_left = max(0.0, self._primary_phase_until - now) if self._primary_phase in ("powering", "stopping") else 0.0
+        if ps != OnOffError.ERROR and self._primary_phase == "powering":
+            ptxt = f"powering up ({phase_left:.0f} s)"
+        elif ps != OnOffError.ERROR and self._primary_phase == "stopping":
+            ptxt = f"powering down ({phase_left:.0f} s)"
+        primary_hz = self.inputs.primary_hz
+        primary_running = self.primary_running(self.inputs)
         dialog_label = self._pending.label if self._pending is not None else self._waiting_label
         return Snapshot(
             t=now, iteration=self.iteration, running_led=self.running_led, mode=self.mode,
@@ -879,6 +994,8 @@ class Controller:
             dialog_pending=bool(dialog_label), dialog_message=dialog_label,
             hardware=self.backend.describe(), skip_primary_warm=self.skip_primary_warm,
             compressor_bar=self.inputs.compressor_bar,
+            primary_hz=primary_hz, primary_running=primary_running,
+            primary_phase=self._primary_phase, primary_phase_remaining_s=phase_left,
             hold_remaining_s=max(0.0, self._hold_until - now), hold_reason=self._hold_reason if now < self._hold_until else "",
             loop_blocked=self._blocked, primary_run_hours=self.run_hours.hours("primary"),
         )
