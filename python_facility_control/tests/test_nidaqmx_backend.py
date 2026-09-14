@@ -130,11 +130,18 @@ def test_tasks_follow_the_vi_channel_map(cfg, fake_daq):
     assert t["chiller_cmd"].channels[0].phys == "cDAQ1Mod3/port0/line1"
     assert t["chiller_read"].channels[0].phys == "cDAQ1Mod2/port0/line1"
     ai = t["analog_in"]
-    # gauges, then the primary-pump frequency, then the turbo speed
-    assert [c.phys for c in ai.channels] == ["cDAQ1Mod1/ai5", "cDAQ1Mod1/ai2", "cDAQ1Mod1/ai1",
-                                             "cDAQ1Mod1/ai6", "cDAQ1Mod1/ai4"]
+    # The main task carries ONLY the gauges.  The turbo speed and the pump frequency each get their
+    # own single-channel task, as Main_V4.4.vi does - sharing one multiplexed task made the turbo
+    # speed return the previous channel's voltage (the Turbo Convectron, ~69 % at atmosphere).
+    assert [c.phys for c in ai.channels] == ["cDAQ1Mod1/ai5", "cDAQ1Mod1/ai2", "cDAQ1Mod1/ai1"]
+    assert [c.phys for c in t["turbo1_speed_ai"].channels] == ["cDAQ1Mod1/ai4"]
+    assert [c.phys for c in t["primary_hz_ai"].channels] == ["cDAQ1Mod1/ai6"]
+    # the BigRed speed input is bipolar, the gauges and the drive output are not
+    assert t["turbo1_speed_ai"].channels[0].kw["min_val"] == -10.0
+    assert t["primary_hz_ai"].channels[0].kw["min_val"] == 0.0
     assert ai.timing.cfg == (1000.0, "finite", 200)
-    assert ai.channels[-1].kw["min_val"] == -10.0 and ai.channels[-1].kw["max_val"] == 10.0   # BRT speed ±10 V
+    assert all(c.kw["min_val"] == 0.0 and c.kw["max_val"] == 10.0 for c in ai.channels)   # gauges 0-10 V
+    assert t["turbo1_speed_ai"].channels[0].kw["max_val"] == 10.0                         # BRT speed ±10 V
     # every AI channel must use the VI's terminal configuration (DIFFERENTIAL, value 10106) – not RSE
     from nidaqmx.constants import TerminalConfiguration
     assert all(c.kw["terminal_config"] == TerminalConfiguration.DIFF for c in ai.channels), \
@@ -218,3 +225,75 @@ def test_daq_check_channel_inventory_matches_profile(cfg):
     # the retired single command line and DI run read-back are gone from the map
     assert "cDAQ1Mod3/port0/line0" not in phys and "cDAQ1Mod2/port0/line0" not in phys
     assert len(inv) == 21 and len(phys) == 21          # no duplicate lines in the map
+
+
+def test_every_analog_channel_maps_to_its_own_reading(cfg, fake_daq):
+    """Distinct voltage on every AI channel -> each named reading must pick up its OWN channel.
+
+    Guards the scan-order -> name mapping: inserting the primary-pump frequency channel into the
+    task must not shift the turbo speed (or any gauge) onto a neighbour's sample.
+    """
+    from facility_control.gauges import v_to_torr
+    b = fake_daq.NiDaqmxBackend(cfg)
+    b.open()
+    volts = {"cDAQ1Mod1/ai5": 1.0,    # wrg
+             "cDAQ1Mod1/ai2": 2.0,    # conv2 (foreline)
+             "cDAQ1Mod1/ai1": 3.0,    # conv1 (turbo)
+             "cDAQ1Mod1/ai6": 7.0,    # primary pump frequency
+             "cDAQ1Mod1/ai4": 0.2}    # turbo speed
+    FakeTask.ai_volts.update(volts)
+    inp = b.read()
+    assert not inp.daq_error
+    assert inp.gauge_volts["wrg"] == pytest.approx(1.0)
+    assert inp.gauge_volts["conv2"] == pytest.approx(2.0)
+    assert inp.gauge_volts["conv1"] == pytest.approx(3.0)
+    assert inp.pressures_torr["wrg"] == pytest.approx(v_to_torr("ion_gauge", 1.0))
+    # 7 V on ai6 is the pump, NOT the turbo; 0.2 V on ai4 is the turbo, NOT the pump
+    assert inp.primary_hz == pytest.approx(7.0 / 10.0 * 210.0)
+    assert inp.turbos["turbo1"].speed_pct == pytest.approx(2.0)
+    assert inp.turbos["turbo1"].speed_pct != pytest.approx(70.0)   # would mean it read ai6
+
+
+def test_turbo_speed_is_not_contaminated_by_the_gauge_before_it(cfg, fake_daq):
+    """Regression for the phantom turbo speed seen on the facility (2026-09-14).
+
+    The turbo speed shared the gauge task, so the multiplexed ADC returned the residue of the
+    channel scanned before it: the Turbo Convectron at atmosphere (~6.88 V) showed up as ~69 %
+    turbo speed, and once the pump-frequency channel was inserted it tracked that instead
+    (0-10 V = 0-100 %).  Main_V4.4.vi reads the speed in its own task and showed a clean 0.
+    """
+    from facility_control.gauges import torr_to_v
+    b = fake_daq.NiDaqmxBackend(cfg)
+    b.open()
+    # chamber and turbo section at atmosphere, pump at full frequency, turbo genuinely stopped
+    FakeTask.ai_volts.update({
+        "cDAQ1Mod1/ai5": torr_to_v("ion_gauge", 760.0),
+        "cDAQ1Mod1/ai2": torr_to_v("convectron", 760.0),
+        "cDAQ1Mod1/ai1": torr_to_v("convectron", 760.0),   # Turbo Convectron ~6.88 V
+        "cDAQ1Mod1/ai6": 10.0,                              # pump frequency at 210 Hz
+        "cDAQ1Mod1/ai4": 0.0,                               # turbo speed output: stopped
+    })
+    inp = b.read()
+    assert inp.turbos["turbo1"].speed_pct == pytest.approx(0.0)
+    assert inp.primary_hz == pytest.approx(210.0)
+    # the two values the facility actually displayed while the turbo was stopped
+    assert inp.turbos["turbo1"].speed_pct != pytest.approx(68.8, abs=1.0)   # the convectron's voltage
+    assert inp.turbos["turbo1"].speed_pct != pytest.approx(100.0)           # the pump frequency
+
+
+def test_speed_task_honours_the_per_turbo_sample_rate(fake_daq):
+    """A dedicated task can finally use the VI's 4000 Hz x 2000 samples for the HP700 speed."""
+    from facility_control.config import CONFIG_DIR, load_config
+    vc = load_config(str(CONFIG_DIR / "facility_vc100.yaml"))
+    b = fake_daq.NiDaqmxBackend(vc)
+    b.open()
+    t = FakeTask.registry
+    speed_tasks = {k: v for k, v in t.items() if k.endswith("_speed_ai")}
+    assert speed_tasks, "the VC100's HiPace turbos have speed channels"
+    for name, task in speed_tasks.items():
+        assert len(task.channels) == 1, f"{name} must stay a single-channel task"
+        rate, mode, samps = task.timing.cfg
+        tid = name[: -len("_speed_ai")]
+        p = vc.turbo(tid).params
+        assert rate == pytest.approx(float(p.get("speed_sample_rate_hz", vc.ai_sample_rate_hz)))
+        assert samps == int(p.get("speed_samples", vc.ai_samples_per_channel))

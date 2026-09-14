@@ -254,6 +254,33 @@ reached that frequency within `timings.primary_spinup_timeout_s` (30 s).  Everyt
 section still describes the VI as written; this is the one place the small chamber's hardware has
 moved on from it.
 
+## 6c. The VI uses SEPARATE analog tasks (bug found on the facility, 2026-09-14)
+
+Decoded from `Main_V4.4.semantic.lvnet`, the VI builds **two** AI task chains, not one:
+
+| Task | Channels | Range |
+|---|---|---|
+| `DAQmx_Create_Task_7229` | `Wide Range_Gauge_Read` (ai5) -> Convectrons (ai1, ai2) -> `Com Potential` (ai6) | 0-10 V |
+| `DAQmx_Control_Task_39736` | `Turbo_Speed_Read` (ai3, HP700) and `BRT_Turbo_Speed_Read` (ai4, BigRed) | 0-10 V / **-10-10 V** |
+
+All channels are differential (10106) in both — the terminal configuration is *not* the difference.
+What matters is that the **turbo speed is alone in its own task**.
+
+The port originally put the speed channel in the same task as the gauges.  One multiplexed ADC serves
+a task's channels in sequence, and the BigRed speed output does not settle inside the convert window,
+so ai4 returned the residue of the channel scanned immediately before it:
+
+* Turbo Convectron at atmosphere = 6.88 V -> a phantom **"69 % turbo speed"** with the turbo stopped
+  (observed: 71 %, = 7.1 V);
+* after the pump-frequency channel (ai6) was added ahead of it, the phantom speed tracked the pump
+  **linearly**, 0-10 V = 0-100 %.
+
+The LabVIEW panel read a clean 0 on the same wiring throughout, which is what identified the cause.
+The port now matches the VI: gauges (+ extras/compressor) in the main task, and one dedicated
+single-channel task per turbo speed and for the pump frequency.  This also lets the per-turbo
+`speed_sample_rate_hz` / `speed_samples` (the VI's 4000 Hz x 2000 in HP700 mode) take effect — a
+shared task can only carry one timing configuration.
+
 ## 7. Differences the port deliberately adds (all switchable in config)
 * CSV daily logging (VC100 behaviour), zoomable history plots.
 * Manual mode (interlocked manual control) actually implemented.

@@ -361,12 +361,19 @@ def test_vc100_daq_tasks(vcfg, fake_daq):
     assert t["primary_cmd"].channels[0].phys == "cDAQ3Mod4/port0/line0" and t["primary_read"].channels[0].phys == "cDAQ3Mod2/port0/line8"
     assert t["chiller_cmd"].channels[0].phys == "cDAQ3Mod4/port0/line1" and t["chiller_read"].channels[0].phys == "cDAQ3Mod2/port0/line9"
     ai = t["analog_in"]
+    # gauges + compressor only; each turbo speed now has its own single-channel task, as the VIs do
     assert [c.phys for c in ai.channels] == ["cDAQ3Mod8/ai0", "cDAQ3Mod8/ai1", "cDAQ3Mod8/ai2", "cDAQ3Mod8/ai3",
-                                             "cDAQ3Mod8/ai4", "cDAQ3Mod8/ai7", "cDAQ3Mod8/ai5", "cDAQ3Mod8/ai6"]
+                                             "cDAQ3Mod8/ai4", "cDAQ3Mod8/ai7"]
+    assert [c.phys for c in t["turbo2_speed_ai"].channels] == ["cDAQ3Mod8/ai5"]
+    assert [c.phys for c in t["turbo3_speed_ai"].channels] == ["cDAQ3Mod8/ai6"]
+    assert "turbo1_speed_ai" not in t                    # Shimadzu contact interface: no speed signal
     assert ai.timing.cfg == (1000.0, "finite", 25)
     from nidaqmx.constants import TerminalConfiguration
     assert all(c.kw["terminal_config"] == TerminalConfiguration.DIFF for c in ai.channels)
-    assert ai.channels[6].kw["min_val"] == -10.0 and ai.channels[7].kw["max_val"] == 10.0      # speeds ±10 V
+    assert all(c.kw["terminal_config"] == TerminalConfiguration.DIFF
+               for k in ("turbo2_speed_ai", "turbo3_speed_ai") for c in t[k].channels)
+    assert t["turbo2_speed_ai"].channels[0].kw["min_val"] == -10.0                             # speeds ±10 V
+    assert t["turbo3_speed_ai"].channels[0].kw["max_val"] == 10.0
     assert ai.channels[0].kw["min_val"] == 0.0 and ai.channels[0].kw["max_val"] == 10.0        # gauges 0..10 V
     assert [c.phys for c in t["turbo1_read"].channels] == [f"cDAQ3Mod2/port0/line{i}" for i in range(10, 16)]
     assert [c.phys for c in t["turbo1_cmd"].channels] == ["cDAQ3Mod3/port0/line0", "cDAQ3Mod3/port0/line1"]

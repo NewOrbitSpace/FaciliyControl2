@@ -171,6 +171,20 @@ Any facility can use either wiring: give the pump block `cmd` (one relay, as the
 `power_cmd` + `run_cmd`, with an optional `frequency:` block.  The CSV gains `primary_power_cmd`,
 `primary_run_cmd`, `primary_hz` and `primary_running` columns when they apply.
 
+## Analog tasks: one per fast/high-impedance signal (fixed 2026-09-14)
+
+Gauges share the main AI task; **each turbo speed channel and the pump frequency get their own
+single-channel task**, as the VIs do.  This is not cosmetic: one multiplexed ADC serves a task's
+channels in turn, and a signal that does not settle in the convert window returns the *previous*
+channel's voltage.  With the turbo speed sharing the gauge task the facility showed a phantom ~69 %
+turbo speed with the turbo stopped (the Turbo Convectron's 6.88 V at atmosphere), and after the pump
+frequency was added ahead of it the phantom tracked the pump linearly to 100 %.  The LabVIEW panel
+read 0 on the same wiring — see `docs/MAIN_V4.4_REFERENCE.md` section 6c.  A side benefit: the
+per-turbo `speed_sample_rate_hz` / `speed_samples` settings finally take effect.
+
+If you add another fast or high-impedance analog signal, give it its own task the same way rather
+than appending it to the gauge scan.
+
 ## Changes requested by the test engineer (2026-09-08)
 
 These deviate from the VI on purpose and are all driven by the facility profile:
