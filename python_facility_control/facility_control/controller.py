@@ -39,6 +39,7 @@ from .model import (AUTO_ERROR_CODE_MAX, AUTO_ERROR_CODE_MIN, ERR_BRT_DEVICE, ER
                     ERR_CHILLER_CONFLICT, ERR_COMPRESSOR_LOW, ERR_DAQ, ERR_GATE_CONFLICT, ERR_PRIMARY_CONFLICT,
                     ERR_TURBO_DEVICE, ERR_TURBO_MOTOR_CONFLICT, ERR_TURBO_VALVE_CONFLICT, ERR_VENT_CONFLICT,
                     TURBO_COLORS, Commands, ErrorCluster, FacilityState, Inputs, Mode, OnOffError, Snapshot,
+                    primary_is_running,
                     TabPage, TurboStatus, TurboView)
 
 
@@ -120,7 +121,8 @@ class PendingDialog:
     label: str
 
 
-IMMEDIATE_KINDS = {"stop", "clear_error", "set_threshold", "set_engage_time", "set_unit"}
+IMMEDIATE_KINDS = {"stop", "clear_error", "set_threshold", "set_engage_time", "set_unit",
+                   "set_frequency_enabled"}
 # Auto buttons that start a pump-down.  The test engineer asked for a confirmation that the *manual*
 # vent valve (a hand valve, not on the DAQ) is closed before any of these runs.
 VENT_CONFIRM_BUTTONS = {"pump_to_rough", "pump_to_high_vac", "overnight_pump", "shut_off_once_rough"}
@@ -190,6 +192,9 @@ class Controller:
         self._primary_phase: str = ""            # '' | 'powering' | 'running' | 'stopping'
         self._primary_phase_until: float = 0.0   # end of the power->run / run->power-off gap
         self._primary_run_since: Optional[float] = None   # when the run relay went high (spin-up timeout)
+        # is the pump's drive-frequency reader switched on?  The operator decides (the sensor may not
+        # be connected); off means the channel is not acquired at all, so it cannot add noise.
+        self.frequency_enabled: bool = bool(cfg.primary.has_frequency and cfg.primary.frequency.enabled)
         self.pressure_unit = cfg.pressure_unit_default
         self.finished = threading.Event()
 
@@ -220,6 +225,10 @@ class Controller:
     def request_set_threshold(self, torr: float): self.request("set_threshold", torr)
     def request_set_engage_time(self, epoch: Optional[float]): self.request("set_engage_time", epoch)
     def request_set_unit(self, unit: str): self.request("set_unit", unit)
+
+    def request_set_frequency_enabled(self, on: bool):
+        """Operator toggled 'pump frequency reader connected' on the panel."""
+        self.request("set_frequency_enabled", bool(on))
 
     def snapshot(self) -> Snapshot:
         with self._lock:
@@ -285,6 +294,8 @@ class Controller:
                 self.turbo_engage_time = r.arg
             elif r.kind == "set_unit":
                 self.pressure_unit = str(r.arg)
+            elif r.kind == "set_frequency_enabled":
+                self._set_frequency_enabled(bool(r.arg))
             else:
                 self._deferred.append(r)
         # ---- frame 0: read (always)
@@ -371,19 +382,9 @@ class Controller:
 
     # ------------------------------------------------------------------ primary pump
     def primary_running(self, inp: Inputs) -> bool:
-        """Is the pump actually turning?
-
-        With a frequency feedback (small chamber, since the 2026-09-14 rewiring) this is the drive
-        frequency above `running_above_hz` – real evidence of rotation, so the status colour, the
-        Manual interlocks and the operating-hour meter all reflect what the pump is really doing.
-        Otherwise the boolean read-back, and failing that the command (the VI's behaviour)."""
-        pc = self.cfg.primary
-        if pc.has_frequency:
-            hz = inp.primary_hz
-            return hz is not None and hz > pc.frequency.running_above_hz
-        if pc.has_read:
-            return bool(inp.primary_read)
-        return bool(self.cmds.primary)
+        """Is the pump actually turning?  See model.primary_is_running for the definition – it is
+        shared with the Manual-mode interlocks so the two can never drift apart."""
+        return primary_is_running(self.cfg.primary, inp, self.cmds)
 
     def _sequence_primary(self, cmds: Commands, now: float) -> bool:
         """Expand the primary-pump *demand* (`cmds.primary`) into its physical relay lines.
@@ -435,6 +436,27 @@ class Controller:
         self._primary_phase = phase
         return (cmds.primary_power, cmds.primary_run) != before
 
+    def _set_frequency_enabled(self, on: bool) -> None:
+        """Switch the drive-frequency reader on or off, on the controller thread.
+
+        Runs here rather than in the GUI thread because it creates or closes a DAQmx task that the
+        read path uses.  Off closes the task, so the channel is genuinely not acquired any more -
+        that is the whole point, since acquiring it is what put noise on the other analog inputs.
+        """
+        if not self.cfg.primary.has_frequency or on == self.frequency_enabled:
+            return
+        try:
+            self.backend.set_frequency_enabled(on)
+        except Exception as exc:
+            self._log(f"Could not switch the pump frequency reader {'on' if on else 'off'}: {exc}")
+            return
+        self.frequency_enabled = on
+        self.inputs.primary_hz = None if not on else self.inputs.primary_hz
+        if not on:
+            self._primary_run_since = None      # no reading -> the spin-up check restarts if re-enabled
+        self._log(f"Primary pump frequency reader switched {'ON' if on else 'OFF'}"
+                  + ("" if on else " – no frequency reading; pump status now follows the run relay"))
+
     def _advance_primary_only(self, now: float) -> None:
         """No decision was made this iteration (a dialog is open, or a settle hold is running), but
         the relay sequence runs on its own clock – advance it and write if a line moved."""
@@ -474,17 +496,17 @@ class Controller:
         running = self.primary_running(inp)
         prim_conf = False
         if cfg.primary.cross_check and not self._suppressed("primary", now):
-            if cfg.primary.has_frequency:
+            if inp.primary_hz is not None:          # only while the reader is actually on
                 timeout = cfg.timings.primary_spinup_timeout_s
                 if (timeout is not None and self.cmds.primary_run and self._primary_run_since is not None
                         and not running and (now - self._primary_run_since) >= timeout):
                     prim_conf = True
             elif cfg.primary.has_read:
                 prim_conf = bool(self.cmds.primary) != bool(inp.primary_read)
-        on = running if cfg.primary.has_frequency else bool(self.cmds.primary)
+        on = running if inp.primary_hz is not None else bool(self.cmds.primary)
         self._primary_status = OnOffError.ERROR if prim_conf else (OnOffError.ON if on else OnOffError.OFF)
         if prim_conf:
-            if cfg.primary.has_frequency:
+            if inp.primary_hz is not None:
                 hz = inp.primary_hz
                 source = (f"{cfg.primary.label} commanded to run but not turning"
                           + (f" ({hz:.1f} Hz)" if hz is not None else ""))
@@ -995,6 +1017,8 @@ class Controller:
             hardware=self.backend.describe(), skip_primary_warm=self.skip_primary_warm,
             compressor_bar=self.inputs.compressor_bar,
             primary_hz=primary_hz, primary_running=primary_running,
+            primary_frequency_available=self.cfg.primary.has_frequency,
+            primary_frequency_enabled=self.frequency_enabled,
             primary_phase=self._primary_phase, primary_phase_remaining_s=phase_left,
             hold_remaining_s=max(0.0, self._hold_until - now), hold_reason=self._hold_reason if now < self._hold_until else "",
             loop_blocked=self._blocked, primary_run_hours=self.run_hours.hours("primary"),

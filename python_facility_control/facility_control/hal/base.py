@@ -44,6 +44,15 @@ class HardwareBackend(ABC):
     def close(self) -> None: ...
 
     # optional hooks ---------------------------------------------------------
+    def set_frequency_enabled(self, on: bool) -> None:
+        """Switch the primary pump's drive-frequency reader on or off while the program runs.
+
+        The operator decides whether the sensor is physically connected.  Off must mean the channel
+        is not acquired at all - not merely ignored - because acquiring it is what puts noise on the
+        other analog inputs.  A backend that does not have the channel ignores this.
+        """
+        pass
+
     def set_fault(self, name: str, value) -> None:  # simulation only
         pass
 

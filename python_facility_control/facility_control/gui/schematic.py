@@ -336,14 +336,28 @@ class SchematicWidget(QWidget):
         self._primary(p, 185, 600)
         pbox = QRectF(2, 596, 142, 30)
         self._box(p, pbox, [(snap.primary_text if snap else "Primary Pump is Off", 10, False)])
-        # VFD-driven pump: show the drive frequency next to it (the only feedback this pump gives)
+        # Beside the pump: its drive frequency when that feedback is fitted and enabled, and the
+        # maintenance hour meter (which is why the frequency box sits above rather than here).
+        y_meter = 590
         if cfg.primary.has_frequency:
             hz = snap.primary_hz if snap else None
-            self._label(p, 236, 582, "Pump frequency", 9)
-            self._box(p, QRectF(236, 590, 92, 24),
-                      [("–" if hz is None else f"{hz:.1f} Hz", 10, False)])
-            self.hits.append(Hit(QRectF(236, 590, 92, 24), "primary",
-                                 f"Primary pump drive frequency (0-{cfg.primary.frequency.max_hz:g} Hz)"))
+            on = snap.primary_frequency_enabled if snap else False
+            self._label(p, 236, 534, "Pump frequency", 9)
+            self._box(p, QRectF(236, 542, 92, 24),
+                      [(f"{hz:.1f} Hz" if hz is not None else ("–" if on else "reader off"), 10, False)])
+            self.hits.append(Hit(QRectF(236, 542, 92, 24), "primary",
+                                 f"Primary pump drive frequency (0-{cfg.primary.frequency.max_hz:g} Hz)"
+                                 if on else "Frequency reader is switched off – tick "
+                                            "'Pump frequency reader connected' on the panel to use it"))
+        hours = snap.primary_run_hours if snap else 0.0
+        self._label(p, 236, 582, "Total run hours", 9)
+        self._box(p, QRectF(236, y_meter, 92, 24), [(f"{hours:,.2f} h", 10, False)])
+        measured = cfg.primary.has_frequency or cfg.primary.has_read
+        self.hits.append(Hit(QRectF(236, y_meter, 92, 24), "primary",
+                             "Primary pump total operating hours – "
+                             + ("counted from its read-back" if measured
+                                else "counted from the run command (no pump feedback fitted)")
+                             + ", kept across restarts"))
         # ---- state / mode badge (VI: Current/Target Facility State rings)
         if snap:
             badge = QRectF(ch_rect.left() - 60, 220, 250, 20)

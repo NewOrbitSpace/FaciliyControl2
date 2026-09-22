@@ -135,10 +135,13 @@ def test_tasks_follow_the_vi_channel_map(cfg, fake_daq):
     # speed return the previous channel's voltage (the Turbo Convectron, ~69 % at atmosphere).
     assert [c.phys for c in ai.channels] == ["cDAQ1Mod1/ai5", "cDAQ1Mod1/ai2", "cDAQ1Mod1/ai1"]
     assert [c.phys for c in t["turbo1_speed_ai"].channels] == ["cDAQ1Mod1/ai4"]
-    assert [c.phys for c in t["primary_hz_ai"].channels] == ["cDAQ1Mod1/ai6"]
-    # the BigRed speed input is bipolar, the gauges and the drive output are not
+    # the drive-frequency channel is SUPPRESSED in the shipped profile (2026-09-21): it must not be
+    # acquired by any task, shared or dedicated
+    assert "primary_hz_ai" not in t
+    every_channel = [c.phys for task in t.values() for c in task.channels]
+    assert not any(c.endswith("/ai6") for c in every_channel), every_channel
+    # the BigRed speed input is bipolar, the gauges are not
     assert t["turbo1_speed_ai"].channels[0].kw["min_val"] == -10.0
-    assert t["primary_hz_ai"].channels[0].kw["min_val"] == 0.0
     assert ai.timing.cfg == (1000.0, "finite", 200)
     assert all(c.kw["min_val"] == 0.0 and c.kw["max_val"] == 10.0 for c in ai.channels)   # gauges 0-10 V
     assert t["turbo1_speed_ai"].channels[0].kw["max_val"] == 10.0                         # BRT speed ±10 V
@@ -167,8 +170,9 @@ def test_write_and_read_decoding(cfg, fake_daq):
     assert t["valve_cmd"].writes[-1] == [False, True, False, False]
     assert t["primary_cmd"].writes[-1] == [True, True] and t["chiller_cmd"].writes[-1] is False
     assert t["turbo1_cmd"].writes[-1] == [True, False]
-    # plant answers: bypass open, WRG at 1e-3 Torr, foreline 0.5 Torr, turbo 45 % speed, error line high,
-    # and the pump's drive reporting 105 Hz (= 5 V of the 0-10 V / 0-210 Hz range)
+    # plant answers: bypass open, WRG at 1e-3 Torr, foreline 0.5 Torr, turbo 45 % speed, error line high.
+    # ai6 is deliberately fed a live-looking voltage: with the frequency block suppressed it must be
+    # ignored completely, not leak into any reading.
     FakeTask.di_values.update({"cDAQ1Mod2/port0/line3": True, "cDAQ1Mod2/port0/line7": True})
     from facility_control.gauges import torr_to_v
     FakeTask.ai_volts.update({"cDAQ1Mod1/ai5": torr_to_v("ion_gauge", 1e-3), "cDAQ1Mod1/ai2": torr_to_v("convectron", 0.5),
@@ -177,8 +181,8 @@ def test_write_and_read_decoding(cfg, fake_daq):
     inp = b.read()
     assert not inp.daq_error
     assert inp.valve_reads == {"turbo_valve": False, "bypass": True, "vent": False, "gate": False}
-    assert inp.primary_hz == pytest.approx(105.0)
-    assert inp.primary_read is True and inp.chiller_read is False   # derived from the frequency
+    assert inp.primary_hz is None                      # suppressed: not acquired
+    assert inp.primary_read is False                   # no feedback of any kind any more
     assert inp.pressures_torr["wrg"] == pytest.approx(1e-3, rel=1e-6)
     assert inp.pressures_torr["conv2"] == pytest.approx(0.5, rel=1e-6)
     ti = inp.turbos["turbo1"]
@@ -220,14 +224,35 @@ def test_daq_check_channel_inventory_matches_profile(cfg):
     phys = {p for _, p, _ in inv}
     assert {"cDAQ1Mod4/port0/line0", "cDAQ1Mod2/port0/line5", "cDAQ1Mod1/ai5", "cDAQ1Mod3/port0/line4",
             "cDAQ1Mod2/port0/line8", "cDAQ1Mod1/ai4",
-            # two-relay primary pump + its frequency feedback (hardware change 2026-09-14)
-            "cDAQ1Mod3/port0/line6", "cDAQ1Mod3/port0/line7", "cDAQ1Mod1/ai6"} <= phys
-    # the retired single command line and DI run read-back are gone from the map
+            # two-relay primary pump (hardware change 2026-09-14)
+            "cDAQ1Mod3/port0/line6", "cDAQ1Mod3/port0/line7"} <= phys
+    # the retired single command line and DI run read-back are gone from the map...
     assert "cDAQ1Mod3/port0/line0" not in phys and "cDAQ1Mod2/port0/line0" not in phys
-    assert len(inv) == 21 and len(phys) == 21          # no duplicate lines in the map
+    # ...and so is the drive-frequency input while it is suppressed (2026-09-21)
+    assert "cDAQ1Mod1/ai6" not in phys
+    assert len(inv) == 20 and len(phys) == 20          # no duplicate lines in the map
 
 
-def test_every_analog_channel_maps_to_its_own_reading(cfg, fake_daq):
+def test_daq_check_lists_the_frequency_when_re_enabled(cfg_freq):
+    from tools.daq_check import channel_inventory
+    phys = {p for _, p, _ in channel_inventory(cfg_freq)}
+    assert "cDAQ1Mod1/ai6" in phys
+
+
+def test_frequency_gets_its_own_task_when_re_enabled(cfg_freq, fake_daq):
+    """Re-enabling the profile block must bring the channel back as its OWN task, never in the
+    shared gauge task - otherwise the crosstalk this file documents comes straight back."""
+    b = fake_daq.NiDaqmxBackend(cfg_freq)
+    b.open()
+    t = FakeTask.registry
+    assert [c.phys for c in t["primary_hz_ai"].channels] == ["cDAQ1Mod1/ai6"]
+    assert len(t["primary_hz_ai"].channels) == 1
+    assert t["primary_hz_ai"].channels[0].kw["min_val"] == 0.0
+    assert [c.phys for c in t["analog_in"].channels] == ["cDAQ1Mod1/ai5", "cDAQ1Mod1/ai2", "cDAQ1Mod1/ai1"]
+
+
+def test_every_analog_channel_maps_to_its_own_reading(cfg_freq, fake_daq):
+    cfg = cfg_freq
     """Distinct voltage on every AI channel -> each named reading must pick up its OWN channel.
 
     Guards the scan-order -> name mapping: inserting the primary-pump frequency channel into the
@@ -254,7 +279,7 @@ def test_every_analog_channel_maps_to_its_own_reading(cfg, fake_daq):
     assert inp.turbos["turbo1"].speed_pct != pytest.approx(70.0)   # would mean it read ai6
 
 
-def test_turbo_speed_is_not_contaminated_by_the_gauge_before_it(cfg, fake_daq):
+def test_turbo_speed_is_not_contaminated_by_the_gauge_before_it(cfg_freq, fake_daq):
     """Regression for the phantom turbo speed seen on the facility (2026-09-14).
 
     The turbo speed shared the gauge task, so the multiplexed ADC returned the residue of the
@@ -263,7 +288,7 @@ def test_turbo_speed_is_not_contaminated_by_the_gauge_before_it(cfg, fake_daq):
     (0-10 V = 0-100 %).  Main_V4.4.vi reads the speed in its own task and showed a clean 0.
     """
     from facility_control.gauges import torr_to_v
-    b = fake_daq.NiDaqmxBackend(cfg)
+    b = fake_daq.NiDaqmxBackend(cfg_freq)
     b.open()
     # chamber and turbo section at atmosphere, pump at full frequency, turbo genuinely stopped
     FakeTask.ai_volts.update({
@@ -297,3 +322,36 @@ def test_speed_task_honours_the_per_turbo_sample_rate(fake_daq):
         p = vc.turbo(tid).params
         assert rate == pytest.approx(float(p.get("speed_sample_rate_hz", vc.ai_sample_rate_hz)))
         assert samps == int(p.get("speed_samples", vc.ai_samples_per_channel))
+
+
+# --------------------------------------------------------------- frequency reader ON/OFF switch
+# The operator decides whether the sensor is physically connected.  OFF must mean the channel is
+# not acquired AT ALL - merely ignoring it would still put noise on the other analog inputs.
+def test_reader_off_closes_the_daq_task_entirely(cfg_freq, fake_daq):
+    """On the real backend the task must be created and destroyed, not just skipped."""
+    b = fake_daq.NiDaqmxBackend(cfg_freq)          # cfg_freq starts with the reader enabled
+    b.open()
+    assert "primary_hz_ai" in b.tasks
+    gauges_before = [c.phys for c in b.tasks["analog_in"].channels]
+
+    b.set_frequency_enabled(False)
+    assert "primary_hz_ai" not in b.tasks, "the channel must stop being acquired, not just ignored"
+    every = [c.phys for t in b.tasks.values() for c in t.channels]
+    assert not any(c.endswith("/ai6") for c in every)
+    # the gauge task must be untouched throughout - that is what makes a live toggle safe
+    assert [c.phys for c in b.tasks["analog_in"].channels] == gauges_before
+
+    b.set_frequency_enabled(True)
+    assert [c.phys for c in b.tasks["primary_hz_ai"].channels] == ["cDAQ1Mod1/ai6"]
+    assert len(b.tasks["primary_hz_ai"].channels) == 1      # still its own single-channel task
+    assert [c.phys for c in b.tasks["analog_in"].channels] == gauges_before
+
+
+def test_profile_default_decides_whether_the_task_opens(cfg, cfg_freq, fake_daq):
+    off = fake_daq.NiDaqmxBackend(cfg)             # shipped profile: enabled: false
+    off.open()
+    assert "primary_hz_ai" not in off.tasks
+    off.close()
+    on = fake_daq.NiDaqmxBackend(cfg_freq)
+    on.open()
+    assert "primary_hz_ai" in on.tasks

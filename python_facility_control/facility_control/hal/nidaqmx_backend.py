@@ -154,10 +154,9 @@ class NiDaqmxBackend(HardwareBackend):
         self.tasks["analog_in"] = ai
         # --- dedicated single-channel AI tasks (see the module docstring): no preceding channel
         #     means no settling residue from a neighbour.
-        if cfg.primary.has_frequency:
-            fq = cfg.primary.frequency
-            self._add_single_ai("primary_hz_ai", cfg.phys(fq.channel), "primary_hz", fq.min_v, fq.max_v,
-                                term, cfg.ai_sample_rate_hz, cfg.ai_samples_per_channel)
+        self._ai_term = term                 # kept so the frequency task can be re-created later
+        if cfg.primary.has_frequency and cfg.primary.frequency.enabled:
+            self._open_frequency_task()
         for tc in cfg.turbos:
             p = tc.params
             if "speed_ai" in p:
@@ -180,6 +179,30 @@ class NiDaqmxBackend(HardwareBackend):
                 if "still_spinning_di" in p:
                     t.di_channels.add_di_chan(cfg.phys(p["still_spinning_di"]), name_to_assign_to_lines=f"{tc.id}_spinning", line_grouping=LineGrouping.CHAN_PER_LINE)
             self.tasks[f"{tc.id}_read"] = t
+
+    def _open_frequency_task(self) -> None:
+        """Create the pump-frequency task (its own single channel, never in the gauge task)."""
+        cfg = self.config
+        fq = cfg.primary.frequency
+        self._add_single_ai("primary_hz_ai", cfg.phys(fq.channel), "primary_hz", fq.min_v, fq.max_v,
+                            self._ai_term, cfg.ai_sample_rate_hz, cfg.ai_samples_per_channel)
+
+    def set_frequency_enabled(self, on: bool) -> None:
+        """Operator switched the reader on/off.  Off closes the task so the channel is genuinely
+        no longer acquired; the gauge task is never touched either way."""
+        if not self.config.primary.has_frequency or self.read_only:
+            return
+        have = "primary_hz_ai" in self.tasks
+        if on and not have:
+            self._open_frequency_task()
+        elif not on and have:
+            task = self.tasks.pop("primary_hz_ai")
+            self.single_ai.pop("primary_hz_ai", None)
+            for step in (task.stop, task.close):
+                try:
+                    step()
+                except Exception:
+                    pass
 
     def _add_single_ai(self, task_key: str, phys: str, chan_name: str, min_v: float, max_v: float,
                        term, rate_hz: float, samples: int) -> None:
@@ -286,8 +309,9 @@ class NiDaqmxBackend(HardwareBackend):
             if cfg.compressor_ai:
                 # VC100 'Air Compressor Pressure Calc (Bar)': Pressure_Bar = V/5*10  -> scale 2, offset 0
                 inp.compressor_bar = volts["compressor"] * cfg.compressor_scale + cfg.compressor_offset
-            if cfg.primary.has_frequency:
-                # small chamber: 0-10 V from the pump's drive = 0-210 Hz (own task)
+            if "primary_hz_ai" in self.tasks:
+                # small chamber: 0-10 V from the pump's drive = 0-210 Hz (own task).  Absent when the
+                # operator has the reader switched off -> primary_hz stays None.
                 inp.primary_hz = cfg.primary.frequency.hz(self._read_single_ai("primary_hz_ai"))
                 if not cfg.primary.has_read:      # no boolean feedback – derive one from the frequency
                     inp.primary_read = inp.primary_hz > cfg.primary.frequency.running_above_hz

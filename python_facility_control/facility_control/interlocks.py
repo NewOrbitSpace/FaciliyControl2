@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from .config import FacilityConfig
-from .model import Commands, Inputs
+from .model import Commands, Inputs, primary_is_running
 
 
 @dataclass
@@ -42,12 +42,13 @@ class Interlocks:
         return any(cmds.turbo_motor.values())
 
     def _primary_running(self, cmds: Commands, inp: Inputs) -> bool:
-        """Is the pump actually turning?  Frequency feedback where the facility has it (the small
-        chamber since the 2026-09-14 rewiring), otherwise the boolean read-back."""
-        pc = self.cfg.primary
-        if pc.has_frequency:
-            return inp.primary_hz is not None and inp.primary_hz > pc.frequency.running_above_hz
-        return bool(inp.primary_read)
+        """Is the pump actually turning?  Shared with the controller – see model.primary_is_running.
+
+        This must never fall back to the boolean read-back alone: a pump with no feedback fitted
+        reports `primary_read` False for ever, which would block "Please Turn Primary Pump On first"
+        permanently and make the turbo unstartable in Manual mode.
+        """
+        return primary_is_running(self.cfg.primary, inp, cmds)
 
     def _valve(self, cmds: Commands, inp: Inputs, kind: str) -> bool:
         """Commanded OR read open, for any valve of that kind (conservative)."""

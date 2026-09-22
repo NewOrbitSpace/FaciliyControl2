@@ -48,6 +48,11 @@ class FrequencyConfig:
     min_v: float = 0.0
     max_v: float = 10.0
     running_above_hz: float = 5.0
+    # Is the sensor physically connected?  This is only the STARTUP default - the operator can turn
+    # the reader on and off at any time from the panel (the channel has its own single-channel DAQ
+    # task, so it is created and closed without disturbing the gauge task).  Off means the channel
+    # is not acquired at all, which is the point: acquiring it put noise on the other analog inputs.
+    enabled: bool = True
 
     def hz(self, volts: float) -> float:
         span = self.max_v - self.min_v

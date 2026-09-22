@@ -103,6 +103,8 @@ class SimBackend(HardwareBackend):
         self.state.p_foreline = self.sim.atmosphere_torr
         self.state.compressor_bar = self.sim.compressor_bar
         self.noise = 0.004  # volts
+        # is the drive-frequency reader switched on? (operator-settable, see set_frequency_enabled)
+        self.frequency_enabled = bool(config.primary.has_frequency and config.primary.frequency.enabled)
 
     # ------------------------------------------------------------------ lifecycle
     def open(self) -> None:
@@ -149,6 +151,10 @@ class SimBackend(HardwareBackend):
         for tid, t in st.turbos.items():
             t.motor = bool(cmds.turbo_motor.get(tid, False))
             t.standby = bool(cmds.turbo_standby.get(tid, False))
+
+    def set_frequency_enabled(self, on: bool) -> None:
+        if self.config.primary.has_frequency:
+            self.frequency_enabled = bool(on)
 
     def turbo_error_ack(self, turbo_id: str, level: bool) -> None:
         """Error-acknowledge / 'Reset' line: clears a tripped turbo unless the fault is still injected."""
@@ -299,12 +305,13 @@ class SimBackend(HardwareBackend):
         power = not st.faults.get("power_cut")
         for vid, v in st.valves.items():
             inp.valve_reads[vid] = bool(v.position > 0.95) and power
-        if cfg.primary.has_frequency:
+        if cfg.primary.has_frequency and self.frequency_enabled:
             fq = cfg.primary.frequency
             inp.primary_hz = st.primary_hz if power else 0.0
             inp.primary_read = inp.primary_hz > fq.running_above_hz
         else:
-            inp.primary_read = (st.primary_on > 0.5) and power
+            # reader off (or not fitted): no reading at all, exactly as the real backend behaves
+            inp.primary_read = (st.primary_on > 0.5) and power if not cfg.primary.two_stage else False
         inp.chiller_read = (st.chiller_on > 0.5) and power
         # gauges
         for g in cfg.gauges:

@@ -60,18 +60,31 @@ valves:                       # cmd: 24 V = open ; read: reed switch 24 V = open
   gate:        {label: "Gate Valve",   cmd: Mod4/port0/line3, read: Mod2/port0/line5, kind: gate,   turbo: turbo1, fail_closed: false}
 
 primary_pump:
-  # Hardware change (2026-09-14): the pump is now driven through TWO relays on Mod3 and reports its
-  # drive frequency on an analog input.  Power and run are separate: the run relay only has an effect
-  # once the power relay is closed, so the controller sequences
+  # Hardware change (2026-09-14): the pump is driven through TWO relays on Mod3.  Power and run are
+  # separate and the run relay only has an effect once the power relay is closed, so the controller
+  # sequences
   #   start:  power on -> timings.primary_power_to_run_gap_s -> run on
   #   stop:   run off  -> timings.primary_run_to_power_off_gap_s -> power off
   # The old single command line (Mod3/port0/line0) and the DI run read-back (Mod2/port0/line0) are
-  # no longer wired to the pump; the frequency is the only feedback.
+  # no longer wired to the pump.
   label: "Primary Pump"
   power_cmd: Mod3/port0/line6   # relay 1: mains power to the pump
   run_cmd:   Mod3/port0/line7   # relay 2: start/run (only effective once powered)
   cross_check: true             # error 5000 if it is commanded to run but never spins up
+                                # (only checkable while the frequency reader below is ON)
   frequency:
+    # The drive-frequency sensor.  `enabled` is only the STARTUP default: the operator turns the
+    # reader on and off from the panel ("Pump frequency reader connected"), because whether the
+    # sensor is physically wired is their call.  It has its own single-channel DAQ task, so it is
+    # opened and closed without disturbing the gauge task.
+    #
+    # Default OFF since 2026-09-21: acquiring this channel put noise on the other analog readings.
+    # While the reader is off the channel is not acquired at all and the pump has NO feedback, so
+    # "Primary Pump is On" means the run relay is closed, error 5000 cannot fire (a pump that fails
+    # to start is not detected) and the hour meter counts commanded hours.  That is the same
+    # position Main_V4.4.vi was always in.  Set enabled: true here, or just tick the box on the
+    # panel, once the wiring is sorted.
+    enabled: false
     channel: Mod1/ai6           # 0-10 V from the drive (this input used to carry 'Com Potential')
     min_v: 0.0
     max_v: 10.0
@@ -152,9 +165,12 @@ timings:
   primary_settle_ms: 500
   # Two-relay primary pump (hardware change 2026-09-14).  The loop keeps reading during these gaps
   # – they sequence the two relays, they are not cross-check settle windows.
-  primary_power_to_run_gap_s: 5.0      # power relay closed -> wait -> run relay closed
-  primary_run_to_power_off_gap_s: 5.0  # run relay opened  -> wait -> power relay opened
+  primary_power_to_run_gap_s: 15.0     # power relay closed -> wait -> run relay closed
+  primary_run_to_power_off_gap_s: 300.0  # run relay opened -> wait 5 min -> power relay opened
+                                       # (the pump keeps its power while it coasts to a stop; the STOP
+                                       #  button and program exit still drop both relays immediately)
   primary_spinup_timeout_s: 30.0       # commanded to run but below running_above_hz this long -> error 5000
+                                       # (inert while the frequency block above is commented out)
   # true  = like the VI: the loop freezes (no readings / error checks) for the settle waits above and
   #         while a Yes/No dialog is open, so a device is only cross-checked after its full settle time.
   # false = readings, plots and error monitoring continue during the waits; only the decision step

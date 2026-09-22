@@ -21,6 +21,24 @@ def cfg():
     return c
 
 
+@pytest.fixture
+def cfg_freq():
+    """The small-chamber profile with the primary pump's drive-frequency feedback switched back on.
+
+    The shipped profile ships that reader switched OFF - reading Mod1/ai6 put noise on the other
+    analog channels (2026-09-21) - but the code behind it is intact and must keep working, so every
+    frequency-dependent behaviour is tested against this fixture.  If re-enabling the block would
+    break something, these tests are what catches it.
+    """
+    from facility_control.config import FrequencyConfig
+    cfg = load_config()              # its own instance: a test may ask for `cfg` and `cfg_freq` together
+    cfg.simulation.time_scale = 200.0
+    cfg.primary.frequency = FrequencyConfig(channel="Mod1/ai6", min_v=0.0, max_v=10.0,
+                                            max_hz=210.0, running_above_hz=5.0, enabled=True)
+    cfg.primary.cross_check = True
+    return cfg
+
+
 class Harness:
     """Controller + simulator with a simulated clock so tests run fast and deterministically."""
 

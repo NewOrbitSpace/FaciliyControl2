@@ -39,7 +39,9 @@ def channel_inventory(cfg):
             items.append(("do", cfg.phys(pump.cmd), f"{pump.label} command"))
         if pump.has_read:
             items.append(("di", cfg.phys(pump.read), f"{pump.label} read"))
-        if pump.has_frequency:
+        # only when the reader is switched on at startup - an unacquired channel in the bring-up
+        # list would send someone looking for a signal the program is not reading
+        if pump.has_frequency and pump.frequency.enabled:
             items.append(("ai", cfg.phys(pump.frequency.channel),
                           f"{pump.label} frequency (0-{pump.frequency.max_hz:g} Hz)"))
     for g in cfg.gauges:

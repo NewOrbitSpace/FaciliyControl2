@@ -121,7 +121,9 @@ def test_primary_run_hours_accumulate_and_persist(cfg, tmp_path):
     h.ctl.request_user_cmd("primary")
     h.step()
     s, _ = h.run_until(lambda s: s.primary_run_hours > 0.02, 4000)   # >72 s of simulated running
-    assert s.inputs.primary_read is True
+    # this pump has no boolean read-back at all (two relays, frequency reader off), so the meter
+    # follows model.primary_is_running - the run relay - rather than inputs.primary_read
+    assert s.primary_running is True and s.commands.primary_run is True
     hours = s.primary_run_hours
     # the meter is written to disk and read back by a fresh instance
     h.ctl.run_hours.save(force=True, now=h.ctl.clock())
@@ -133,3 +135,77 @@ def test_run_hours_do_not_count_while_the_pump_is_off(cfg, tmp_path):
     h = Harness(cfg, mode=Mode.ADMIN, run_hours=RunHours(str(tmp_path / "h.json")))
     h.step(30)
     assert h.ctl.snapshot().primary_run_hours == 0.0
+
+
+# --------------------------------------------------------------------------- start order: every button
+# Restated by the test engineer on 2026-09-21: the pressure-dependent start order must apply to
+# *all three* pump-down buttons, not just Pump to Rough, because all three route through
+# Pumping to Rough.  One test per button per branch, so a regression names the exact case.
+@pytest.mark.parametrize("button", ["pump_to_rough", "pump_to_high_vac", "overnight_pump"])
+def test_bypass_opens_first_above_5e1_mbar_for_every_button(cfg, button):
+    h = Harness(cfg, mode=Mode.AUTO)
+    h.backend.state.p_chamber = cfg.simulation.atmosphere_torr     # 760 Torr, well above 5e1 mBar
+    h.step(2)
+    h.ctl.request_auto_button(button)
+    h.step()                                     # manual-vent-valve confirmation (auto-answered Yes)
+    s = h.step()
+    assert s.current == S.PUMPING_TO_ROUGH, button
+    s = h.step()                                 # entry frame decides the order
+    assert s.substate == SUB_ROUGH_BYPASS_FIRST, button
+    assert s.commands.valves["bypass"] is True and s.commands.primary is False, button
+    s = h.step()
+    assert s.commands.primary is True and s.commands.valves["bypass"] is True, button
+
+
+@pytest.mark.parametrize("button", ["pump_to_rough", "pump_to_high_vac", "overnight_pump"])
+def test_primary_first_then_bypass_below_5e1_mbar_for_every_button(cfg, button):
+    h = Harness(cfg, mode=Mode.AUTO)
+    h.backend.state.p_chamber = 10.0             # 10 Torr = 13 mBar -> below 5e1 mBar, above the skip
+    h.step(2)
+    h.ctl.request_auto_button(button)
+    h.step()
+    h.step()
+    s = h.step()                                 # entry frame: pump first, bypass still shut
+    assert s.substate == SUB_ROUGH_PRIMARY_GAP, button
+    assert s.commands.primary is True and s.commands.valves["bypass"] is False, button
+    t0 = h.backend._sim_time
+    s, _ = h.run_until(lambda s: s.commands.valves["bypass"] is True, 6000)
+    gap = h.backend._sim_time - t0
+    assert 20.0 <= gap <= 30.0 * 1.25, f"{button}: bypass opened after {gap:.1f} s, wanted 20-30 s"
+
+
+def test_the_threshold_really_is_5e1_mbar(cfg):
+    """The branch point, checked either side of 5e1 mBar rather than at atmosphere."""
+    from facility_control.units import to_torr
+    just_above = to_torr("mbar", 55.0)
+    just_below = to_torr("mbar", 45.0)
+    assert just_below < cfg.thresholds.bypass_first_above_torr < just_above
+    for p_torr, want in ((just_above, SUB_ROUGH_BYPASS_FIRST), (just_below, SUB_ROUGH_PRIMARY_GAP)):
+        h = Harness(cfg, mode=Mode.AUTO)
+        h.backend.state.p_chamber = p_torr
+        h.backend.sim.time_scale = 0.0           # hold the pressure where we put it
+        h.step(2)
+        h.ctl.request_auto_button("pump_to_rough")
+        h.step(); h.step()
+        s = h.step()
+        assert s.substate == want, f"{p_torr:.3g} Torr took the wrong branch"
+
+
+def test_overnight_below_2e_1_mbar_starts_neither_pump_nor_bypass(cfg):
+    """Below 2e-1 mBar Overnight Pump holds straight away: no primary, no bypass, no roughing."""
+    h = Harness(cfg, mode=Mode.AUTO)
+    h.backend.state.p_chamber = 0.1              # 0.1 Torr = 0.13 mBar -> below the skip threshold
+    h.backend.sim.time_scale = 0.0
+    h.step(2)
+    h.ctl.request_auto_button("overnight_pump")
+    h.step()                                     # vent-valve confirmation
+    s = h.step()
+    assert s.current == S.OVERNIGHT_PUMP, "should skip Pumping to Rough entirely"
+    assert s.commands.primary is False
+    assert s.commands.valves["bypass"] is False
+    assert not any(s.commands.valves.values())
+    assert any("without roughing" in l for l in s.event_log)
+    # and it must stay that way, not drift into roughing a few frames later
+    for _ in range(50):
+        s = h.step()
+        assert s.commands.primary is False and s.commands.valves["bypass"] is False

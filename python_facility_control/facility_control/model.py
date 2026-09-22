@@ -208,6 +208,31 @@ class Commands:
                 and self.turbo_standby == other.turbo_standby)
 
 
+def primary_is_running(pump, inp: "Inputs", cmds: "Commands") -> bool:
+    """THE definition of "the primary pump is turning".  One place, used by the controller, the
+    Manual-mode interlocks, the hour meter, the panel and the CSV, so they cannot disagree.
+
+    In order of how much the facility actually knows:
+      1. a live drive-frequency reading -> above `running_above_hz` is real evidence of rotation;
+      2. a boolean run read-back        -> the VI's reed/contact feedback;
+      3. no feedback at all             -> the RUN RELAY being closed.  Not the demand: on a
+         two-relay pump the demand is set during the power-up gap, while the pump is definitely not
+         turning yet, and on a single-relay pump the two are the same thing (the VI's behaviour).
+
+    Rule 1 is gated on a reading actually being PRESENT, not on the profile having a frequency
+    block: the operator can switch the reader off (the sensor may not be connected), and the
+    backends then leave `primary_hz` at None, so the answer falls through to rule 2 or 3 instead of
+    reporting a pump that never runs.
+
+    `pump` is a PumpConfig; taken duck-typed so this module stays free of a config import.
+    """
+    if inp.primary_hz is not None and getattr(pump, "frequency", None) is not None:
+        return inp.primary_hz > pump.frequency.running_above_hz
+    if getattr(pump, "has_read", False):
+        return bool(inp.primary_read)
+    return bool(cmds.primary_run)
+
+
 @dataclass
 class TurboView:
     status: TurboStatus = TurboStatus.OFF
@@ -252,8 +277,10 @@ class Snapshot:
     hardware: str = "simulation"
     skip_primary_warm: bool = False
     compressor_bar: Optional[float] = None
-    primary_hz: Optional[float] = None     # drive frequency of the primary pump
-    primary_running: bool = False          # derived: frequency above running_above_hz (or the DI read-back)
+    primary_hz: Optional[float] = None     # drive frequency of the primary pump (None = reader off)
+    primary_running: bool = False          # derived: see model.primary_is_running
+    primary_frequency_available: bool = False  # the profile has a frequency block (the reader CAN be on)
+    primary_frequency_enabled: bool = False    # the reader is currently switched on
     primary_phase: str = ""                # '', 'powering', 'running', 'stopping' (two-relay pump)
     primary_phase_remaining_s: float = 0.0 # time left of the power->run / run->power-off gap
     hold_remaining_s: float = 0.0      # time left of a settle wait (blocking: loop frozen; else DECIDE held)

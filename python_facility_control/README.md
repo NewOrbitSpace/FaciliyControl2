@@ -128,7 +128,22 @@ feedback, pump/chiller feedback, turbo spin-up/down and gauge voltages through t
 The panel at the bottom injects faults (stuck valve, turbo error, chiller/primary fault, WRG fault, power
 cut; "compressor air low" only for a facility with a `compressor:` block) and sets the plant speed-up.
 
-## Primary pump: two relays and a frequency feedback (small chamber, 2026-09-14)
+## Primary pump: two relays (small chamber, 2026-09-14; revised 2026-09-21)
+
+> **The drive-frequency reader has an ON/OFF switch, and ships OFF (2026-09-21).**  Acquiring the
+> drive output on `Mod1/ai6` put noise on the other analog readings, so the operator decides whether
+> the sensor is connected: tick **"Pump frequency reader connected"** on the panel.  The switch is
+> live – the channel has its own single-channel DAQ task, so it is opened and closed without ever
+> touching the gauge task – and `frequency.enabled` in the profile sets the startup default.
+>
+> *Off* means the channel is **not acquired at all** (not merely ignored – that is the whole point),
+> so the pump has no feedback: "Primary Pump is On" means the run relay is closed, **error 5000
+> cannot fire** so a pump that fails to start is not detected, and the hour meter counts commanded
+> hours.  That is the same position `Main_V4.4.vi` was always in.  *On* restores real rotation
+> sensing, the spin-up check and a measured hour meter.
+>
+> **Current gaps: 15 s** from power to run, **5 minutes** from run off to power off.
+
 
 The small chamber's primary pump is no longer one command line with a reed read-back.  Mains power
 and the run command now go to **two separate relays**, and the pump reports its **drive frequency**
@@ -144,8 +159,12 @@ The old command line `Mod3/port0/line0` and the DI run read-back `Mod2/port0/lin
 
 Because the run relay does nothing on an unpowered pump, the controller **sequences** the two:
 
-* start: power on → `timings.primary_power_to_run_gap_s` (**5 s**) → run on
-* stop: run off → `timings.primary_run_to_power_off_gap_s` (**5 s**) → power off
+* start: power on → `timings.primary_power_to_run_gap_s` (**15 s**) → run on
+* stop: run off → `timings.primary_run_to_power_off_gap_s` (**5 min**) → power off
+
+The pump therefore keeps its mains power for five minutes after it is told to stop, while it coasts
+down.  The STOP button and program exit are the exception: the safe state drops **both** relays at
+once, without sequencing.
 
 The control loop keeps reading during those gaps – they sequence two relays, they are not
 cross-check settle windows – and the sequence also advances while a dialog is open.  Program exit
@@ -155,10 +174,18 @@ Auto mode, Manual mode and the operator still deal with a single pump: the state
 sets the *demand* (`Commands.primary`) and the controller expands it into the two lines, so
 `automode.py` and the VC100 profile are untouched.  On the diagram the pump is still one click.
 
-**"Running" now means really turning.**  The frequency above `frequency.running_above_hz` (5 Hz) is
-what drives the status colour, the Manual-mode interlocks (so a turbo can only start once the backing
-pump is actually spinning, not merely commanded) and the operating-hour meter.  While the pump is
-mid-sequence the panel says "Primary Pump powering up (5 s)" and the symbol is blue.
+**What "running" means.**  There is one definition, `model.primary_is_running`, shared by the
+controller, the Manual-mode interlocks, the hour meter, the panel and the CSV so they cannot
+disagree: the drive frequency above `running_above_hz` **when a reading is actually present**, else
+the boolean run read-back, else **the run relay being closed**.  Note it keys off the reading, not
+off the profile having a frequency block – that is what lets the reader be switched off mid-run
+without the pump appearing to stop.  The last of those is deliberately not
+"the demand": the demand is set during the power-up gap while the pump is definitely not turning.
+While the pump is mid-sequence the panel says "Primary Pump powering up (15 s)" / "powering down
+(300 s)" and the symbol is blue.
+
+The operating-hour meter is shown in two places – beside the pump on the diagram ("Total run hours")
+and in the mode panel – and persists in `logs/run_hours_<facility>.json` across restarts.
 
 **New fault indication.**  `cross_check` is now meaningful on this chamber: if the run relay is
 closed and the frequency stays below the running threshold for `timings.primary_spinup_timeout_s`
