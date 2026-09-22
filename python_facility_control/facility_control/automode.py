@@ -69,6 +69,7 @@ class AutoMemory:
     below_threshold: ElapsedTimer = field(default_factory=lambda: ElapsedTimer(30.0))
     below_prev: Optional[bool] = None
     disengage: ElapsedTimer = field(default_factory=lambda: ElapsedTimer(1.0, auto_reset=True))
+    last_bypass_block: object = None             # log 'bypass held shut' once per state, not per loop
     vent: ElapsedTimer = field(default_factory=lambda: ElapsedTimer(600.0, auto_reset=True))
     last_error_log: str = ""
 
@@ -168,6 +169,17 @@ class AutoStateMachine:
     def _vent_id(self) -> Optional[str]:
         v = self.cfg.valves_of_kind("vent")
         return v[0].id if v else None
+
+    def _already_evacuated(self, inp: Inputs, turbo_on_threshold_torr: float) -> bool:
+        """Is the chamber already below the turbo-on threshold (and the gauge believable)?
+
+        Used to decide that a 'Pump to High Vac' pressed while the turbo is still spinning down does
+        not need roughing at all - the chamber never lost its vacuum, so starting the primary and
+        opening the bypass would only push foreline gas back into it."""
+        wrg = self._wrg(inp)
+        if math.isnan(wrg):
+            return False
+        return self.th.gauge_error_threshold_torr < wrg < turbo_on_threshold_torr
 
     def _any_turbo_valve_prev(self, prev: Commands) -> bool:
         return any(prev.valves.get(t.turbo_valve, False) for t in self._turbos())
@@ -536,6 +548,11 @@ class AutoStateMachine:
                 new_cur = off_or_slowing(spinning)
             if "pump_to_rough" in b or "pump_to_high_vac" in b:
                 new_cur = S.PUMPING_TO_ROUGH
+            # ...unless the chamber never lost its vacuum (2026-09-22, same rule as Turbo slowing)
+            if "pump_to_high_vac" in b and self._already_evacuated(inp, a.turbo_on_threshold_torr):
+                new_cur, new_tgt = S.ENGAGE_TURBO, S.PUMPING_TO_HIGH_VAC
+                log.append(f"Chamber already at {torr_to('mbar', wrg):.1e} mBar – "
+                           f"re-engaging the turbo without roughing at {_ts()}")
             staying = new_cur == S.VENTING
             if staying:
                 self._spinning_turbo_valves(cmds, inp, prev, slow_pct, am.turbo_valve_gauge_rule)
@@ -549,6 +566,10 @@ class AutoStateMachine:
             tab = TabPage.TURBO_SLOWING
             back = "pump_to_high_vac" in b
             to_vent = "vent" in b and not back            # VC100 'Vent' on the Turbo slowing page
+            # already evacuated?  Then there is nothing to rough - go straight back to Engage Turbo
+            # (2026-09-22; the VIs always routed this button through Pumping to Rough, which starts
+            # the primary and opens the bypass even at high vacuum)
+            back_direct = back and self._already_evacuated(inp, a.turbo_on_threshold_torr)
             if bypass:
                 cmds.valves[bypass] = False
             if vent:
@@ -560,7 +581,15 @@ class AutoStateMachine:
             cmds.primary = True
             cmds.chiller = True
             self._set_motors(cmds, back)
-            if back:
+            if back_direct:
+                # chamber is already below the turbo-on threshold: keep the turbo valve open, spin
+                # the turbo back up and re-open the gate through Engage Turbo.  No roughing, no bypass.
+                self._set_turbo_valves(cmds, True)
+                cur, tgt = S.ENGAGE_TURBO, S.PUMPING_TO_HIGH_VAC
+                out_sub = 0
+                log.append(f"Chamber already at {torr_to('mbar', wrg):.1e} mBar – "
+                           f"re-engaging the turbo without roughing at {_ts()}")
+            elif back:
                 self._set_turbo_valves(cmds, False)
                 cur, tgt = S.PUMPING_TO_ROUGH, S.PUMPING_TO_HIGH_VAC
             elif to_vent:
@@ -584,6 +613,50 @@ class AutoStateMachine:
         if am.standby_when_gate_closed:
             for t in self._turbos():
                 cmds.turbo_standby[t.id] = bool(cmds.turbo_motor.get(t.id, False)) and not cmds.valves.get(t.gate_valve, False)
+
+        # --- global protection: never strand a spinning turbo (2026-09-22)
+        # A turbo that is turning must keep a path to the backing pump.  The VIs' own state logic can
+        # close a turbo valve on a spinning turbo - pressing 'Pump to High Vac' during Turbo slowing
+        # closes it AND restarts the motor (Main_V4.4 frame 7: TURBO_VALVE_CMD := NOT(button),
+        # TURBO_MOTOR_CMD := button), leaving the rotor compressing into a dead volume with the gate
+        # shut too.  Leaving Venting has the same shape.  Rather than patch each button, the rule is
+        # enforced here for every state: if the turbo is spinning or commanded to run, its valve
+        # stays open.  Manual mode has always refused this (interlocks.Interlocks.valve, "closing
+        # while turbo runs would trap it"); Auto now refuses it as well.
+        for t in self._turbos():
+            if cmds.valves.get(t.turbo_valve, False):
+                continue
+            # the same "still spinning" threshold the state machine itself uses (slowing_pct, 15 %),
+            # so Facility Off is never reached with a valve this rule is holding open
+            spinning = self._spinning(inp, t, slow_pct)
+            if spinning or cmds.turbo_motor.get(t.id, False):
+                cmds.valves[t.turbo_valve] = True
+                who = "turbo" if len(cfg.turbos) == 1 else t.label.lower()
+                if not prev.valves.get(t.turbo_valve, False):
+                    log.append(f"Kept the {who} valve open - the {who} is still spinning at {_ts()}")
+
+        # --- global protection: never backfill the chamber through the bypass (2026-09-22)
+        # The bypass joins the chamber to the foreline.  Opening it when the chamber is already
+        # BELOW the foreline pushes foreline gas back into the chamber instead of pumping it out -
+        # seen at 1e-4 mBar after a 'Pump to High Vac' pressed during Turbo slowing, which routed
+        # into Pumping to Rough and started a roughing cycle the chamber did not need.  Engage Turbo
+        # keeps the bypass open in its first substates for the same reason it was open during
+        # roughing, so this only ever blocks OPENING it: a bypass that is already open is never
+        # forced shut, and a normal pump-down from atmosphere is untouched.
+        for v in cfg.valves_of_kind("bypass"):
+            if not cmds.valves.get(v.id, False) or prev.valves.get(v.id, False):
+                self.mem.last_bypass_block = None
+                continue
+            fore = self._foreline(inp)
+            if (not math.isnan(fore) and not math.isnan(wrg)
+                    and wrg > th.gauge_error_threshold_torr and wrg < fore):
+                cmds.valves[v.id] = False
+                if self.mem.last_bypass_block != cur:
+                    self.mem.last_bypass_block = cur
+                    log.append(f"{v.label} held shut – chamber {torr_to('mbar', wrg):.1e} mBar is below "
+                               f"the foreline {torr_to('mbar', fore):.1e} mBar at {_ts()}")
+            else:
+                self.mem.last_bypass_block = None
 
         # --- global protection: high-pressure turbo shut-off (turbo gauge >= 5 Torr / 5 mBar)
         for t in self._turbos():

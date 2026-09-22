@@ -122,6 +122,8 @@ An un-rectified fault re-appears next iteration.
 
 ### Initialize (first iteration)
 All commands False. Two-button dialog "Select Control Mode" [Auto | Admin] → MODE.
+*(Port deviation 2026-09-22: the dialog offers [Auto | **Manual**] instead — Admin has no interlocks
+and is not a safe default to land in; it stays available from the panel's Admin Mode button.)*
 CURRENT := Facility Off, TARGET := Facility Off, SUBSTATE 0.
 
 ### Admin (no interlocks)
@@ -209,6 +211,15 @@ then 0 (Facility Off). Button Pump to High Vac 2 → TM on, TV off, VV off, cur 
 
 **Global turbo protection (all Auto states):** if TM would be on and "Turbo Convectron" ≥ 5 Torr → TM := off and
 log "High pressure turbo shuttoff triggered at hh:mm:ss".
+
+> **Two VI behaviours the port deliberately overrides (2026-09-22).**  Frame 7 above sets
+> `TURBO_VALVE_CMD := NOT(Pump to High Vac 2)` and `TURBO_MOTOR_CMD := Pump to High Vac 2`, i.e.
+> pressing that button restarts the turbo **and closes its turbo valve**, with the gate already
+> shut — the rotor then re-accelerates isolated.  It also sets CURRENT := 1, so the chamber is
+> roughed (bypass opened) even when it never lost its vacuum.  The port adds two global rules: a
+> turning turbo always keeps its valve, and the bypass is never opened into a chamber below the
+> foreline; plus the button re-engages directly when the chamber is already below the turbo-on
+> threshold.  See the README section "Auto-mode plant-safety rules".
 
 ### Command execution (frame 4)
 DO writes: primary, [TV,BP,VV,GV], chiller, turbo (mode dependent; HP700 ack = 1 s pulse and the

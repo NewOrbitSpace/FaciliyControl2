@@ -665,12 +665,16 @@ class Controller:
         self.substate = 0
         self.tab = TabPage.FACILITY_OFF
 
+        # Start-up choice: Auto or Manual (2026-09-22).  The VI offered Auto or Admin, but Admin has
+        # no interlocks at all, so it is the wrong thing to land in by default - Manual gives the
+        # same click-a-device control with the interlocks applied.  Admin stays one click away on
+        # the panel for bring-up and for recovering the facility by hand.
         def apply(result, _cmds):
             want_auto = result == 0
-            self.mode = Mode.AUTO if want_auto else Mode.ADMIN
-            self._log(("Auto" if want_auto else "Admin") + " Control Mode selected")
+            self.mode = Mode.AUTO if want_auto else Mode.MANUAL
+            self._log(("Auto" if want_auto else "Manual (interlocked)") + " Control Mode selected")
 
-        self._open_dialog("two", "Select Control Mode", ["Auto", "Admin"], apply, "Select Control Mode")
+        self._open_dialog("two", "Select Control Mode", ["Auto", "Manual"], apply, "Select Control Mode")
         return cmds
 
     def _decide_manual_or_admin(self, new: Commands, inp: Inputs, reqs: List[Request]) -> Commands:

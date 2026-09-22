@@ -165,11 +165,15 @@ def test_shutdown_spins_down_with_gates_closed_and_standby_rule(vh):
     s, _ = vh.run_until(lambda s: s.current == S.TURBO_SLOWING, 500)
     s = vh.step()
     assert s.commands.primary and s.commands.chiller and not s.commands.valves["vent"]
-    # 'Pump to High Vac' while slowing: motors back on with the gates closed -> Standby line set (VC100 rule)
+    # 'Pump to High Vac' while slowing: motors back on with the gates closed -> Standby line set
+    # (VC100 rule).  Since 2026-09-22 this no longer routes through Pumping to Rough when the
+    # chamber is still evacuated - it re-engages the turbos directly, and their valves stay open.
     vh.ctl.request_auto_button("pump_to_high_vac")
     s = vh.step(2)                                            # vent-valve question, then the button
-    assert s.current == S.PUMPING_TO_ROUGH and s.target == S.PUMPING_TO_HIGH_VAC
+    assert s.current == S.ENGAGE_TURBO and s.target == S.PUMPING_TO_HIGH_VAC
     assert all(s.commands.turbo_motor.values()) and all(s.commands.turbo_standby.values())
+    assert all(s.commands.valves[f"turbo{i}_valve"] for i in (1, 2, 3)), \
+        "a spinning turbo must never be isolated from its backing pump"
     s, _ = vh.run_until(lambda s: s.current == S.PUMPING_TO_HIGH_VAC, 20000)
     assert not any(s.commands.turbo_standby.values())               # gates open again
 

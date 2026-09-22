@@ -34,7 +34,7 @@ run.bat                        # creates .venv on first use, then starts the GUI
 run.bat --sim --time-scale 20  # simulated plant running 20x faster (nice for a demo)
 run.bat --daq                  # insist on the real cDAQ (needs NI-DAQmx + `pip install nidaqmx`)
 run.bat --units mbar           # start with mBar
-run.bat --mode admin           # skip the "Select Control Mode" dialog
+run.bat --mode admin           # skip the "Select Control Mode" dialog (Auto | Manual | Admin)
 run.bat --non-blocking         # keep reading during settle waits (experimental, see below)
 run.bat --headless 60          # no GUI, print the state for 60 s (service / smoke test)
 ```
@@ -80,6 +80,8 @@ readings freeze.  Kept for later – the default follows the VI.
   slowing → Facility Off; plus Overnight Pump (timed start).  Any error (5000–5010) → everything off
   ("Shutt down due to error").  Turbo forced off if its gauge reads ≥ 5 Torr.
 * *Admin* – no interlocks; click a valve/pump/turbo on the diagram, confirm the Yes/No dialog.
+  Not offered at start-up (the dialog asks Auto or Manual); reached from the panel's Admin Mode
+  button when you need it for bring-up or to recover the facility by hand.
   **Auto Mode** button = state recognition (Facility off / Pumping to Rough / Venting / Pumping to
   High Vac) with the "Go to State …?" confirmation, otherwise "Target State Not Recognised!".
 * *Manual* – the mode the VI planned but never finished: manual commands checked against interlocks
@@ -211,6 +213,43 @@ per-turbo `speed_sample_rate_hz` / `speed_samples` settings finally take effect.
 
 If you add another fast or high-impedance analog signal, give it its own task the same way rather
 than appending it to the gauge scan.
+
+## Auto-mode plant-safety rules (2026-09-22) — deliberate deviation from the VIs
+
+An incident on the small chamber: at ~2e-5 mBar in Pumping to High Vac, **Shutdown** was pressed
+(gate closed, turbo spinning down, as expected), then **Pump to High Vac** while it was still
+slowing.  The VI's own logic — faithfully ported — restarted the motor, **closed the turbo valve**
+and left the gate shut, so the rotor re-accelerated to full speed compressing into a dead volume;
+it then routed into Pumping to Rough, which started the primary and **opened the bypass** into a
+chamber at 1e-4 mBar, pushing foreline gas back in.  The operator had to switch to Admin.
+
+Straight from `Main_V4.4.vi`, frame *Turbo slowing* (`docs/Main_V4.4.semantic.lvnet`):
+
+```
+AUTO.TURBO_VALVE_CMD = Select(f="True",  sel=Pump to High Vac 2, t="False")   -> valve CLOSED
+AUTO.TURBO_MOTOR_CMD = Select(f="False", sel=Pump to High Vac 2, t="True")    -> motor ON
+AUTO.GATE_CMD        = "False"
+AUTO.CURRENT_STATE   = 1 (Pumping to Rough)
+```
+
+So this was a latent LabVIEW bug, not one the port introduced — and the same shape exists on the way
+out of *Venting* and on the VC100 profile.  Three rules now prevent it.  Two are enforced **globally**
+at the end of `AutoStateMachine.step()`, next to the existing high-pressure turbo shut-off, rather
+than per button, because the hazard is a property of the plant and not of any one state:
+
+* **A spinning turbo never loses its turbo valve.**  If a turbo is turning (above
+  `turbo_slowing_threshold_pct`, the same test the state machine uses) or is commanded to run, its
+  valve is held open whatever the state logic asked for.  Manual mode always refused this
+  (`interlocks.py`, "closing while turbo runs would trap it"); Auto now refuses it too.
+* **The bypass never opens into a chamber below the foreline.**  Opening it there backfills the
+  chamber instead of pumping it.  This blocks *opening* only — a bypass that is already open is
+  never forced shut, so an ordinary pump-down from atmosphere is untouched.
+* **Pump to High Vac during Turbo slowing / Venting skips roughing when the chamber is still
+  evacuated** (below the turbo-on threshold): it goes straight to Engage Turbo, keeping the turbo
+  valve open and re-opening the gate, instead of running a roughing cycle the chamber does not need.
+
+`tests/test_spinning_turbo_safety.py` replays the incident end to end and sweeps the whole spin-down
+asserting the valve is never shut on a turning rotor, on both chamber profiles.
 
 ## Changes requested by the test engineer (2026-09-08)
 

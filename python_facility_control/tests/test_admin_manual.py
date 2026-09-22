@@ -158,3 +158,28 @@ def test_manual_mode_interlocks(cfg):
     # primary cannot stop while the turbo runs
     h.ctl.request_user_cmd("primary"); s = h.step()
     assert h.dialogs.log[-1] == ("info", "Please Turn Turbo Off First") and s.commands.primary
+
+
+def test_startup_dialog_offers_auto_or_manual(cfg):
+    """The start-up choice is Auto / Manual, not Auto / Admin (2026-09-22).
+
+    Admin has no interlocks, so it is not somewhere to land by default; it stays reachable from the
+    panel's Admin Mode button for bring-up and hand recovery."""
+    from facility_control.controller import AutoAnswerDialogs, Controller
+    from facility_control.hal.sim_backend import SimBackend
+
+    for answer, want in ((0, Mode.AUTO), (1, Mode.MANUAL)):
+        b = SimBackend(cfg)
+        d = AutoAnswerDialogs()
+        d.answers.put(answer)
+        ctl = Controller(cfg, b, dialogs=d, sleep=lambda s: None)   # no initial_mode -> INITIALIZE
+        b.open()
+        ctl.iterate()
+        ctl.iterate()
+        kinds = [m for _k, m in d.log]
+        assert "Select Control Mode" in kinds
+        assert ctl.mode is want, f"button {answer} should select {want.name}, got {ctl.mode.name}"
+    # and Admin is still reachable afterwards
+    ctl.request_admin_mode()
+    ctl.iterate()
+    assert ctl.mode is Mode.ADMIN
