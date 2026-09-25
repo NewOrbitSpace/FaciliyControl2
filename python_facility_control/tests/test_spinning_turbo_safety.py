@@ -165,3 +165,80 @@ def test_the_same_rules_hold_on_the_vc100():
     s = h.step(2)
     for t in spinning:
         assert s.commands.valves[t.turbo_valve], f"{t.label} was isolated while spinning"
+
+
+# --------------------------------------------------------------------------- 2026-09-23 incident
+# Overnight Pump was pressed from high vacuum.  Main_V4.4's Overnight frame runs all_off(), so the
+# primary pump stopped while the turbo was still at ~99 %.  The turbo valve rule added on 2026-09-22
+# then held that valve OPEN onto a foreline with nothing pumping it, so the foreline backfilled
+# towards atmosphere and dragged the turbo body up with it (~27 mBar) until the drive tripped
+# (error 5007).  Holding a turbo valve open is only protective if something is actually backing it:
+# the rule now keeps the primary running too, and the profile enables the VC100's overnight-backing
+# behaviour so the state expresses the intent itself.
+def test_overnight_keeps_backing_until_the_turbo_has_slowed(cfg):
+    h = Harness(cfg, mode=Mode.AUTO)
+    _to_high_vac(h)
+    h.ctl.request_set_engage_time(h.ctl.clock() + 1e6)      # far out: we only care about the spin-down
+    h.ctl.request_auto_button("overnight_pump")
+    h.step(3)
+    h.run_until(lambda s: s.current == S.OVERNIGHT_PUMP, 40000)
+    h.backend.sim.time_scale = 25.0                          # slow the plant so the spin-down is real
+
+    saw_spinning = False
+    for _ in range(60000):
+        s = h.step()
+        spd = h.ctl._turbo_views["turbo1"].speed_pct
+        fore = h.ctl.inputs.pressures_torr["conv2"]
+        body = h.ctl.inputs.pressures_torr["conv1"]
+        if spd > cfg.thresholds.slowing_pct:
+            saw_spinning = True
+            assert s.commands.primary, f"primary stopped with the turbo still at {spd:.0f} %"
+            assert s.commands.valves["turbo_valve"], f"turbo isolated at {spd:.0f} %"
+            assert fore < 1.0, f"foreline backfilled to {torr_to('mbar', fore):.1e} mBar at {spd:.0f} %"
+            assert body < 1.0, f"turbo body reached {torr_to('mbar', body):.1e} mBar at {spd:.0f} %"
+        assert not s.error.status, f"{s.error.code}: {s.error.source}"
+        if spd <= cfg.thresholds.turbo_slow_speed_pct:
+            break
+    assert saw_spinning
+    # ...and once it really has stopped, Overnight is a cold hold: everything off
+    s, _ = h.run_until(lambda s: not s.commands.primary, 20000)
+    assert not any(s.commands.valves.values()) and not s.commands.chiller
+
+
+def test_a_turbo_valve_is_never_held_open_onto_a_dead_foreline(cfg):
+    """The half-rule that caused the 5007 trip: open valve + primary off is worse than isolating."""
+    h = Harness(cfg, mode=Mode.AUTO)
+    _to_high_vac(h)
+    h.ctl.request_set_engage_time(h.ctl.clock() + 1e6)
+    h.ctl.request_auto_button("overnight_pump")
+    h.step(3)
+    h.backend.sim.time_scale = 25.0
+    for _ in range(60000):
+        s = h.step()
+        if s.commands.valves["turbo_valve"]:
+            assert s.commands.primary, \
+                "a turbo valve was held open with no backing pump running"
+        if h.ctl._turbo_views["turbo1"].speed_pct <= cfg.thresholds.turbo_slow_speed_pct:
+            break
+
+
+def test_overnight_then_timestamp_restarts_cleanly(cfg):
+    """The second half of the report: when the engage time arrives the facility must come back up
+    without ever exposing the turbo to a backfilled foreline."""
+    h = Harness(cfg, mode=Mode.AUTO)
+    _to_high_vac(h)
+    h.ctl.request_set_engage_time(h.ctl.clock() + 400.0)
+    h.ctl.request_auto_button("overnight_pump")
+    h.step(3)
+    s, _ = h.run_until(lambda s: s.current != S.OVERNIGHT_PUMP, 200000)
+    for _ in range(200000):
+        s = h.step()
+        body = h.ctl.inputs.pressures_torr["conv1"]
+        spd = h.ctl._turbo_views["turbo1"].speed_pct
+        if spd > cfg.thresholds.slowing_pct:
+            assert body < cfg.thresholds.turbo_high_pressure_shutoff_torr, \
+                f"turbo at {spd:.0f} % saw {torr_to('mbar', body):.1e} mBar"
+        assert not s.error.status, f"{s.error.code}: {s.error.source}"
+        if s.current == S.PUMPING_TO_HIGH_VAC and spd > 95:
+            break
+    assert s.commands.valves["gate"] and s.commands.valves["turbo_valve"]

@@ -23,6 +23,7 @@ resolved later (Qt), or immediately (tests / headless).
 """
 from __future__ import annotations
 
+import math
 import queue
 import threading
 import time
@@ -831,13 +832,31 @@ class Controller:
                     self._enter_auto(cur, tgt, name, cmds)
             self._open_dialog("two", f'Go to State: \n"{name}"?', ["Yes", "No"], apply)
 
+    def _needs_vent_confirmation(self) -> bool:
+        """Is "Is the manual vent valve closed?" worth asking right now?
+
+        The manual vent valve is a hand valve with no DAQ line, so the only way to know is to ask the
+        operator - but the question only tells us anything near atmosphere.  Below
+        `thresholds.vent_confirm_above_torr` (5e2 mBar) the chamber is plainly already pumped down,
+        which is itself proof the hand valve is shut, so the dialog is skipped.  An unreadable or
+        implausible gauge always asks, because then we know nothing."""
+        limit = self.cfg.thresholds.vent_confirm_above_torr
+        if limit is None:
+            return True
+        wrg = self.inputs.pressure(self.cfg.main_gauge.id)
+        if math.isnan(wrg) or wrg <= self.cfg.thresholds.gauge_error_threshold_torr:
+            return True
+        return wrg > limit
+
     def _decide_auto(self, new: Commands, inp: Inputs, reqs: List[Request]) -> Commands:
         # --- manual vent valve confirmation: a pump-down button is only passed to the state machine
         #     after the operator confirms the hand vent valve is closed (arg2 == "confirmed").
+        ask_vent = self._needs_vent_confirmation()
         gated: List[Request] = []
         kept: List[Request] = []
         for r in reqs:
-            if r.kind == "auto_button" and str(r.arg) in VENT_CONFIRM_BUTTONS and r.arg2 != "confirmed":
+            if (r.kind == "auto_button" and str(r.arg) in VENT_CONFIRM_BUTTONS
+                    and r.arg2 != "confirmed" and ask_vent):
                 gated.append(r)
             else:
                 kept.append(r)

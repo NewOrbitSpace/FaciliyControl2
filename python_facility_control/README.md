@@ -237,10 +237,14 @@ out of *Venting* and on the VC100 profile.  Three rules now prevent it.  Two are
 at the end of `AutoStateMachine.step()`, next to the existing high-pressure turbo shut-off, rather
 than per button, because the hazard is a property of the plant and not of any one state:
 
-* **A spinning turbo never loses its turbo valve.**  If a turbo is turning (above
+* **A spinning turbo keeps its valve open *and* the primary running.**  If a turbo is turning (above
   `turbo_slowing_threshold_pct`, the same test the state machine uses) or is commanded to run, its
-  valve is held open whatever the state logic asked for.  Manual mode always refused this
-  (`interlocks.py`, "closing while turbo runs would trap it"); Auto now refuses it too.
+  valve is held open and the primary pump is held on, whatever the state logic asked for.  Manual
+  mode always refused to close the valve (`interlocks.py`, "closing while turbo runs would trap it");
+  Auto now refuses it too.  **Both halves matter**: an open turbo valve with the primary stopped is
+  worse than an isolated turbo, because the foreline backfills towards atmosphere and takes the
+  turbo body with it — that is how the 2026-09-23 trip below happened.  Note this also keeps the
+  primary running through an error shutdown until the turbo has slowed.
 * **The bypass never opens into a chamber below the foreline.**  Opening it there backfills the
   chamber instead of pumping it.  This blocks *opening* only — a bypass that is already open is
   never forced shut, so an ordinary pump-down from atmosphere is untouched.
@@ -250,6 +254,27 @@ than per button, because the hazard is a property of the plant and not of any on
 
 `tests/test_spinning_turbo_safety.py` replays the incident end to end and sweeps the whole spin-down
 asserting the valve is never shut on a turning rotor, on both chamber profiles.
+
+## Overnight Pump keeps backing the turbo (2026-09-23)
+
+A second incident, and a direct consequence of the rule above being written as only half a rule.
+**Overnight Pump** was pressed from high vacuum.  `Main_V4.4.vi`'s Overnight frame switches
+*everything* off at once — including the primary pump — while the turbo is still near full speed;
+only the chiller stays on, above `overnight_chiller_speed_pct`.  The turbo-valve rule then held that
+valve open onto a foreline with nothing pumping it, so the foreline backfilled towards atmosphere
+(~5e+02 mBar) and dragged the turbo body up with it (~27 mBar) until the drive tripped — **error
+5007**, reproduced exactly in the simulator.
+
+Two changes:
+
+* the global rule now holds the **primary pump on** as well as the turbo valve open, so a turning
+  turbo is always genuinely backed rather than merely connected to something;
+* `auto_mode.overnight_backing_while_spinning: true` on the small-chamber profile — the behaviour the
+  **VC100 VI always had**: primary, chiller and the spinning turbo's valve stay on until the turbo is
+  below the slowing threshold, then everything goes off.
+
+Foreline now holds at ~4e-03 mBar through the whole spin-down instead of reaching atmosphere, and the
+turbo body at ~1e-03 mBar instead of 27 mBar.
 
 ## Changes requested by the test engineer (2026-09-08)
 
@@ -262,6 +287,11 @@ These deviate from the VI on purpose and are all driven by the facility profile:
   the pump immediately.
 * **"Is the manual vent valve closed?"** – Pump to Rough / Pump to High Vac / Overnight Pump ask this
   first and only run on *Yes* (the manual vent valve is a hand valve, not on the DAQ).
+  **Since 2026-09-23 it is only asked at or above `thresholds.vent_confirm_above_mbar` (5e2 mBar).**
+  Below that the chamber is plainly already pumped down, which is itself proof the hand valve is
+  shut, so the dialog would just be a click in the way.  An unreadable or implausible chamber gauge
+  always asks, because then the pressure tells us nothing.  Set the key to `null` to ask every time;
+  it is unset on the VC100 profile, which therefore still asks on every press.
 * **Overnight Pump below `thresholds.overnight_skip_below_torr` (2e-1 mBar)** skips roughing entirely:
   no primary pump, no bypass, straight into the overnight hold.
 * **Primary pump total operating hours** – a maintenance meter on the panel, counted from the pump's

@@ -52,7 +52,7 @@ def test_low_pressure_starts_primary_then_bypass_after_the_gap(cfg):
     h.backend.state.p_chamber = 10.0             # 10 Torr = 13 mBar -> low-pressure branch
     h.step(2)
     h.ctl.request_auto_button("pump_to_rough")
-    h.step()                                     # vent-valve confirmation
+    # no vent-valve question down here: below 5e2 mBar it is skipped (2026-09-23)
     h.step()                                     # Facility Off -> Pumping to Rough
     s = h.step()                                 # entry frame: pump on, bypass still closed
     assert s.substate == SUB_ROUGH_PRIMARY_GAP
@@ -162,8 +162,7 @@ def test_primary_first_then_bypass_below_5e1_mbar_for_every_button(cfg, button):
     h = Harness(cfg, mode=Mode.AUTO)
     h.backend.state.p_chamber = 10.0             # 10 Torr = 13 mBar -> below 5e1 mBar, above the skip
     h.step(2)
-    h.ctl.request_auto_button(button)
-    h.step()
+    h.ctl.request_auto_button(button)             # below 5e2 mBar: no vent-valve question
     h.step()
     s = h.step()                                 # entry frame: pump first, bypass still shut
     assert s.substate == SUB_ROUGH_PRIMARY_GAP, button
@@ -185,8 +184,8 @@ def test_the_threshold_really_is_5e1_mbar(cfg):
         h.backend.state.p_chamber = p_torr
         h.backend.sim.time_scale = 0.0           # hold the pressure where we put it
         h.step(2)
-        h.ctl.request_auto_button("pump_to_rough")
-        h.step(); h.step()
+        h.ctl.request_auto_button("pump_to_rough")   # both points are below 5e2 mBar: no question
+        h.step()
         s = h.step()
         assert s.substate == want, f"{p_torr:.3g} Torr took the wrong branch"
 
@@ -209,3 +208,66 @@ def test_overnight_below_2e_1_mbar_starts_neither_pump_nor_bypass(cfg):
     for _ in range(50):
         s = h.step()
         assert s.commands.primary is False and s.commands.valves["bypass"] is False
+
+
+# --------------------------------------------------------------------------- vent question, gated
+# (2026-09-23) "Is the manual vent valve closed?" is only worth asking near atmosphere.  Below
+# thresholds.vent_confirm_above_torr (5e2 mBar) the chamber is plainly already pumped down, which is
+# itself proof the hand valve is shut, so the dialog is skipped.
+def test_vent_question_is_asked_at_atmosphere(cfg):
+    h = Harness(cfg, mode=Mode.AUTO)
+    h.backend.state.p_chamber = cfg.simulation.atmosphere_torr
+    h.backend.sim.time_scale = 0.0
+    h.step(2)
+    h.ctl.request_auto_button("pump_to_high_vac")
+    h.step()
+    assert any(m == MANUAL_VENT_QUESTION for _k, m in h.dialogs.log)
+
+
+@pytest.mark.parametrize("mbar", [400.0, 1.0, 1e-3])
+def test_vent_question_is_skipped_once_pumped_down(cfg, mbar):
+    h = Harness(cfg, mode=Mode.AUTO)
+    h.backend.state.p_chamber = to_torr("mbar", mbar)
+    h.backend.sim.time_scale = 0.0
+    h.step(2)
+    before = len(h.dialogs.log)
+    h.ctl.request_auto_button("pump_to_rough")
+    s = h.step(2)
+    asked = [m for _k, m in h.dialogs.log[before:] if m == MANUAL_VENT_QUESTION]
+    assert not asked, f"asked about the hand vent valve at {mbar:g} mBar"
+    assert s.current == S.PUMPING_TO_ROUGH, "the button must act immediately instead"
+
+
+def test_vent_question_is_asked_either_side_of_the_threshold(cfg):
+    for mbar, want in ((550.0, True), (450.0, False)):
+        h = Harness(cfg, mode=Mode.AUTO)
+        h.backend.state.p_chamber = to_torr("mbar", mbar)
+        h.backend.sim.time_scale = 0.0
+        h.step(2)
+        h.ctl.request_auto_button("overnight_pump")
+        h.step()
+        asked = any(m == MANUAL_VENT_QUESTION for _k, m in h.dialogs.log)
+        assert asked is want, f"at {mbar:g} mBar the question should {'appear' if want else 'not appear'}"
+
+
+def test_an_unreadable_gauge_still_asks(cfg):
+    """If the chamber reading cannot be trusted we know nothing, so the question comes back."""
+    h = Harness(cfg, mode=Mode.AUTO)
+    h.step(2)
+    h.backend.set_fault("gauge_fault_wrg", True)
+    h.step(2)
+    before = len(h.dialogs.log)
+    h.ctl.request_auto_button("pump_to_high_vac")
+    h.step()
+    assert any(m == MANUAL_VENT_QUESTION for _k, m in h.dialogs.log[before:])
+
+
+def test_setting_the_threshold_to_null_always_asks(cfg):
+    cfg.thresholds.vent_confirm_above_torr = None
+    h = Harness(cfg, mode=Mode.AUTO)
+    h.backend.state.p_chamber = to_torr("mbar", 1e-3)
+    h.backend.sim.time_scale = 0.0
+    h.step(2)
+    h.ctl.request_auto_button("pump_to_high_vac")
+    h.step()
+    assert any(m == MANUAL_VENT_QUESTION for _k, m in h.dialogs.log)

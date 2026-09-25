@@ -152,6 +152,10 @@ thresholds:
   bypass_first_above_torr: 37.503084  # 5e1 mBar
   # Overnight Pump pressed below this pressure skips roughing (no primary pump, no bypass)
   overnight_skip_below_torr: 0.150012 # 2e-1 mBar
+  # "Is the manual vent valve closed?" is only asked at or above this chamber pressure (2026-09-23).
+  # Below it the chamber is plainly already pumped down, which is itself proof the hand valve is
+  # shut.  Set to null to ask every time, whatever the pressure.
+  vent_confirm_above_mbar: 5.0e2
 
 timings:
   primary_warmup_s: 60.0        # Pumping to Rough substate 1 (in the VI OR-ed with TRUE -> effectively skipped)
@@ -176,6 +180,14 @@ timings:
   # false = readings, plots and error monitoring continue during the waits; only the decision step
   #         waits and a moving device is not cross-checked until its settle time is over.
   blocking_waits: true
+
+auto_mode:
+  # Overnight Pump: keep the primary pump and chiller running, and the spinning turbo's valve open,
+  # until the turbo has slowed below the slowing threshold - then everything off (2026-09-23).
+  # Main_V4.4.vi switched the primary off at once, with the turbo still near full speed; the foreline
+  # then backfilled towards atmosphere and the turbo tripped on its own inlet pressure (error 5007).
+  # The VC100 VI always did it this way; the small chamber now does too.
+  overnight_backing_while_spinning: true
 
 logging:
   csv_enabled: true             # VC100 feature (Main_V4.4 has no file logging)

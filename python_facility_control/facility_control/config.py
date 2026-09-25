@@ -166,6 +166,12 @@ class Thresholds:
     bypass_first_above_torr: Optional[float] = 37.503084   # = 5e1 mBar
     # Pressing Overnight Pump below this pressure skips roughing entirely (no primary, no bypass).
     overnight_skip_below_torr: Optional[float] = 0.150012   # = 2e-1 mBar; None = never skip
+    # "Is the manual vent valve closed?" is only worth asking near atmosphere: below this chamber
+    # pressure the chamber is plainly already pumped down, so the hand valve must be shut and the
+    # question is just a click in the way.  Default None = always ask (the 2026-09-08 behaviour), so
+    # a facility opts in from its own profile rather than having its prompts change underneath it;
+    # the small chamber sets 5e2 mBar.
+    vent_confirm_above_torr: Optional[float] = None
 
     @property
     def slowing_pct(self) -> float:
@@ -178,7 +184,7 @@ class Thresholds:
 # YAML keys of Thresholds that may be given in mBar instead of Torr: `<name>_mbar` replaces `<name>_torr`
 _TORR_KEYS = ("turbo_on_threshold", "gauge_error_threshold", "wrg_error_threshold", "turbo_high_pressure_shutoff",
               "manual_main_pressure_max", "manual_foreline_pressure_max", "bypass_first_above",
-              "overnight_skip_below", "engage_check_threshold")
+              "overnight_skip_below", "engage_check_threshold", "vent_confirm_above")
 
 
 @dataclass

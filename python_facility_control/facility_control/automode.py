@@ -623,17 +623,29 @@ class AutoStateMachine:
         # enforced here for every state: if the turbo is spinning or commanded to run, its valve
         # stays open.  Manual mode has always refused this (interlocks.Interlocks.valve, "closing
         # while turbo runs would trap it"); Auto now refuses it as well.
+        # NB this is *two* commands, not one.  Holding the turbo valve open only helps if there is a
+        # working backing pump behind it: with the primary OFF the open valve exposes the rotor to a
+        # foreline that is backfilling towards atmosphere, which is worse than isolating it.  That is
+        # exactly what happened on 2026-09-23 (Overnight Pump switches the primary off while the
+        # turbo is still at ~99 %; the turbo body reached ~27 mBar and the drive tripped, error 5007).
+        # So the rule is: while a turbo is turning, its valve stays open AND the primary keeps running.
+        needs_backing = False
         for t in self._turbos():
-            if cmds.valves.get(t.turbo_valve, False):
-                continue
             # the same "still spinning" threshold the state machine itself uses (slowing_pct, 15 %),
             # so Facility Off is never reached with a valve this rule is holding open
             spinning = self._spinning(inp, t, slow_pct)
-            if spinning or cmds.turbo_motor.get(t.id, False):
+            if not (spinning or cmds.turbo_motor.get(t.id, False)):
+                continue
+            needs_backing = True
+            if not cmds.valves.get(t.turbo_valve, False):
                 cmds.valves[t.turbo_valve] = True
                 who = "turbo" if len(cfg.turbos) == 1 else t.label.lower()
                 if not prev.valves.get(t.turbo_valve, False):
                     log.append(f"Kept the {who} valve open - the {who} is still spinning at {_ts()}")
+        if needs_backing and not cmds.primary:
+            cmds.primary = True
+            if not prev.primary:
+                log.append(f"Kept the primary pump running - a turbo is still spinning at {_ts()}")
 
         # --- global protection: never backfill the chamber through the bypass (2026-09-22)
         # The bypass joins the chamber to the foreline.  Opening it when the chamber is already

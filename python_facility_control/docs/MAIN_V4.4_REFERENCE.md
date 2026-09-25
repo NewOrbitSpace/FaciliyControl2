@@ -181,6 +181,10 @@ Shut Off → cur 0; Vent 2 → cur 8, tgt 8, BP off. Buttons: Overnight Pump 3 �
 tgt 1; Pump to High → tgt 4. Leaving the state resets SUBSTATE to 0 and Skip Primary Warm. TAB 1.
 
 **2 Overnight Pump** — everything off (PP off, valves closed, TM off), CH = speed > 10 %.
+*(Port deviation 2026-09-23: switching the primary off with the turbo still near full speed let the
+foreline backfill to atmosphere and tripped the turbo, error 5007.  The profile now sets
+`auto_mode.overnight_backing_while_spinning: true` — the VC100 VI's behaviour — so PP, CH and the
+spinning turbo's valve stay on until it has slowed below the slowing threshold.)*
 When now > "Turbo Engage time" (timestamp control) → cur 1, tgt 4, log "Timestamp reached, turning on
 pumps at …". Buttons: Vent 4 → cur 8/tgt 8; Pump to Rough 3 → cur 1/tgt 1; Pump to High Vac 3 → cur 1/tgt 4. TAB 3.
 
