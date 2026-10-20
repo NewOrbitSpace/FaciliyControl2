@@ -13,7 +13,12 @@ from tests.conftest import Harness
 def test_config_channel_map_is_the_vi_map(cfg):
     assert cfg.phys(cfg.valves["bypass"].cmd) == "cDAQ1Mod4/port0/line1"
     assert cfg.phys(cfg.valves["gate"].read) == "cDAQ1Mod2/port0/line5"
-    assert cfg.phys(cfg.primary.cmd) == "cDAQ1Mod3/port0/line0"
+    # two-relay primary pump (hardware change 2026-09-14); its frequency feedback is suppressed
+    # (2026-09-21) so the pump has no feedback channel at all
+    assert cfg.phys(cfg.primary.power_cmd) == "cDAQ1Mod3/port0/line6"
+    assert cfg.phys(cfg.primary.run_cmd) == "cDAQ1Mod3/port0/line7"
+    assert cfg.primary.frequency.channel == "Mod1/ai6" and not cfg.primary.frequency.enabled
+    assert not cfg.primary.has_read
     assert cfg.phys(cfg.main_gauge.channel) == "cDAQ1Mod1/ai5"
     t = cfg.turbo("turbo1")
     assert t.control_mode == "bigred_dsub15"
@@ -36,7 +41,7 @@ def test_three_turbo_profile_loads_and_recognises_states():
     assert len(cfg.turbos) == 3 and len(cfg.valves) == 8
     h = Harness(cfg, mode=Mode.ADMIN)
     c = Commands.all_off(cfg.valve_ids, cfg.turbo_ids)
-    c.primary = True
+    c.set_primary(True)
     for t in cfg.turbos:
         c.valves[t.turbo_valve] = True
         c.valves[t.gate_valve] = True
@@ -47,7 +52,8 @@ def test_simulator_pumps_down_and_vents(cfg):
     b = SimBackend(cfg)
     b.open()
     c = Commands.all_off(cfg.valve_ids, cfg.turbo_ids)
-    c.primary = c.chiller = True
+    c.set_primary(True)
+    c.chiller = True
     c.valves["bypass"] = True
     b.write(c)
     b.advance(600)

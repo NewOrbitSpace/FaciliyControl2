@@ -165,11 +165,15 @@ def test_shutdown_spins_down_with_gates_closed_and_standby_rule(vh):
     s, _ = vh.run_until(lambda s: s.current == S.TURBO_SLOWING, 500)
     s = vh.step()
     assert s.commands.primary and s.commands.chiller and not s.commands.valves["vent"]
-    # 'Pump to High Vac' while slowing: motors back on with the gates closed -> Standby line set (VC100 rule)
+    # 'Pump to High Vac' while slowing: motors back on with the gates closed -> Standby line set
+    # (VC100 rule).  Since 2026-09-22 this no longer routes through Pumping to Rough when the
+    # chamber is still evacuated - it re-engages the turbos directly, and their valves stay open.
     vh.ctl.request_auto_button("pump_to_high_vac")
     s = vh.step(2)                                            # vent-valve question, then the button
-    assert s.current == S.PUMPING_TO_ROUGH and s.target == S.PUMPING_TO_HIGH_VAC
+    assert s.current == S.ENGAGE_TURBO and s.target == S.PUMPING_TO_HIGH_VAC
     assert all(s.commands.turbo_motor.values()) and all(s.commands.turbo_standby.values())
+    assert all(s.commands.valves[f"turbo{i}_valve"] for i in (1, 2, 3)), \
+        "a spinning turbo must never be isolated from its backing pump"
     s, _ = vh.run_until(lambda s: s.current == S.PUMPING_TO_HIGH_VAC, 20000)
     assert not any(s.commands.turbo_standby.values())               # gates open again
 
@@ -361,12 +365,19 @@ def test_vc100_daq_tasks(vcfg, fake_daq):
     assert t["primary_cmd"].channels[0].phys == "cDAQ3Mod4/port0/line0" and t["primary_read"].channels[0].phys == "cDAQ3Mod2/port0/line8"
     assert t["chiller_cmd"].channels[0].phys == "cDAQ3Mod4/port0/line1" and t["chiller_read"].channels[0].phys == "cDAQ3Mod2/port0/line9"
     ai = t["analog_in"]
+    # gauges + compressor only; each turbo speed now has its own single-channel task, as the VIs do
     assert [c.phys for c in ai.channels] == ["cDAQ3Mod8/ai0", "cDAQ3Mod8/ai1", "cDAQ3Mod8/ai2", "cDAQ3Mod8/ai3",
-                                             "cDAQ3Mod8/ai4", "cDAQ3Mod8/ai7", "cDAQ3Mod8/ai5", "cDAQ3Mod8/ai6"]
+                                             "cDAQ3Mod8/ai4", "cDAQ3Mod8/ai7"]
+    assert [c.phys for c in t["turbo2_speed_ai"].channels] == ["cDAQ3Mod8/ai5"]
+    assert [c.phys for c in t["turbo3_speed_ai"].channels] == ["cDAQ3Mod8/ai6"]
+    assert "turbo1_speed_ai" not in t                    # Shimadzu contact interface: no speed signal
     assert ai.timing.cfg == (1000.0, "finite", 25)
     from nidaqmx.constants import TerminalConfiguration
     assert all(c.kw["terminal_config"] == TerminalConfiguration.DIFF for c in ai.channels)
-    assert ai.channels[6].kw["min_val"] == -10.0 and ai.channels[7].kw["max_val"] == 10.0      # speeds ±10 V
+    assert all(c.kw["terminal_config"] == TerminalConfiguration.DIFF
+               for k in ("turbo2_speed_ai", "turbo3_speed_ai") for c in t[k].channels)
+    assert t["turbo2_speed_ai"].channels[0].kw["min_val"] == -10.0                             # speeds ±10 V
+    assert t["turbo3_speed_ai"].channels[0].kw["max_val"] == 10.0
     assert ai.channels[0].kw["min_val"] == 0.0 and ai.channels[0].kw["max_val"] == 10.0        # gauges 0..10 V
     assert [c.phys for c in t["turbo1_read"].channels] == [f"cDAQ3Mod2/port0/line{i}" for i in range(10, 16)]
     assert [c.phys for c in t["turbo1_cmd"].channels] == ["cDAQ3Mod3/port0/line0", "cDAQ3Mod3/port0/line1"]

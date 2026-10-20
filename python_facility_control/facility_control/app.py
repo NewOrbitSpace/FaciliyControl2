@@ -25,7 +25,7 @@ def parse_args(argv=None):
     ap.add_argument("--units", choices=["torr", "mbar"], default=None, help="pressure unit shown at start-up")
     ap.add_argument("--time-scale", type=float, default=None, help="simulation speed-up factor")
     ap.add_argument("--mode", choices=["ask", "auto", "admin", "manual"], default="ask",
-                    help="initial control mode ('ask' shows the Select Control Mode dialog like the VI)")
+                    help="initial control mode ('ask' shows the Select Control Mode dialog: Auto or Manual)")
     wt = ap.add_mutually_exclusive_group()
     wt.add_argument("--blocking-waits", dest="blocking", action="store_true", default=None,
                     help="freeze the loop for settle waits and dialogs like the VI (default: timings.blocking_waits in the YAML)")

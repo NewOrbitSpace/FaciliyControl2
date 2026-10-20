@@ -122,6 +122,8 @@ An un-rectified fault re-appears next iteration.
 
 ### Initialize (first iteration)
 All commands False. Two-button dialog "Select Control Mode" [Auto | Admin] → MODE.
+*(Port deviation 2026-09-22: the dialog offers [Auto | **Manual**] instead — Admin has no interlocks
+and is not a safe default to land in; it stays available from the panel's Admin Mode button.)*
 CURRENT := Facility Off, TARGET := Facility Off, SUBSTATE 0.
 
 ### Admin (no interlocks)
@@ -179,6 +181,10 @@ Shut Off → cur 0; Vent 2 → cur 8, tgt 8, BP off. Buttons: Overnight Pump 3 �
 tgt 1; Pump to High → tgt 4. Leaving the state resets SUBSTATE to 0 and Skip Primary Warm. TAB 1.
 
 **2 Overnight Pump** — everything off (PP off, valves closed, TM off), CH = speed > 10 %.
+*(Port deviation 2026-09-23: switching the primary off with the turbo still near full speed let the
+foreline backfill to atmosphere and tripped the turbo, error 5007.  The profile now sets
+`auto_mode.overnight_backing_while_spinning: true` — the VC100 VI's behaviour — so PP, CH and the
+spinning turbo's valve stay on until it has slowed below the slowing threshold.)*
 When now > "Turbo Engage time" (timestamp control) → cur 1, tgt 4, log "Timestamp reached, turning on
 pumps at …". Buttons: Vent 4 → cur 8/tgt 8; Pump to Rough 3 → cur 1/tgt 1; Pump to High Vac 3 → cur 1/tgt 4. TAB 3.
 
@@ -210,6 +216,15 @@ then 0 (Facility Off). Button Pump to High Vac 2 → TM on, TV off, VV off, cur 
 **Global turbo protection (all Auto states):** if TM would be on and "Turbo Convectron" ≥ 5 Torr → TM := off and
 log "High pressure turbo shuttoff triggered at hh:mm:ss".
 
+> **Two VI behaviours the port deliberately overrides (2026-09-22).**  Frame 7 above sets
+> `TURBO_VALVE_CMD := NOT(Pump to High Vac 2)` and `TURBO_MOTOR_CMD := Pump to High Vac 2`, i.e.
+> pressing that button restarts the turbo **and closes its turbo valve**, with the gate already
+> shut — the rotor then re-accelerates isolated.  It also sets CURRENT := 1, so the chamber is
+> roughed (bypass opened) even when it never lost its vacuum.  The port adds two global rules: a
+> turning turbo always keeps its valve, and the bypass is never opened into a chamber below the
+> foreline; plus the button re-engages directly when the chamber is already below the turbo-on
+> threshold.  See the README section "Auto-mode plant-safety rules".
+
 ### Command execution (frame 4)
 DO writes: primary, [TV,BP,VV,GV], chiller, turbo (mode dependent; HP700 ack = 1 s pulse and the
 "Turbo Error Aknowleged" LED is lit during the pulse). Settle waits (blocking the loop):
@@ -233,6 +248,52 @@ channel, Use fake values?, use DMM?, and the per-state Auto buttons (Pump to Rou
 Overnight Pump, Vent, Shut Off, Vent 2, Overnight Pump 3, Pump to Rough Only, Pump to High, Vent 4,
 Pump to Rough 3, Pump to High Vac 3, Shutdown, Pump to Rough 4, Overnight Pump 2, Vent and shutdonw,
 Vent 5, Overnight Pump 5, Pump to Rough 5, Pump to Hi vac, Pump to High Vac 2, Skip Primary Warm).
+
+## 6b. Hardware change after the VI was written (2026-09-14) — primary pump
+
+The facility was rewired: the primary pump is driven through **two relays** and reports its drive
+frequency, so the VI's single `Primary_Pump_Cmd` / `Primary_Pump_Read` pair no longer describes it.
+
+| VI (above) | Now |
+|---|---|
+| `Primary_Pump_Cmd` DO `Mod3/port0/line0` | **power** relay DO `Mod3/port0/line6` + **run** relay DO `Mod3/port0/line7` |
+| `Primary_Pump_Read` DI `Mod2/port0/line0` | retired — no boolean read-back |
+| `Com Potential` AI `Mod1/ai6` (display only) | **pump drive frequency**, 0-10 V = 0-210 Hz — acquired only while the operator has the reader switched on; off by default since reading it put noise on the other analog channels (2026-09-21) |
+
+The run relay is inert until the power relay is closed, so the port sequences power → 15 s → run on
+start and run → 5 min → power off on stop (`timings.primary_power_to_run_gap_s` /
+`primary_run_to_power_off_gap_s`); the safe state on exit still drops both at once.  With the frequency reader off (the default), "primary
+pump running" means the run relay is closed and error **5000** stays unraisable exactly as in the
+VI; switching the reader on arms the spin-up detection and makes "running" mean real rotation.  Everything above this
+section still describes the VI as written; this is the one place the small chamber's hardware has
+moved on from it.
+
+## 6c. The VI uses SEPARATE analog tasks (bug found on the facility, 2026-09-14)
+
+Decoded from `Main_V4.4.semantic.lvnet`, the VI builds **two** AI task chains, not one:
+
+| Task | Channels | Range |
+|---|---|---|
+| `DAQmx_Create_Task_7229` | `Wide Range_Gauge_Read` (ai5) -> Convectrons (ai1, ai2) -> `Com Potential` (ai6) | 0-10 V |
+| `DAQmx_Control_Task_39736` | `Turbo_Speed_Read` (ai3, HP700) and `BRT_Turbo_Speed_Read` (ai4, BigRed) | 0-10 V / **-10-10 V** |
+
+All channels are differential (10106) in both — the terminal configuration is *not* the difference.
+What matters is that the **turbo speed is alone in its own task**.
+
+The port originally put the speed channel in the same task as the gauges.  One multiplexed ADC serves
+a task's channels in sequence, and the BigRed speed output does not settle inside the convert window,
+so ai4 returned the residue of the channel scanned immediately before it:
+
+* Turbo Convectron at atmosphere = 6.88 V -> a phantom **"69 % turbo speed"** with the turbo stopped
+  (observed: 71 %, = 7.1 V);
+* after the pump-frequency channel (ai6) was added ahead of it, the phantom speed tracked the pump
+  **linearly**, 0-10 V = 0-100 %.
+
+The LabVIEW panel read a clean 0 on the same wiring throughout, which is what identified the cause.
+The port now matches the VI: gauges (+ extras/compressor) in the main task, and one dedicated
+single-channel task per turbo speed and for the pump frequency.  This also lets the per-turbo
+`speed_sample_rate_hz` / `speed_samples` (the VI's 4000 Hz x 2000 in HP700 mode) take effect — a
+shared task can only carry one timing configuration.
 
 ## 7. Differences the port deliberately adds (all switchable in config)
 * CSV daily logging (VC100 behaviour), zoomable history plots.

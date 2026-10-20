@@ -36,6 +36,10 @@ class CsvLogger:
         for vid in cfg.valve_ids:
             cols += [f"{vid}_cmd", f"{vid}_read"]
         cols += ["primary_cmd", "primary_read", "chiller_cmd", "chiller_read"]
+        if cfg.primary.two_stage:
+            cols += ["primary_power_cmd", "primary_run_cmd"]
+        if cfg.primary.has_frequency:
+            cols += ["primary_hz", "primary_running"]
         for t in cfg.turbos:
             cols += [f"{t.id}_motor_cmd", f"{t.id}_standby_cmd", f"{t.id}_speed_pct", f"{t.id}_status", f"{t.id}_error"]
             if not t.has_speed:                       # contact interface: log the six status contacts too
@@ -72,6 +76,10 @@ class CsvLogger:
         for vid in cfg.valve_ids:
             row += [int(bool(s.commands.valves.get(vid))), int(bool(s.inputs.valve_reads.get(vid)))]
         row += [int(s.commands.primary), int(s.inputs.primary_read), int(s.commands.chiller), int(s.inputs.chiller_read)]
+        if cfg.primary.two_stage:
+            row += [int(bool(s.commands.primary_power)), int(bool(s.commands.primary_run))]
+        if cfg.primary.has_frequency:
+            row += ["" if s.primary_hz is None else f"{s.primary_hz:.1f}", int(bool(s.primary_running))]
         for t in cfg.turbos:
             tv = s.turbos.get(t.id)
             row += [int(bool(s.commands.turbo_motor.get(t.id))), int(bool(s.commands.turbo_standby.get(t.id))),

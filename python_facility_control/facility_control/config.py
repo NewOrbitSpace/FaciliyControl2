@@ -39,12 +39,66 @@ class ValveConfig:
 
 
 @dataclass
+class FrequencyConfig:
+    """Analog speed/frequency feedback of a VFD-driven pump (small chamber: the primary pump's
+    drive reports 0-10 V = 0-`max_hz`).  `running_above_hz` is what counts as 'the pump is turning'
+    for the status colour, the interlocks and the operating-hour meter."""
+    channel: str
+    max_hz: float = 210.0
+    min_v: float = 0.0
+    max_v: float = 10.0
+    running_above_hz: float = 5.0
+    # Is the sensor physically connected?  This is only the STARTUP default - the operator can turn
+    # the reader on and off at any time from the panel (the channel has its own single-channel DAQ
+    # task, so it is created and closed without disturbing the gauge task).  Off means the channel
+    # is not acquired at all, which is the point: acquiring it put noise on the other analog inputs.
+    enabled: bool = True
+
+    def hz(self, volts: float) -> float:
+        span = self.max_v - self.min_v
+        if span <= 0:
+            return 0.0
+        return (volts - self.min_v) / span * self.max_hz
+
+
+@dataclass
 class PumpConfig:
+    """A pump or chiller contactor.
+
+    Most devices are a single DO line (`cmd`) with a DI run read-back (`read`).  A pump whose
+    mains power and run command go to *separate* relays gives `power_cmd` + `run_cmd` instead of
+    `cmd`: the controller then sequences power -> gap -> run on start and run -> gap -> power off
+    on stop (`timings.primary_power_to_run_gap_s` / `primary_run_to_power_off_gap_s`).  Such a pump
+    usually has no boolean read-back at all and reports a `frequency` instead."""
     label: str
-    cmd: str
-    read: str
+    cmd: Optional[str] = None            # single-relay pump: the one DO line
+    read: Optional[str] = None           # DI run read-back; None = no boolean feedback
     cross_check: bool = True
     read_inverted: bool = False
+    power_cmd: Optional[str] = None      # two-relay pump: mains power relay
+    run_cmd: Optional[str] = None        # two-relay pump: start/run relay (only effective once powered)
+    frequency: Optional[FrequencyConfig] = None
+
+    @property
+    def two_stage(self) -> bool:
+        """True when power and run are separate relays."""
+        return bool(self.power_cmd and self.run_cmd)
+
+    @property
+    def has_read(self) -> bool:
+        return bool(self.read)
+
+    @property
+    def has_frequency(self) -> bool:
+        return self.frequency is not None
+
+    @property
+    def power_line(self) -> Optional[str]:
+        return self.power_cmd if self.two_stage else self.cmd
+
+    @property
+    def run_line(self) -> Optional[str]:
+        return self.run_cmd if self.two_stage else self.cmd
 
 
 @dataclass
@@ -112,6 +166,12 @@ class Thresholds:
     bypass_first_above_torr: Optional[float] = 37.503084   # = 5e1 mBar
     # Pressing Overnight Pump below this pressure skips roughing entirely (no primary, no bypass).
     overnight_skip_below_torr: Optional[float] = 0.150012   # = 2e-1 mBar; None = never skip
+    # "Is the manual vent valve closed?" is only worth asking near atmosphere: below this chamber
+    # pressure the chamber is plainly already pumped down, so the hand valve must be shut and the
+    # question is just a click in the way.  Default None = always ask (the 2026-09-08 behaviour), so
+    # a facility opts in from its own profile rather than having its prompts change underneath it;
+    # the small chamber sets 5e2 mBar.
+    vent_confirm_above_torr: Optional[float] = None
 
     @property
     def slowing_pct(self) -> float:
@@ -124,7 +184,7 @@ class Thresholds:
 # YAML keys of Thresholds that may be given in mBar instead of Torr: `<name>_mbar` replaces `<name>_torr`
 _TORR_KEYS = ("turbo_on_threshold", "gauge_error_threshold", "wrg_error_threshold", "turbo_high_pressure_shutoff",
               "manual_main_pressure_max", "manual_foreline_pressure_max", "bypass_first_above",
-              "overnight_skip_below", "engage_check_threshold")
+              "overnight_skip_below", "engage_check_threshold", "vent_confirm_above")
 
 
 @dataclass
@@ -142,6 +202,14 @@ class Timings:
     chiller_settle_ms: int = 10000
     primary_settle_ms: int = 500                # wait after the primary pump is switched ON
     primary_settle_off_ms: Optional[int] = None # wait after it is switched OFF; None = same as primary_settle_ms
+    # Two-relay primary pump (small chamber): power and run are separate relays.  Starting is
+    # power -> wait -> run; stopping is run off -> wait -> power off.  The loop keeps running during
+    # these gaps (they are a sequencing delay, not a cross-check settle window).
+    primary_power_to_run_gap_s: float = 5.0
+    primary_run_to_power_off_gap_s: float = 5.0
+    # How long the pump may be commanded to run while its frequency stays below
+    # `frequency.running_above_hz` before error 5000 is raised.  None = never raise it.
+    primary_spinup_timeout_s: Optional[float] = 30.0
     # True (default, = the VI): the control loop *freezes* for the settle waits above and while a
     # dialog is open – no readings, no error checks meanwhile, so a device is only cross-checked
     # after it had its full settle time.  False: the loop keeps reading and only the decision step
@@ -199,6 +267,10 @@ class SimulationConfig:
     leak_torr_l_s: float = 1e-4
     outgassing_torr_l_s: float = 2e-5
     compressor_bar: float = 6.3
+    # VFD-driven primary pump (a facility whose primary_pump has a `frequency` block)
+    primary_run_hz: Optional[float] = None   # frequency it settles at when running; None = frequency.max_hz
+    primary_spinup_s: float = 8.0
+    primary_spindown_s: float = 20.0
 
 
 @dataclass
@@ -304,6 +376,40 @@ def _get(d: Dict[str, Any], key: str, default: Any = None) -> Any:
     return d.get(key, default) if d else default
 
 
+_PUMP_KEYS = {"label", "cmd", "read", "cross_check", "read_inverted", "power_cmd", "run_cmd", "frequency"}
+_FREQ_KEYS = {f for f in FrequencyConfig.__dataclass_fields__}
+
+
+def _pump(block: Dict[str, Any], where: str) -> PumpConfig:
+    """Build a PumpConfig from its YAML block, accepting either a single `cmd` relay or the
+    `power_cmd` + `run_cmd` pair, with an optional analog `frequency` feedback."""
+    unknown = set(block) - _PUMP_KEYS
+    if unknown:
+        raise ValueError(f"{where}: unknown keys {sorted(unknown)}")
+    cmd, power_cmd, run_cmd = block.get("cmd"), block.get("power_cmd"), block.get("run_cmd")
+    if cmd and (power_cmd or run_cmd):
+        raise ValueError(f"{where}: give either `cmd` (one relay) or `power_cmd` + `run_cmd` (two relays), not both")
+    if not cmd and not (power_cmd and run_cmd):
+        raise ValueError(f"{where}: needs `cmd`, or both `power_cmd` and `run_cmd`")
+    freq = None
+    if block.get("frequency"):
+        fb = dict(block["frequency"])
+        unknown = set(fb) - _FREQ_KEYS
+        if unknown:
+            raise ValueError(f"{where}.frequency: unknown keys {sorted(unknown)}")
+        if "channel" not in fb:
+            raise ValueError(f"{where}.frequency: needs a `channel`")
+        freq = FrequencyConfig(**fb)
+    read = block.get("read")
+    if block.get("cross_check", True) and not read and not freq:
+        # nothing to cross-check against: a pump with neither a read-back nor a frequency
+        raise ValueError(f"{where}: cross_check is on but there is no `read` line and no `frequency` feedback")
+    return PumpConfig(label=block["label"], cmd=cmd, read=read,
+                      cross_check=bool(block.get("cross_check", True)),
+                      read_inverted=bool(block.get("read_inverted", False)),
+                      power_cmd=power_cmd, run_cmd=run_cmd, frequency=freq)
+
+
 def load_config(path: Optional[str] = None) -> FacilityConfig:
     if path is None:
         path = os.environ.get("FACILITY_CONFIG", str(CONFIG_DIR / DEFAULT_PROFILE))
@@ -331,10 +437,8 @@ def build_config(raw: Dict[str, Any], source_path: str = "") -> FacilityConfig:
                                turbo=v.get("turbo"), fail_closed=bool(v.get("fail_closed", True)))
               for vid, v in raw["valves"].items()}
 
-    pp = raw["primary_pump"]
-    ch = raw["chiller"]
-    primary = PumpConfig(pp["label"], pp["cmd"], pp["read"], bool(pp.get("cross_check", True)), bool(pp.get("read_inverted", False)))
-    chiller = PumpConfig(ch["label"], ch["cmd"], ch["read"], bool(ch.get("cross_check", True)), bool(ch.get("read_inverted", False)))
+    primary = _pump(raw["primary_pump"], "primary_pump")
+    chiller = _pump(raw["chiller"], "chiller")
 
     turbos = []
     for t in raw.get("turbos", []):

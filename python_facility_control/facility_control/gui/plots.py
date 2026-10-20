@@ -225,7 +225,7 @@ class PlotsWidget(QWidget):
         vals: Dict[str, float] = {}
         for g in self.cfg.gauges:
             vals[g.id] = snap.inputs.pressures_torr.get(g.id, float("nan"))
-        vals["primary"] = 1.0 if snap.inputs.primary_read else 0.0
+        vals["primary"] = 1.0 if snap.primary_running else 0.0
         vals["chiller"] = 1.0 if snap.inputs.chiller_read else 0.0
         for t in self.cfg.turbos:
             tv = snap.turbos.get(t.id)

@@ -193,12 +193,37 @@ class MainWindow(QMainWindow):
         # maintenance meter: total hours the primary pump has actually run (persists across restarts)
         eng.addWidget(QLabel("Primary pump total operating hours"))
         self.primary_hours_box = ValueBox("0.00", width=90)
-        self.primary_hours_box.setToolTip("Total hours the primary pump has run, counted from its "
-                                          "read-back and kept in the log folder across restarts")
+        measured = self.cfg.primary.has_frequency or self.cfg.primary.has_read
+        self.primary_hours_box.setToolTip(
+            "Total hours the primary pump has run, counted from "
+            + ("its read-back" if measured else "the run command (this pump has no feedback fitted)")
+            + " and kept in the log folder across restarts")
         eng.addWidget(self.primary_hours_box)
         eng.addStretch(1)
         grid.addLayout(eng, 3, 0, 1, 3)
         self._on_engage_time(self.engage_time.dateTime())
+        # --- pump frequency reader: the operator says whether the sensor is physically connected.
+        #     Switching it off stops the channel being acquired at all (it put noise on the other
+        #     analog inputs), which is why this is a live control and not just a config setting.
+        self.freq_check: Optional[QCheckBox] = None
+        if self.cfg.primary.has_frequency:
+            fr = QHBoxLayout()
+            self.freq_check = QCheckBox("Pump frequency reader connected")
+            self.freq_check.setToolTip(
+                "Tick only when the pump's drive-frequency output is actually wired to "
+                f"{self.cfg.primary.frequency.channel}.\n"
+                "On:  the pump's real speed is read; 'running' means genuinely turning and a pump that "
+                "fails to start raises error 5000.\n"
+                "Off: the channel is not acquired at all (no added noise on the other readings); "
+                "'running' then means the run relay is closed.")
+            self.freq_check.setChecked(bool(self.cfg.primary.frequency.enabled))
+            self.freq_check.toggled.connect(self.ctl.request_set_frequency_enabled)
+            fr.addWidget(self.freq_check)
+            self.freq_state = QLabel("")
+            self.freq_state.setStyleSheet("QLabel { color: #555555; }")
+            fr.addWidget(self.freq_state)
+            fr.addStretch(1)
+            grid.addLayout(fr, 8, 0, 1, 3)
         # state display + auto buttons (tab page)
         self.state_label = QLabel("")
         grid.addWidget(self.state_label, 4, 0, 1, 3)
@@ -324,6 +349,14 @@ class MainWindow(QMainWindow):
             self.elapsed_label.setText("")
         self.reset_turbos.setText("Reset\nTurbos" if not any(snap.turbo_error_ack_active.values()) else "Ack…")
         self.primary_hours_box.setText(f"{snap.primary_run_hours:.2f}")
+        if self.freq_check is not None:
+            if self.freq_check.isChecked() != snap.primary_frequency_enabled:
+                self.freq_check.blockSignals(True)          # follow the controller, not the other way
+                self.freq_check.setChecked(snap.primary_frequency_enabled)
+                self.freq_check.blockSignals(False)
+            self.freq_state.setText(
+                f"reading {snap.primary_hz:.1f} Hz" if snap.primary_hz is not None
+                else "off – pump status follows the run relay")
 
     def _show_auto_buttons(self, tab: Optional[TabPage]):
         if tab == self._current_tab:

@@ -10,6 +10,16 @@ No compressor-pressure sensor and no "Com Potential" reading on this chamber.
 - `labview/Small_Chamber_Support VIs/` — LabVIEW type-definitions (`Controls/`) and instrument
   drivers (`Drivers/`: Pfeiffer Vacuum RS485 turbo library, Agilent U1250 DMM driver).
 
+## Hardware change: primary pump rewired (2026-09-14)
+The primary pump now has **separate power and run relays** and reports its **drive frequency**:
+`Mod3/port0/line6` = power, `Mod3/port0/line7` = run, `Mod1/ai6` = 0-10 V for 0-210 Hz.  The old
+`Mod3/port0/line0` command and the `Mod2/port0/line0` read-back are retired, and `Mod1/ai6` no longer
+carries 'Com Potential'.  The run relay only acts once the pump is powered, so the controller
+sequences power -> 5 s -> run (and the reverse on stop); "running" is the frequency above 5 Hz, and
+error 5000 fires if the pump is commanded but never spins up.  Full detail in the engine README and
+`docs/MAIN_V4.4_REFERENCE.md` section 6b.  **This is a deviation from `Main_V4.4.vi`** — the VI still
+shows the single-relay wiring, so read it with that section alongside.
+
 ## How it runs
 On the shared engine in `../../python_facility_control/`, profile
 `config/facility_main_v4.4.yaml`. Analog inputs are read **differentially** (VI value 10106).

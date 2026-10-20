@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from .config import FacilityConfig
-from .model import Commands, Inputs
+from .model import Commands, Inputs, primary_is_running
 
 
 @dataclass
@@ -40,6 +40,15 @@ class Interlocks:
         if tid:
             return cmds.turbo_motor.get(tid, False)
         return any(cmds.turbo_motor.values())
+
+    def _primary_running(self, cmds: Commands, inp: Inputs) -> bool:
+        """Is the pump actually turning?  Shared with the controller – see model.primary_is_running.
+
+        This must never fall back to the boolean read-back alone: a pump with no feedback fitted
+        reports `primary_read` False for ever, which would block "Please Turn Primary Pump On first"
+        permanently and make the turbo unstartable in Manual mode.
+        """
+        return primary_is_running(self.cfg.primary, inp, cmds)
 
     def _valve(self, cmds: Commands, inp: Inputs, kind: str) -> bool:
         """Commanded OR read open, for any valve of that kind (conservative)."""
@@ -80,7 +89,7 @@ class Interlocks:
             return Verdict(True)
         if v.kind == "vent":
             if want_open:
-                if cmds.primary or inp.primary_read:
+                if cmds.primary or self._primary_running(cmds, inp):
                     return Verdict(False, "Please Stop Primary Pump First")
                 if self._valve(cmds, inp, "bypass"):
                     return Verdict(False, "Please Close Bypass Valve first")
@@ -111,7 +120,9 @@ class Interlocks:
         t = self.cfg.turbo(tid)
         if self._valve(cmds, inp, "vent"):
             return Verdict(False, "Please Close Vent Valve first")
-        if not (cmds.primary and inp.primary_read):
+        # the turbo may only start once the backing pump is really turning – with the two-relay
+        # wiring that means after power, the run command and the spin-up, not just the demand
+        if not (cmds.primary and self._primary_running(cmds, inp)):
             return Verdict(False, "Please Turn Primary Pump On first")
         if self._valve(cmds, inp, "bypass"):
             return Verdict(False, "Please Close Bypass Valve first")

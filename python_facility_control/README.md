@@ -34,7 +34,7 @@ run.bat                        # creates .venv on first use, then starts the GUI
 run.bat --sim --time-scale 20  # simulated plant running 20x faster (nice for a demo)
 run.bat --daq                  # insist on the real cDAQ (needs NI-DAQmx + `pip install nidaqmx`)
 run.bat --units mbar           # start with mBar
-run.bat --mode admin           # skip the "Select Control Mode" dialog
+run.bat --mode admin           # skip the "Select Control Mode" dialog (Auto | Manual | Admin)
 run.bat --non-blocking         # keep reading during settle waits (experimental, see below)
 run.bat --headless 60          # no GUI, print the state for 60 s (service / smoke test)
 ```
@@ -80,6 +80,8 @@ readings freeze.  Kept for later – the default follows the VI.
   slowing → Facility Off; plus Overnight Pump (timed start).  Any error (5000–5010) → everything off
   ("Shutt down due to error").  Turbo forced off if its gauge reads ≥ 5 Torr.
 * *Admin* – no interlocks; click a valve/pump/turbo on the diagram, confirm the Yes/No dialog.
+  Not offered at start-up (the dialog asks Auto or Manual); reached from the panel's Admin Mode
+  button when you need it for bring-up or to recover the facility by hand.
   **Auto Mode** button = state recognition (Facility off / Pumping to Rough / Venting / Pumping to
   High Vac) with the "Go to State …?" confirmation, otherwise "Target State Not Recognised!".
 * *Manual* – the mode the VI planned but never finished: manual commands checked against interlocks
@@ -128,6 +130,152 @@ feedback, pump/chiller feedback, turbo spin-up/down and gauge voltages through t
 The panel at the bottom injects faults (stuck valve, turbo error, chiller/primary fault, WRG fault, power
 cut; "compressor air low" only for a facility with a `compressor:` block) and sets the plant speed-up.
 
+## Primary pump: two relays (small chamber, 2026-09-14; revised 2026-09-21)
+
+> **The drive-frequency reader has an ON/OFF switch, and ships OFF (2026-09-21).**  Acquiring the
+> drive output on `Mod1/ai6` put noise on the other analog readings, so the operator decides whether
+> the sensor is connected: tick **"Pump frequency reader connected"** on the panel.  The switch is
+> live – the channel has its own single-channel DAQ task, so it is opened and closed without ever
+> touching the gauge task – and `frequency.enabled` in the profile sets the startup default.
+>
+> *Off* means the channel is **not acquired at all** (not merely ignored – that is the whole point),
+> so the pump has no feedback: "Primary Pump is On" means the run relay is closed, **error 5000
+> cannot fire** so a pump that fails to start is not detected, and the hour meter counts commanded
+> hours.  That is the same position `Main_V4.4.vi` was always in.  *On* restores real rotation
+> sensing, the spin-up check and a measured hour meter.
+>
+> **Current gaps: 15 s** from power to run, **5 minutes** from run off to power off.
+
+
+The small chamber's primary pump is no longer one command line with a reed read-back.  Mains power
+and the run command now go to **two separate relays**, and the pump reports its **drive frequency**
+on an analog input:
+
+| Signal | Channel | Note |
+|---|---|---|
+| Power relay | `Mod3/port0/line6` | mains power to the pump |
+| Run relay | `Mod3/port0/line7` | start/run – no effect until the pump is powered |
+| Drive frequency | `Mod1/ai6` | 0-10 V = 0-210 Hz (this input used to carry 'Com Potential') |
+
+The old command line `Mod3/port0/line0` and the DI run read-back `Mod2/port0/line0` are retired.
+
+Because the run relay does nothing on an unpowered pump, the controller **sequences** the two:
+
+* start: power on → `timings.primary_power_to_run_gap_s` (**15 s**) → run on
+* stop: run off → `timings.primary_run_to_power_off_gap_s` (**5 min**) → power off
+
+The pump therefore keeps its mains power for five minutes after it is told to stop, while it coasts
+down.  The STOP button and program exit are the exception: the safe state drops **both** relays at
+once, without sequencing.
+
+The control loop keeps reading during those gaps – they sequence two relays, they are not
+cross-check settle windows – and the sequence also advances while a dialog is open.  Program exit
+and the STOP button are the exception: the safe state drops **both** relays at once.
+
+Auto mode, Manual mode and the operator still deal with a single pump: the state machine only ever
+sets the *demand* (`Commands.primary`) and the controller expands it into the two lines, so
+`automode.py` and the VC100 profile are untouched.  On the diagram the pump is still one click.
+
+**What "running" means.**  There is one definition, `model.primary_is_running`, shared by the
+controller, the Manual-mode interlocks, the hour meter, the panel and the CSV so they cannot
+disagree: the drive frequency above `running_above_hz` **when a reading is actually present**, else
+the boolean run read-back, else **the run relay being closed**.  Note it keys off the reading, not
+off the profile having a frequency block – that is what lets the reader be switched off mid-run
+without the pump appearing to stop.  The last of those is deliberately not
+"the demand": the demand is set during the power-up gap while the pump is definitely not turning.
+While the pump is mid-sequence the panel says "Primary Pump powering up (15 s)" / "powering down
+(300 s)" and the symbol is blue.
+
+The operating-hour meter is shown in two places – beside the pump on the diagram ("Total run hours")
+and in the mode panel – and persists in `logs/run_hours_<facility>.json` across restarts.
+
+**New fault indication.**  `cross_check` is now meaningful on this chamber: if the run relay is
+closed and the frequency stays below the running threshold for `timings.primary_spinup_timeout_s`
+(**30 s**), the controller raises **error 5000** – "Primary Pump commanded to run but not turning
+(0.0 Hz)" – which stops Auto mode like any other 5000-series error.  Main_V4.4 hard-wired this check
+to False, so 5000 could never fire before.  A pump *coasting down* after the run command was removed
+is normal and is never flagged.  The simulator's "Primary fault" injection reproduces the failure.
+
+Any facility can use either wiring: give the pump block `cmd` (one relay, as the VC100 does) or
+`power_cmd` + `run_cmd`, with an optional `frequency:` block.  The CSV gains `primary_power_cmd`,
+`primary_run_cmd`, `primary_hz` and `primary_running` columns when they apply.
+
+## Analog tasks: one per fast/high-impedance signal (fixed 2026-09-14)
+
+Gauges share the main AI task; **each turbo speed channel and the pump frequency get their own
+single-channel task**, as the VIs do.  This is not cosmetic: one multiplexed ADC serves a task's
+channels in turn, and a signal that does not settle in the convert window returns the *previous*
+channel's voltage.  With the turbo speed sharing the gauge task the facility showed a phantom ~69 %
+turbo speed with the turbo stopped (the Turbo Convectron's 6.88 V at atmosphere), and after the pump
+frequency was added ahead of it the phantom tracked the pump linearly to 100 %.  The LabVIEW panel
+read 0 on the same wiring — see `docs/MAIN_V4.4_REFERENCE.md` section 6c.  A side benefit: the
+per-turbo `speed_sample_rate_hz` / `speed_samples` settings finally take effect.
+
+If you add another fast or high-impedance analog signal, give it its own task the same way rather
+than appending it to the gauge scan.
+
+## Auto-mode plant-safety rules (2026-09-22) — deliberate deviation from the VIs
+
+An incident on the small chamber: at ~2e-5 mBar in Pumping to High Vac, **Shutdown** was pressed
+(gate closed, turbo spinning down, as expected), then **Pump to High Vac** while it was still
+slowing.  The VI's own logic — faithfully ported — restarted the motor, **closed the turbo valve**
+and left the gate shut, so the rotor re-accelerated to full speed compressing into a dead volume;
+it then routed into Pumping to Rough, which started the primary and **opened the bypass** into a
+chamber at 1e-4 mBar, pushing foreline gas back in.  The operator had to switch to Admin.
+
+Straight from `Main_V4.4.vi`, frame *Turbo slowing* (`docs/Main_V4.4.semantic.lvnet`):
+
+```
+AUTO.TURBO_VALVE_CMD = Select(f="True",  sel=Pump to High Vac 2, t="False")   -> valve CLOSED
+AUTO.TURBO_MOTOR_CMD = Select(f="False", sel=Pump to High Vac 2, t="True")    -> motor ON
+AUTO.GATE_CMD        = "False"
+AUTO.CURRENT_STATE   = 1 (Pumping to Rough)
+```
+
+So this was a latent LabVIEW bug, not one the port introduced — and the same shape exists on the way
+out of *Venting* and on the VC100 profile.  Three rules now prevent it.  Two are enforced **globally**
+at the end of `AutoStateMachine.step()`, next to the existing high-pressure turbo shut-off, rather
+than per button, because the hazard is a property of the plant and not of any one state:
+
+* **A spinning turbo keeps its valve open *and* the primary running.**  If a turbo is turning (above
+  `turbo_slowing_threshold_pct`, the same test the state machine uses) or is commanded to run, its
+  valve is held open and the primary pump is held on, whatever the state logic asked for.  Manual
+  mode always refused to close the valve (`interlocks.py`, "closing while turbo runs would trap it");
+  Auto now refuses it too.  **Both halves matter**: an open turbo valve with the primary stopped is
+  worse than an isolated turbo, because the foreline backfills towards atmosphere and takes the
+  turbo body with it — that is how the 2026-09-23 trip below happened.  Note this also keeps the
+  primary running through an error shutdown until the turbo has slowed.
+* **The bypass never opens into a chamber below the foreline.**  Opening it there backfills the
+  chamber instead of pumping it.  This blocks *opening* only — a bypass that is already open is
+  never forced shut, so an ordinary pump-down from atmosphere is untouched.
+* **Pump to High Vac during Turbo slowing / Venting skips roughing when the chamber is still
+  evacuated** (below the turbo-on threshold): it goes straight to Engage Turbo, keeping the turbo
+  valve open and re-opening the gate, instead of running a roughing cycle the chamber does not need.
+
+`tests/test_spinning_turbo_safety.py` replays the incident end to end and sweeps the whole spin-down
+asserting the valve is never shut on a turning rotor, on both chamber profiles.
+
+## Overnight Pump keeps backing the turbo (2026-09-23)
+
+A second incident, and a direct consequence of the rule above being written as only half a rule.
+**Overnight Pump** was pressed from high vacuum.  `Main_V4.4.vi`'s Overnight frame switches
+*everything* off at once — including the primary pump — while the turbo is still near full speed;
+only the chiller stays on, above `overnight_chiller_speed_pct`.  The turbo-valve rule then held that
+valve open onto a foreline with nothing pumping it, so the foreline backfilled towards atmosphere
+(~5e+02 mBar) and dragged the turbo body up with it (~27 mBar) until the drive tripped — **error
+5007**, reproduced exactly in the simulator.
+
+Two changes:
+
+* the global rule now holds the **primary pump on** as well as the turbo valve open, so a turning
+  turbo is always genuinely backed rather than merely connected to something;
+* `auto_mode.overnight_backing_while_spinning: true` on the small-chamber profile — the behaviour the
+  **VC100 VI always had**: primary, chiller and the spinning turbo's valve stay on until the turbo is
+  below the slowing threshold, then everything goes off.
+
+Foreline now holds at ~4e-03 mBar through the whole spin-down instead of reaching atmosphere, and the
+turbo body at ~1e-03 mBar instead of 27 mBar.
+
 ## Changes requested by the test engineer (2026-09-08)
 
 These deviate from the VI on purpose and are all driven by the facility profile:
@@ -139,6 +287,11 @@ These deviate from the VI on purpose and are all driven by the facility profile:
   the pump immediately.
 * **"Is the manual vent valve closed?"** – Pump to Rough / Pump to High Vac / Overnight Pump ask this
   first and only run on *Yes* (the manual vent valve is a hand valve, not on the DAQ).
+  **Since 2026-09-23 it is only asked at or above `thresholds.vent_confirm_above_mbar` (5e2 mBar).**
+  Below that the chamber is plainly already pumped down, which is itself proof the hand valve is
+  shut, so the dialog would just be a click in the way.  An unreadable or implausible chamber gauge
+  always asks, because then the pressure tells us nothing.  Set the key to `null` to ask every time;
+  it is unset on the VC100 profile, which therefore still asks on every press.
 * **Overnight Pump below `thresholds.overnight_skip_below_torr` (2e-1 mBar)** skips roughing entirely:
   no primary pump, no bypass, straight into the overnight hold.
 * **Primary pump total operating hours** – a maintenance meter on the panel, counted from the pump's

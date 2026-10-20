@@ -157,6 +157,7 @@ class Inputs:
     extra_analog: Dict[str, float] = field(default_factory=dict)
     turbos: Dict[str, TurboInputs] = field(default_factory=dict)
     compressor_bar: Optional[float] = None
+    primary_hz: Optional[float] = None      # drive frequency of the primary pump (None = no such sensor)
     daq_error: Optional[str] = None
 
     def pressure(self, gauge_id: str) -> float:
@@ -165,23 +166,39 @@ class Inputs:
 
 @dataclass
 class Commands:
-    """Everything the controller commands (the *_Sys_Cmd shift registers)."""
+    """Everything the controller commands (the *_Sys_Cmd shift registers).
+
+    `primary` is the *demand*: what Auto mode, Manual mode or the operator asked for.  On a facility
+    whose pump has separate power and run relays the controller expands that demand into the two
+    physical lines below, with the configured gap between them; on a single-relay facility both
+    simply follow `primary`.  The state machine only ever touches `primary`, so nothing in
+    automode.py or a second facility's profile has to know which wiring is fitted."""
     valves: Dict[str, bool] = field(default_factory=dict)  # valve id -> open
-    primary: bool = False
+    primary: bool = False                                  # demand ("the pump should be running")
     chiller: bool = False
     turbo_motor: Dict[str, bool] = field(default_factory=dict)
     turbo_standby: Dict[str, bool] = field(default_factory=dict)
     turbo_error_ack: Dict[str, bool] = field(default_factory=dict)
+    primary_power: bool = False                            # physical relay 1 (mains power)
+    primary_run: bool = False                              # physical relay 2 (start/run)
 
     def copy(self) -> "Commands":
         return Commands(dict(self.valves), self.primary, self.chiller,
-                        dict(self.turbo_motor), dict(self.turbo_standby), dict(self.turbo_error_ack))
+                        dict(self.turbo_motor), dict(self.turbo_standby), dict(self.turbo_error_ack),
+                        self.primary_power, self.primary_run)
+
+    def set_primary(self, on: bool) -> "Commands":
+        """Set the demand *and* both relay lines together.  The controller normally derives the
+        relay lines from the demand (see Controller._sequence_primary); this is for code that talks
+        to a backend directly and wants the pump simply on or off."""
+        self.primary = self.primary_power = self.primary_run = bool(on)
+        return self
 
     @staticmethod
     def all_off(valve_ids: List[str], turbo_ids: List[str]) -> "Commands":
         return Commands({v: False for v in valve_ids}, False, False,
                         {t: False for t in turbo_ids}, {t: False for t in turbo_ids},
-                        {t: False for t in turbo_ids})
+                        {t: False for t in turbo_ids}, False, False)
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, Commands):
@@ -189,6 +206,31 @@ class Commands:
         return (self.valves == other.valves and self.primary == other.primary
                 and self.chiller == other.chiller and self.turbo_motor == other.turbo_motor
                 and self.turbo_standby == other.turbo_standby)
+
+
+def primary_is_running(pump, inp: "Inputs", cmds: "Commands") -> bool:
+    """THE definition of "the primary pump is turning".  One place, used by the controller, the
+    Manual-mode interlocks, the hour meter, the panel and the CSV, so they cannot disagree.
+
+    In order of how much the facility actually knows:
+      1. a live drive-frequency reading -> above `running_above_hz` is real evidence of rotation;
+      2. a boolean run read-back        -> the VI's reed/contact feedback;
+      3. no feedback at all             -> the RUN RELAY being closed.  Not the demand: on a
+         two-relay pump the demand is set during the power-up gap, while the pump is definitely not
+         turning yet, and on a single-relay pump the two are the same thing (the VI's behaviour).
+
+    Rule 1 is gated on a reading actually being PRESENT, not on the profile having a frequency
+    block: the operator can switch the reader off (the sensor may not be connected), and the
+    backends then leave `primary_hz` at None, so the answer falls through to rule 2 or 3 instead of
+    reporting a pump that never runs.
+
+    `pump` is a PumpConfig; taken duck-typed so this module stays free of a config import.
+    """
+    if inp.primary_hz is not None and getattr(pump, "frequency", None) is not None:
+        return inp.primary_hz > pump.frequency.running_above_hz
+    if getattr(pump, "has_read", False):
+        return bool(inp.primary_read)
+    return bool(cmds.primary_run)
 
 
 @dataclass
@@ -235,6 +277,12 @@ class Snapshot:
     hardware: str = "simulation"
     skip_primary_warm: bool = False
     compressor_bar: Optional[float] = None
+    primary_hz: Optional[float] = None     # drive frequency of the primary pump (None = reader off)
+    primary_running: bool = False          # derived: see model.primary_is_running
+    primary_frequency_available: bool = False  # the profile has a frequency block (the reader CAN be on)
+    primary_frequency_enabled: bool = False    # the reader is currently switched on
+    primary_phase: str = ""                # '', 'powering', 'running', 'stopping' (two-relay pump)
+    primary_phase_remaining_s: float = 0.0 # time left of the power->run / run->power-off gap
     hold_remaining_s: float = 0.0      # time left of a settle wait (blocking: loop frozen; else DECIDE held)
     hold_reason: str = ""
     loop_blocked: bool = False         # True while the loop is frozen in a settle wait / dialog (VI behaviour)

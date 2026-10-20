@@ -52,7 +52,12 @@ def test_no_early_conflict_error_for_slow_valve_and_gate(cfg):
         s = h.tick()
         assert not s.error.status, (target, s.error)
     assert s.commands.valves["gate"] and s.commands.valves["bypass"] and s.commands.primary
-    assert s.inputs.valve_reads["gate"] and s.inputs.valve_reads["bypass"] and s.inputs.primary_read
+    assert s.inputs.valve_reads["gate"] and s.inputs.valve_reads["bypass"]
+    # the two-relay pump is still sequencing (power on, run relay after the gap) – it is not yet
+    # turning, and that must NOT be reported as a conflict
+    assert s.primary_phase == "powering" and not s.primary_running and not s.error.status
+    s, _ = h.run_until(lambda s: s.primary_running, 4000)
+    assert s.commands.primary_power and s.commands.primary_run and not s.error.status
 
 
 def test_dialog_freezes_loop_until_answered(cfg):
