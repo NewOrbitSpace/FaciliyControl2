@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 from ..config import FacilityConfig
 from ..model import Commands, Inputs
@@ -52,6 +52,14 @@ class HardwareBackend(ABC):
         other analog inputs.  A backend that does not have the channel ignores this.
         """
         pass
+
+    def take_events(self) -> List[str]:
+        """Lines for the panel's event log that the backend produced on its own (serial links:
+        'RS-485 control taken', 'error acknowledged', 'could not confirm STOP').  Polled every loop."""
+        return []
+
+    def close_messages(self) -> List[str]:
+        return []
 
     def set_fault(self, name: str, value) -> None:  # simulation only
         pass

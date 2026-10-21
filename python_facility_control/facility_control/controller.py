@@ -269,6 +269,8 @@ class Controller:
             self._log(f"Safe-state write failed: {exc}")
         try:
             self.backend.close()
+            for line in self.backend.close_messages():
+                self._log(line)
         except Exception:
             pass
         if self.csv:
@@ -301,6 +303,8 @@ class Controller:
                 self._deferred.append(r)
         # ---- frame 0: read (always)
         inp = self.backend.read()
+        for line in self.backend.take_events():
+            self._log(line)
         self.inputs = inp
         # ---- frame 1: status / errors (always; settling devices are not cross-checked)
         self.error = self._evaluate_errors(inp, now)
@@ -593,8 +597,9 @@ class Controller:
                                                   if "{" in message else f"{message} ({what})"))
             return status, turbo_error, err
         turbo_error = bool(ti.error)
-        if bool(p.get("error_requires_chiller", True)):
-            turbo_error = turbo_error and bool(self.cmds.chiller)      # "Ignore Turbo Error if chiller off"
+        if bool(p.get("error_requires_chiller", True)) and ti.comm_ok is not False:
+            # "Ignore Turbo Error if chiller off" - never applied to a lost RS-485 link
+            turbo_error = turbo_error and bool(self.cmds.chiller)
         motor_read = ti.motor_read if tc.control_mode == "hipace_rs485" else motor_cmd
         if motor_read:
             sb_min = p.get("standby_speed_min_pct")
@@ -612,6 +617,8 @@ class Controller:
         if turbo_error:
             status = TurboStatus.ERROR
             err = err.merge(ErrorCluster.make(code, message.format(label=tc.label, what="Error", error_text=ti.error_text)))
+        elif ti.warning and status in (TurboStatus.OFF, TurboStatus.SPEED_REACHED):
+            status = TurboStatus.WARNING          # RS-485 [P:303] 'Wrn...': shown, Auto keeps running
         return status, turbo_error, err
 
     # ------------------------------------------------------------------ waits (the VI's Wait (ms) / dialogs)
@@ -897,17 +904,28 @@ class Controller:
                 new.turbo_motor[tc.id] = False
                 new.turbo_standby[tc.id] = False
                 new.valves[tc.gate_valve] = False
-                new.valves[tc.turbo_valve] = False
+                # a shared turbo valve stays under the control of the turbos that are in use
+                if not any(t.in_use for t in cfg.turbos_on_valve(tc.turbo_valve)):
+                    new.valves[tc.turbo_valve] = False
         self._sequence_primary(new, now)          # demand -> physical relay line(s)
         try:
             self.backend.write(new)
         except Exception as exc:
             self.error = ErrorCluster.make(ERR_DAQ, f"DAQ write failed: {exc}")
             self._log(f"ERROR {ERR_DAQ}: DAQ write failed: {exc}")
+        # RS-485 turbos report their real [P:010] state, but only after the poller has sent the write
+        # and read the pump again (~1 s with four pumps on one bus).  Don't cross-check the motor
+        # read-back against a fresh command before then - in either wait mode.
+        for tc in cfg.turbos:
+            if tc.control_mode == "hipace_rs485" and prev.turbo_motor.get(tc.id) != new.turbo_motor.get(tc.id):
+                key = f"turbo:{tc.id}"
+                grace = float(tc.params.get("motor_confirm_s", 5.0))
+                self._suppress_until[key] = max(self._suppress_until.get(key, 0.0), now + grace)
         # HiPace / BRT error acknowledge, Shimadzu 'Reset': 1 s pulse on the ack line
         pulses: List[Tuple[object, float]] = [
             (tc, int(tc.params.get("error_ack_pulse_ms", 1000)) / 1000.0) for tc in cfg.turbos
-            if new.turbo_error_ack.get(tc.id) and (tc.control_mode in ("hipace_dsub25", "bigred_dsub15") or tc.params.get("error_ack_do"))]
+            if new.turbo_error_ack.get(tc.id) and (tc.control_mode in ("hipace_dsub25", "bigred_dsub15", "hipace_rs485")
+                                                   or tc.params.get("error_ack_do"))]
         # the VI's settle waits, sequential: valves (9 s if a gate moved, VC100: 2 s if the bypass moved,
         # else 1 s) + chiller + primary (VC100: 10 s when switched on, none when switched off)
         waits: List[Tuple[float, str]] = []
@@ -970,7 +988,8 @@ class Controller:
                 self._suppress_until["primary"] = until
             for tc in cfg.turbos:
                 if prev.turbo_motor.get(tc.id) != new.turbo_motor.get(tc.id):
-                    self._suppress_until[f"turbo:{tc.id}"] = until
+                    key = f"turbo:{tc.id}"
+                    self._suppress_until[key] = max(self._suppress_until.get(key, 0.0), until)
 
     def _ack_write(self, tid: str, state: bool) -> None:
         try:

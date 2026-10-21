@@ -24,13 +24,13 @@ if not exist "%PY%" (
     )
 )
 
-"%PY%" -c "import PySide6.QtWidgets, pyqtgraph, numpy, yaml" >nul 2>&1
+"%PY%" -c "import PySide6.QtWidgets, pyqtgraph, numpy, yaml, serial" >nul 2>&1
 if errorlevel 1 (
     echo Installing / repairing dependencies ...
     "%PY%" -m pip install --upgrade pip >nul 2>&1
     "%PY%" -m pip install -r requirements.txt
     if errorlevel 1 goto :installfailed
-    "%PY%" -c "import PySide6.QtWidgets, pyqtgraph, numpy, yaml" >nul 2>&1
+    "%PY%" -c "import PySide6.QtWidgets, pyqtgraph, numpy, yaml, serial" >nul 2>&1
     if errorlevel 1 goto :installfailed
 )
 

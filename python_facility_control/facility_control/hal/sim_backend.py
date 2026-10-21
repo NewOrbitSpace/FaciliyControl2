@@ -23,7 +23,7 @@ from typing import Dict, Optional
 
 from ..config import FacilityConfig
 from ..gauges import torr_to_v, v_to_torr
-from ..model import Commands, Inputs, TurboInputs
+from ..model import Commands, Inputs, TurboInputs, normalize_contacts
 from .base import HardwareBackend
 
 
@@ -341,19 +341,35 @@ class SimBackend(HardwareBackend):
                 # (already de-inverted: True = condition present)
                 spd = t.speed_pct if power else 0.0
                 th = cfg.thresholds
-                contacts = {
-                    "rotating": spd > 1.0,
-                    "accelerating": bool(t.motor and power and not t.error and spd < th.turbo_speed_reached_pct),
-                    "at_speed": spd >= th.turbo_speed_reached_pct,
-                    "braking": bool((not t.motor or t.error) and spd > th.turbo_slow_speed_pct),
-                    "alarm": bool(t.error) if power else False,
-                    "warning": bool(st.faults.get("turbo_warning")) if power else False,
-                }
+                warn = bool(st.faults.get("turbo_warning") or st.faults.get(f"turbo_warning_{tid}")) if power else False
+                p = tcfg.params
+                if "accel_decel_di" in p:
+                    # HD15 remote (VC100 TMP4): speed > at_speed_pct, one accel/decel output, alarm, warning
+                    accel = bool(t.motor and power and not t.error and spd < th.turbo_speed_reached_pct)
+                    decel = bool((not t.motor or t.error) and spd > 1.0)
+                    raw = {"at_speed": spd > float(p.get("at_speed_pct", 80.0)),
+                           "accel_decel": accel or decel,
+                           "alarm": bool(t.error) if power else False, "warning": warn}
+                    contacts = normalize_contacts(raw, bool(t.motor))
+                else:
+                    contacts = {
+                        "rotating": spd > 1.0,
+                        "accelerating": bool(t.motor and power and not t.error and spd < th.turbo_speed_reached_pct),
+                        "at_speed": spd >= th.turbo_speed_reached_pct,
+                        "braking": bool((not t.motor or t.error) and spd > th.turbo_slow_speed_pct),
+                        "alarm": bool(t.error) if power else False,
+                        "warning": warn,
+                    }
                 ti = TurboInputs(speed_pct=0.0, error=contacts["alarm"], motor_read=bool(t.motor and power),
                                  still_spinning=contacts["rotating"], contacts=contacts)
             else:
                 ti = TurboInputs(speed_pct=t.speed_pct if power else 0.0, error=bool(t.error) if power else False,
                                  motor_read=bool(t.motor and power), still_spinning=bool(t.speed_pct > 5.0))
+                if tcfg.control_mode == "hipace_rs485":
+                    # what the serial link would report: [P:303] text, link health
+                    ti.error_text = "Err001" if ti.error else "no Err"
+                    ti.comm_ok = True
+                    ti.rs485 = {"port": "SIM", "address": tcfg.params.get("address", 1)}
             inp.turbos[tid] = ti
         # the plant always has an air supply; a *reading* exists only if the facility has the sensor
         inp.compressor_bar = st.compressor_bar if cfg.has_compressor else None

@@ -9,6 +9,9 @@ Tasks (as in the VI's "Setup of Main Loop"):
   AI  one task per turbo speed, one for the pump frequency   -- SEPARATE tasks, as in the VI
   per turbo: DO motor (+ standby | + error-ack/reset), DI error (+ still spinning)
              contact interface (VC100 Turbo 1): DI rotating/accelerating/at-speed/braking/alarm/warning
+  HiPace over RS-485 (`control_mode: hipace_rs485`): NO DAQ lines at all - motor, standby, error
+             acknowledge, speed and error code go over the serial link (hal/hipace_rs485_turbos.py),
+             merged into the same Inputs / taken from the same Commands as every other turbo
 
 `read_only=True` creates the input tasks only – nothing is ever written (no DO task is even
 reserved), for bring-up checks with `tools/daq_check.py` while the facility is in any state.
@@ -38,8 +41,9 @@ import numpy as np
 
 from ..config import FacilityConfig
 from ..gauges import speed_pct_from_v, v_to_torr
-from ..model import Commands, Inputs, TurboInputs
+from ..model import CONTACT_NAMES as CANONICAL_CONTACTS, EXTRA_CONTACT_NAMES, Commands, Inputs, TurboInputs, normalize_contacts
 from .base import HardwareBackend
+from .hipace_rs485_turbos import RS485Turbos
 
 import nidaqmx  # type: ignore
 from nidaqmx.constants import AcquisitionType, LineGrouping, TerminalConfiguration  # type: ignore
@@ -55,8 +59,13 @@ _TERMINAL_CONFIG = {
 }
 
 
-# order of the Shimadzu status lines in the turbo DI task (= the VI's 'Turbo 1 <name>' channel names)
-CONTACT_NAMES = ("rotating", "accelerating", "at_speed", "braking", "alarm", "warning")
+# order of the Shimadzu status lines in the turbo DI task (= the VI's 'Turbo 1 <name>' channel names);
+# only the ones a turbo block actually wires are created (the HD15 remote of TMP4 has four, incl. accel_decel)
+CONTACT_NAMES = CANONICAL_CONTACTS + EXTRA_CONTACT_NAMES
+
+
+def _wired_contacts(p) -> list:
+    return [n for n in CONTACT_NAMES if f"{n}_di" in p]
 
 
 class NiDaqmxBackend(HardwareBackend):
@@ -69,10 +78,14 @@ class NiDaqmxBackend(HardwareBackend):
         self.ai_channels: List[str] = []       # order of channels in the main (gauge) AI task
         self.single_ai: Dict[str, int] = {}    # dedicated one-channel AI tasks -> samples per read
         self._last_written: Optional[Commands] = None
+        self.rs485 = RS485Turbos(config.turbos, read_only=read_only)
+        self._close_msgs: List[str] = []
 
     # ------------------------------------------------------------------ setup
     def open(self) -> None:
         self._open_inputs()
+        if self.rs485:
+            self.rs485.open()
         if not self.read_only:
             self._open_outputs()
             self.safe_state()
@@ -103,8 +116,10 @@ class NiDaqmxBackend(HardwareBackend):
         t.do_channels.add_do_chan(cfg.phys(cfg.chiller.cmd), name_to_assign_to_lines="chiller_cmd",
                                   line_grouping=LineGrouping.CHAN_PER_LINE)
         self.tasks["chiller_cmd"] = t
-        # --- turbo DO (motor + standby, error acknowledge)
+        # --- turbo DO (motor + standby, error acknowledge); RS-485 turbos have no lines
         for tc in cfg.turbos:
+            if tc.control_mode == "hipace_rs485":
+                continue
             p = tc.params
             t = nidaqmx.Task(f"{tc.id}_cmd")
             t.do_channels.add_do_chan(cfg.phys(p["motor_do"]), name_to_assign_to_lines=f"{tc.id}_motor", line_grouping=LineGrouping.CHAN_PER_LINE)
@@ -168,10 +183,10 @@ class NiDaqmxBackend(HardwareBackend):
         for tc in cfg.turbos:
             p = tc.params
             if tc.control_mode == "hipace_rs485":
-                raise NotImplementedError("HiPace RS485 control (Pfeiffer PV library) is not ported; use a D-SUB mode")
+                continue                       # speed, error, motor read-back come over RS-485
             t = nidaqmx.Task(f"{tc.id}_read")
             if tc.control_mode == "shimadzu_contacts":
-                for name in CONTACT_NAMES:
+                for name in _wired_contacts(p):
                     t.di_channels.add_di_chan(cfg.phys(p[f"{name}_di"]), name_to_assign_to_lines=f"{tc.id}_{name}",
                                               line_grouping=LineGrouping.CHAN_PER_LINE)
             else:
@@ -229,6 +244,11 @@ class NiDaqmxBackend(HardwareBackend):
         return float(np.asarray(data, dtype=float).mean())
 
     def close(self) -> None:
+        if self.rs485:
+            try:
+                self._close_msgs = self.rs485.close()     # sends the safe (all-off) state first
+            except Exception as exc:
+                self._close_msgs = [f"!! RS-485 close failed: {exc}"]
         for t in self.tasks.values():
             try:
                 t.stop()
@@ -241,7 +261,17 @@ class NiDaqmxBackend(HardwareBackend):
         self.tasks.clear()
 
     def describe(self) -> str:
-        return f"NI-DAQmx ({self.config.daq_name})" + (" READ-ONLY" if self.read_only else "")
+        extra = ""
+        if self.rs485:
+            ports = sorted({str(t.params["port"]) for t in self.config.rs485_turbos()})
+            extra = f" + RS-485 {', '.join(ports)}"
+        return f"NI-DAQmx ({self.config.daq_name}){extra}" + (" READ-ONLY" if self.read_only else "")
+
+    def take_events(self) -> List[str]:
+        return self.rs485.take_events() if self.rs485 else []
+
+    def close_messages(self) -> List[str]:
+        return list(self._close_msgs)
 
     # ------------------------------------------------------------------ I/O
     def write(self, cmds: Commands) -> None:
@@ -256,7 +286,11 @@ class NiDaqmxBackend(HardwareBackend):
         else:
             self.tasks["primary_cmd"].write(bool(cmds.primary_run), auto_start=True)
         self.tasks["chiller_cmd"].write(bool(cmds.chiller), auto_start=True)
+        if self.rs485:
+            self.rs485.set_commands(cmds.turbo_motor, cmds.turbo_standby)
         for tc in cfg.turbos:
+            if tc.control_mode == "hipace_rs485":
+                continue
             vals = [bool(cmds.turbo_motor.get(tc.id, False))]
             if "standby_do" in tc.params:
                 vals.append(bool(cmds.turbo_standby.get(tc.id, False)))
@@ -266,6 +300,10 @@ class NiDaqmxBackend(HardwareBackend):
 
     def turbo_error_ack(self, turbo_id: str, level: bool) -> None:
         if self.read_only:
+            return
+        if turbo_id in self.rs485.units:
+            if level:                      # RS-485: one [P:009] write on the rising edge of the pulse
+                self.rs485.error_ack(turbo_id)
             return
         task = self.tasks.get(f"{turbo_id}_ack")
         if task is not None:
@@ -316,6 +354,9 @@ class NiDaqmxBackend(HardwareBackend):
                 if not cfg.primary.has_read:      # no boolean feedback – derive one from the frequency
                     inp.primary_read = inp.primary_hz > cfg.primary.frequency.running_above_hz
             for tc in cfg.turbos:
+                if tc.control_mode == "hipace_rs485":
+                    inp.turbos[tc.id] = self.rs485.inputs(tc.id)
+                    continue
                 p = tc.params
                 ti = TurboInputs()
                 if f"{tc.id}_speed_ai" in self.tasks:
@@ -326,9 +367,12 @@ class NiDaqmxBackend(HardwareBackend):
                 if tc.control_mode == "shimadzu_contacts":
                     # Alarm and Warning are normally-closed contacts in the VI (read FALSE = condition
                     # present): `<name>_di_inverted` (default true for those two) de-inverts them here
-                    for name, raw in zip(CONTACT_NAMES, dr):
+                    raw_contacts = {}
+                    for name, raw in zip(_wired_contacts(p), dr):
                         inv = bool(p.get(f"{name}_di_inverted", name in ("alarm", "warning")))
-                        ti.contacts[name] = (not bool(raw)) if inv else bool(raw)
+                        raw_contacts[name] = (not bool(raw)) if inv else bool(raw)
+                    motor_cmd = bool(self._last_written.turbo_motor.get(tc.id, False)) if self._last_written else False
+                    ti.contacts = normalize_contacts(raw_contacts, motor_cmd)
                     ti.error = ti.contacts.get("alarm", False)
                     ti.still_spinning = ti.contacts.get("rotating", False)
                 else:

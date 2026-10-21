@@ -202,3 +202,18 @@ in their control names).
 * Turbo 3 reset: no line in the VI; if the cable has one, add `error_ack_do: Mod3/port0/line8`.
 * `Use Ecodry As Primary?` / `Ecodry Speed` and the `Measurement` sensor are unfinished in the VI and
   not ported.
+
+## Port deviation (2026-10-09): Turbos 2 and 3 over RS-485
+
+The profile now drives Turbos 2 and 3 with `control_mode: hipace_rs485` (Pfeiffer Vacuum protocol,
+`hal/hipace_rs485_turbos.py`).  Their D-SUB lines in the tables above (Mod3/port0/line3…7, Mod8/ai5/ai6,
+Mod2/port0/line16/17) are then **not created or driven** by the program; the D-SUB blocks remain in the
+YAML for `control_mode: hipace_dsub25`.  Error 5007 now carries the pump's own code ("Turbo 2 Error:
+Err006") or "no RS-485 reply …".
+
+## Port deviation (2026-10-13): Turbos 4, 5, 6
+
+Not in the VI.  New NI-9472 in slot 5: line0/1/2 = Turbo 4 (Shimadzu HD15) Reset / Standby / Start-Stop,
+line3 = Gate 5, line4 = Gate 4, line5 = Gate 6.  Mod2 DI: line18 = Turbo 4 speed > 80 %, line19 = Turbo 4
+accelerating/decelerating, line20/21 = Turbo 4 Alarm / Warning (24 V = present), line22/23/24 = Gate 4/5/6
+open.  Turbos 5 and 6 are HiPace on the RS-485 bus.  Turbos 4/5/6 share Turbo 1/2/3's turbo valve and gauge.

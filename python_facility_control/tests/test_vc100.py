@@ -20,6 +20,27 @@ def vcfg():
     return c
 
 
+def _dsub(cfg_path=VC100):
+    """The VI's own layout and wiring: three turbos, Turbos 2/3 on their D-SUB lines.  (The profile runs
+    them over RS-485 since 2026-10-09, keeping the D-SUB blocks as the alternative mode, and has three
+    more TMPs and their gates since 2026-10-13 - those are stripped here.)"""
+    import yaml
+    raw = yaml.safe_load(open(cfg_path, encoding="utf-8"))
+    raw["turbos"] = [t for t in raw["turbos"] if t["id"] in ("turbo1", "turbo2", "turbo3")]
+    raw["valves"] = {k: v for k, v in raw["valves"].items() if k not in ("gate4", "gate5", "gate6")}
+    for t in raw["turbos"]:
+        if "hipace_dsub25" in t:
+            t["control_mode"] = "hipace_dsub25"
+    c = build_config(raw, cfg_path)
+    c.simulation.time_scale = 200.0
+    return c
+
+
+@pytest.fixture
+def vcfg_dsub():
+    return _dsub()
+
+
 @pytest.fixture
 def vh(vcfg):
     return Harness(vcfg)
@@ -39,9 +60,9 @@ def _to_high_vac(h):
 
 
 # ---------------------------------------------------------------------------- profile / pinout
-def test_pinout_matches_the_vi(vcfg):
-    """Chassis cDAQ3; the VI's channel map, line by line."""
-    cfg = vcfg
+def test_pinout_matches_the_vi(vcfg_dsub):
+    """Chassis cDAQ3; the VI's channel map, line by line (D-SUB wiring of Turbos 2/3)."""
+    cfg = vcfg_dsub
     assert cfg.daq_name == "cDAQ3" and cfg.phys("Mod8/ai0") == "cDAQ3Mod8/ai0"
     # AI (NI-9205 slot 8): task order in the VI = ai0 WRG, ai1 foreline, ai2/3/4 turbo gauges, ai7 compressor, ai5/6 speeds
     assert [g.channel for g in cfg.gauges] == ["Mod8/ai0", "Mod8/ai1", "Mod8/ai2", "Mod8/ai3", "Mod8/ai4"]
@@ -260,13 +281,13 @@ def test_contact_warning_can_be_display_only(vcfg):
     vcfg.turbo("turbo1").params["warning_is_error"] = False
     h = Harness(vcfg)
     _to_high_vac(h)
-    h.backend.set_fault("turbo_warning", True)
+    h.backend.set_fault("turbo_warning_turbo1", True)
     s = h.step(2)
     assert s.turbos["turbo1"].status == TurboStatus.WARNING and s.error.code == 0 and s.current == S.PUMPING_TO_HIGH_VAC
 
 
-def test_hipace_error_is_not_gated_on_the_chiller(vh):
-    h = Harness(vh.cfg, mode=Mode.ADMIN)
+def test_hipace_error_is_not_gated_on_the_chiller(vcfg_dsub):
+    h = Harness(vcfg_dsub, mode=Mode.ADMIN)
     h.step(2)
     assert not h.ctl.cmds.chiller
     h.backend.set_fault("turbo_error_turbo2", True)
@@ -356,7 +377,8 @@ def test_admin_dialogs_name_the_turbo(vh):
 
 
 # ---------------------------------------------------------------------------- DAQ backend against the fake driver
-def test_vc100_daq_tasks(vcfg, fake_daq):
+def test_vc100_daq_tasks(vcfg_dsub, fake_daq):
+    vcfg = vcfg_dsub
     b = fake_daq.NiDaqmxBackend(vcfg)
     b.open()
     t = FakeTask.registry

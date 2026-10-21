@@ -1,8 +1,21 @@
-"""The pumping diagram (P&ID) of the LabVIEW front panel, drawn from the facility config.
+"""The pumping diagram (P&ID) of the front panel, drawn from the facility config.
 
-Grey = off/closed, green = on/open, red = error; turbos use the VI's six status colours.
-In Admin / Manual mode the symbols are clickable (the VI overlays its *_User_Cmd buttons
-on the diagram) and emit `commandRequested('valve:<id>' | 'primary' | 'chiller' | 'turbo:<id>')`.
+Layout (2026-10-13 redesign, any number of turbos):
+
+    header      facility name | mode pill | Auto state / target | settle-wait notice
+    chamber     a horizontal vacuum vessel with dished heads; the chamber pressure display sits in it,
+                the vent valve on the left head, the bypass line leaves the right head
+    branches    one port per turbo on the underside of the vessel: gate valve -> turbo pump -> status
+                card (status word + speed bar).  Turbos backed through the SAME turbo valve (VC100:
+                Turbo 1 + 4, 2 + 5, 3 + 6) stand side by side and join above that one turbo valve and
+                its one backing gauge
+    foreline    the roughing manifold along the bottom: foreline gauge, primary pump (with run-hour meter
+                and, if fitted, drive frequency), exhaust; chiller and compressed air as utility cards
+
+Colours keep the VI's meaning (grey = off/closed, green = on/open, red = error; turbos: blue
+spinning up, purple spinning down, amber standby, orange warning), in a calmer palette.  In Admin /
+Manual mode the symbols are clickable and emit `commandRequested('valve:<id>' | 'primary' |
+'chiller' | 'turbo:<id>')`.
 """
 from __future__ import annotations
 
@@ -11,17 +24,36 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPainterPath, QPen, QPolygonF
+from PySide6.QtGui import (QBrush, QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPen, QPolygonF,
+                           QRadialGradient)
 from PySide6.QtWidgets import QWidget
 
 from ..config import FacilityConfig
-from ..model import COLOR_ERROR, COLOR_OFF, COLOR_ON, COLOR_SPIN_UP, Mode, Snapshot
+from ..model import (COLOR_ERROR, COLOR_OFF, COLOR_ON, COLOR_SPIN_DOWN, COLOR_SPIN_UP, COLOR_STANDBY,
+                     COLOR_WARNING, Mode, Snapshot)
 from ..units import format_pressure, unit_label
 
-GRID = QColor("#E4E4E4")
-PIPE = QColor("#505050")
-BOX_BG = QColor("#DADADA")
-TEXT = QColor("#000000")
+# ---------------------------------------------------------------------------- palette
+BG = QColor("#F3F5F7")
+INK = QColor("#1F2328")            # primary text
+INK_2 = QColor("#5B6470")          # secondary text
+LINE = QColor("#3D444D")           # symbol outlines
+PIPE = QColor("#5C6670")
+PIPE_HI = QColor("#8C96A0")
+CARD = QColor("#FFFFFF")
+CARD_EDGE = QColor("#C9D1D9")
+STEEL_1, STEEL_2, STEEL_3 = QColor("#E9EDF1"), QColor("#C3CBD3"), QColor("#9AA4AE")
+
+# the VI's state colours -> the same meaning, calmer shades
+_DISPLAY = {
+    COLOR_OFF: "#C9CED4", COLOR_ON: "#3FB950", COLOR_ERROR: "#D73A49", COLOR_SPIN_UP: "#2F81F7",
+    COLOR_SPIN_DOWN: "#8E7CC3", COLOR_STANDBY: "#E3B341", COLOR_WARNING: "#F0883E",
+}
+MODE_COLORS = {Mode.AUTO: "#2F81F7", Mode.ADMIN: "#B35900", Mode.MANUAL: "#7E57C2", Mode.INITIALIZE: "#6E7781"}
+
+
+def _c(vi_color: str) -> QColor:
+    return QColor(_DISPLAY.get(vi_color.upper(), vi_color))
 
 
 @dataclass
@@ -31,10 +63,28 @@ class Hit:
     tooltip: str
 
 
+# ---------------------------------------------------------------------------- geometry constants
+HEADER_H = 34.0
+VESSEL_TOP, VESSEL_BOT = 56.0, 196.0
+GATE_Y = 240.0
+TURBO_Y = 304.0
+TURBO_R = 25.0
+CARD_Y = 336.0            # turbo status card top
+CARD_H = 44.0
+JOIN_Y = 402.0            # turbos of one turbo valve join here
+GAUGE_Y = 436.0
+TV_Y = 488.0              # turbo valve
+MANIFOLD_Y = 538.0
+COL_W = 106.0             # one turbo column
+GROUP_GAP = 30.0          # extra space between groups
+X0 = 250.0                # first turbo column
+LEFT_COL = 18.0           # utility cards
+
+
 class SchematicWidget(QWidget):
     commandRequested = Signal(str)
 
-    W, H = 690.0, 640.0   # virtual canvas
+    W, H = 690.0, 640.0   # virtual canvas (W grows with the number of turbos)
 
     def __init__(self, cfg: FacilityConfig, parent=None):
         super().__init__(parent)
@@ -42,6 +92,7 @@ class SchematicWidget(QWidget):
         self.snap: Optional[Snapshot] = None
         self.unit = cfg.pressure_unit_default
         self.hits: List[Hit] = []
+        self.W = max(type(self).W, self._layout()[2] + 120.0)
         self.setMinimumSize(600, 560)
         self.setMouseTracking(True)
         self.setAutoFillBackground(True)
@@ -86,292 +137,478 @@ class SchematicWidget(QWidget):
         s, ox, oy = self._scale()
         return QPointF((p.x() - ox) / s, (p.y() - oy) / s)
 
+    # ------------------------------------------------------------------ layout
+    def _groups(self) -> List[Tuple[str, List[int]]]:
+        """Turbos grouped by the turbo valve they are backed through, in order of first appearance
+        (VC100: [Turbo 1, Turbo 4], [Turbo 2, Turbo 5], [Turbo 3, Turbo 6]).  An unshared turbo is a
+        group of one."""
+        groups: Dict[str, List[int]] = {}
+        for i, tc in enumerate(self.cfg.turbos):
+            groups.setdefault(tc.turbo_valve, []).append(i)
+        return list(groups.items())
+
+    def _grouped(self) -> bool:
+        return any(len(ix) > 1 for _, ix in self._groups())
+
+    def _layout(self) -> Tuple[QRectF, List[float], float]:
+        """Vessel rectangle, x of every turbo column (cfg.turbos order), x of the bypass line."""
+        n = len(self.cfg.turbos)
+        xs = [0.0] * n
+        x = X0
+        prev_single = False
+        for gi, (_vid, idx) in enumerate(self._groups()):
+            if gi:
+                x += COL_W + GROUP_GAP + (70.0 if prev_single else 0.0)   # room for a lone turbo's gauge card
+            prev_single = len(idx) == 1
+            for k, i in enumerate(idx):
+                if k:
+                    x += COL_W
+                xs[i] = x
+        last = max(xs) if xs else X0
+        # the vessel spans every port with room for its dished heads; never narrower than the readout
+        left, right = 150.0, max(last + 70.0, 640.0)
+        vessel = QRectF(left, VESSEL_TOP, right - left, VESSEL_BOT - VESSEL_TOP)
+        bypass_x = vessel.right() + 46.0
+        return vessel, xs, bypass_x
+
     # ------------------------------------------------------------------ painting
     def paintEvent(self, ev):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         p.setRenderHint(QPainter.TextAntialiasing)
-        p.fillRect(self.rect(), QColor("#F4F4F4"))
-        # grid like the LabVIEW front panel
-        p.setPen(QPen(GRID, 1))
-        step = 12
-        for x in range(0, self.width(), step):
-            p.drawLine(x, 0, x, self.height())
-        for y in range(0, self.height(), step):
-            p.drawLine(0, y, self.width(), y)
+        p.fillRect(self.rect(), BG)
         s, ox, oy = self._scale()
         p.translate(ox, oy)
         p.scale(s, s)
         self.hits = []
         self._draw(p)
 
-    # ---- drawing helpers ----------------------------------------------------
-    def _font(self, size: float, bold: bool = False) -> QFont:
-        f = QFont("Segoe UI")
+    # ---- primitives ---------------------------------------------------------
+    def _font(self, size: float, bold: bool = False, mono: bool = False) -> QFont:
+        f = QFont("Consolas" if mono else "Segoe UI")
+        if not mono:
+            f.setFamilies(["Segoe UI", "Arial", "Helvetica"])
+        else:
+            f.setFamilies(["Consolas", "DejaVu Sans Mono", "Courier New"])
         f.setPointSizeF(size)
         f.setBold(bold)
         return f
 
-    def _box(self, p: QPainter, rect: QRectF, lines: List[Tuple[str, float, bool]], bg: QColor = BOX_BG, align=Qt.AlignCenter):
-        p.setPen(QPen(QColor("#8A8A8A"), 1))
-        p.setBrush(QBrush(bg))
-        p.drawRect(rect)
-        p.setPen(QPen(TEXT))
-        n = len(lines)
-        h = rect.height() / max(n, 1)
-        for i, (txt, size, bold) in enumerate(lines):
-            p.setFont(self._font(size, bold))
-            r = QRectF(rect.x() + 3, rect.y() + i * h, rect.width() - 6, h)
-            p.drawText(r, align | Qt.AlignVCenter, txt)
+    def _text(self, p: QPainter, rect: QRectF, txt: str, size: float = 9.0, bold: bool = False,
+              color: QColor = INK, align=Qt.AlignLeft | Qt.AlignVCenter, mono: bool = False):
+        p.setPen(QPen(color))
+        p.setFont(self._font(size, bold, mono))
+        p.drawText(rect, align, txt)
 
-    def _label(self, p: QPainter, x: float, y: float, txt: str, size: float = 9.5, bold=False, align=Qt.AlignLeft):
-        p.setPen(QPen(TEXT))
-        p.setFont(self._font(size, bold))
-        r = QRectF(x, y - 8, 260, 16)
+    def _label(self, p: QPainter, x: float, y: float, txt: str, size: float = 9.0, bold=False,
+               align=Qt.AlignLeft, color: QColor = INK):
+        r = QRectF(x, y - 8, 200, 16)
         if align == Qt.AlignRight:
-            r = QRectF(x - 260, y - 8, 260, 16)
+            r = QRectF(x - 200, y - 8, 200, 16)
         elif align == Qt.AlignHCenter:
-            r = QRectF(x - 130, y - 8, 260, 16)
-        p.drawText(r, align | Qt.AlignVCenter, txt)
+            r = QRectF(x - 100, y - 8, 200, 16)
+        self._text(p, r, txt, size, bold, color, align | Qt.AlignVCenter)
 
-    def _pipe(self, p: QPainter, pts: List[Tuple[float, float]]):
-        p.setPen(QPen(PIPE, 3))
-        for a, b in zip(pts, pts[1:]):
-            p.drawLine(QPointF(*a), QPointF(*b))
+    def _card(self, p: QPainter, rect: QRectF, accent: Optional[QColor] = None, radius: float = 5.0):
+        p.setPen(QPen(CARD_EDGE, 1))
+        p.setBrush(QBrush(CARD))
+        p.drawRoundedRect(rect, radius, radius)
+        if accent is not None:
+            p.setPen(Qt.NoPen)
+            p.setBrush(QBrush(accent))
+            path = QPainterPath()
+            path.addRoundedRect(QRectF(rect.left(), rect.top(), 4, rect.height()), 2, 2)
+            p.drawPath(path)
+
+    def _readout(self, p: QPainter, rect: QRectF, caption: str, value: str, unit: str = "",
+                 accent: Optional[QColor] = None):
+        """Instrument card: small caption, value in a fixed-width face, unit."""
+        self._card(p, rect, accent)
+        pad = 8.0
+        self._text(p, QRectF(rect.left() + pad, rect.top() + 2, rect.width() - 2 * pad, 14), caption, 7.5,
+                   False, INK_2)
+        self._text(p, QRectF(rect.left() + pad, rect.top() + 15, rect.width() - 2 * pad, rect.height() - 17),
+                   f"{value} {unit}".rstrip(), 9.5, True, INK, Qt.AlignLeft | Qt.AlignVCenter, mono=True)
+
+    def _pipe(self, p: QPainter, pts: List[Tuple[float, float]], width: float = 5.0):
+        path = QPainterPath(QPointF(*pts[0]))
+        for pt in pts[1:]:
+            path.lineTo(QPointF(*pt))
+        p.setBrush(Qt.NoBrush)
+        pen = QPen(PIPE, width)
+        pen.setCapStyle(Qt.FlatCap)
+        pen.setJoinStyle(Qt.MiterJoin)
+        p.setPen(pen)
+        p.drawPath(path)
+        pen = QPen(PIPE_HI, 1.2)                          # thin highlight: reads as a tube, not a line
+        p.setPen(pen)
+        p.drawPath(path)
+
+    def _flange(self, p: QPainter, x: float, y: float, vertical: bool = True):
+        p.setPen(QPen(LINE, 1))
+        p.setBrush(QBrush(STEEL_2))
+        if vertical:
+            p.drawRect(QRectF(x - 10, y - 2.5, 20, 5))
+        else:
+            p.drawRect(QRectF(x - 2.5, y - 10, 5, 20))
 
     def _valve_color(self, vid: str) -> QColor:
         if not self.snap:
-            return QColor(COLOR_OFF)
+            return _c(COLOR_OFF)
         cmd = self.snap.commands.valves.get(vid, False)
         rd = self.snap.inputs.valve_reads.get(vid, False)
         if self.snap.valve_errors.get(vid) and cmd != rd:
-            return QColor(COLOR_ERROR)
-        return QColor(COLOR_ON if rd else COLOR_OFF)
+            return _c(COLOR_ERROR)
+        return _c(COLOR_ON if rd else COLOR_OFF)
 
-    def _pneumatic_valve(self, p: QPainter, cx: float, cy: float, vid: str, label: str, label_dx: float = 22,
-                         label_below: bool = False):
-        """Vertical pneumatic valve: square body with an actuator triangle on top (VC100 panel style)."""
+    def _valve(self, p: QPainter, cx: float, cy: float, vid: str, label: str, vertical: bool = True,
+               label_side: str = "right", size: float = 13.0):
+        """ISA bow-tie valve with a pneumatic (dome) actuator; fill = state colour."""
         col = self._valve_color(vid)
-        body = QRectF(cx - 17, cy - 17, 34, 34)
-        p.setPen(QPen(QColor("#303030"), 1.5))
+        s = size
+        p.setPen(QPen(LINE, 1.4))
         p.setBrush(QBrush(col))
-        p.drawRect(body)
-        tri = QPolygonF([QPointF(cx - 13, cy - 17), QPointF(cx + 13, cy - 17), QPointF(cx, cy - 30)])
-        p.drawPolygon(tri)
-        p.drawLine(QPointF(cx, cy - 30), QPointF(cx, cy - 36))
-        p.drawLine(QPointF(cx - 6, cy - 36), QPointF(cx + 6, cy - 36))
-        if label_below:
-            self._label(p, cx, cy + 27, label, 9.5, False, Qt.AlignHCenter)
+        if vertical:
+            p.drawPolygon(QPolygonF([QPointF(cx - s, cy - s), QPointF(cx + s, cy - s), QPointF(cx, cy)]))
+            p.drawPolygon(QPolygonF([QPointF(cx - s, cy + s), QPointF(cx + s, cy + s), QPointF(cx, cy)]))
+            # actuator to the side: stem + dome
+            p.drawLine(QPointF(cx, cy), QPointF(cx - s - 7, cy))
+            dome = QRectF(cx - s - 19, cy - 8, 12, 16)
+            p.drawChord(dome, 90 * 16, 180 * 16)
+            p.drawLine(dome.center() + QPointF(0, -8), dome.center() + QPointF(0, 8))
+            hit = QRectF(cx - s - 20, cy - s - 2, 2 * s + 22, 2 * s + 4)
         else:
-            self._label(p, cx + label_dx, cy - 2, label, 10)
-        self.hits.append(Hit(QRectF(cx - 20, cy - 38, 40, 58), f"valve:{vid}", f"{label}: click to open/close"))
+            p.drawPolygon(QPolygonF([QPointF(cx - s, cy - s), QPointF(cx - s, cy + s), QPointF(cx, cy)]))
+            p.drawPolygon(QPolygonF([QPointF(cx + s, cy - s), QPointF(cx + s, cy + s), QPointF(cx, cy)]))
+            p.drawLine(QPointF(cx, cy), QPointF(cx, cy - s - 7))
+            dome = QRectF(cx - 8, cy - s - 19, 16, 12)
+            p.drawChord(dome, 180 * 16, 180 * 16)
+            p.drawLine(QPointF(dome.left(), dome.bottom()), QPointF(dome.right(), dome.bottom()))
+            hit = QRectF(cx - s - 2, cy - s - 20, 2 * s + 4, 2 * s + 22)
+        if label_side == "right":
+            self._label(p, cx + s + 6, cy, label, 8.5)
+        elif label_side == "left":
+            self._label(p, cx - s - 24, cy, label, 8.5, align=Qt.AlignRight)
+        elif label_side == "above":
+            self._label(p, cx, cy - s - 28, label, 8.5, align=Qt.AlignHCenter)
+        elif label_side == "below":
+            self._label(p, cx, cy + s + 10, label, 8.5, align=Qt.AlignHCenter)
+        self.hits.append(Hit(hit, f"valve:{vid}", f"{label}: click to open/close"))
 
-    def _horizontal_valve(self, p: QPainter, cx: float, cy: float, vid: str, label: str):
-        col = self._valve_color(vid)
-        p.setPen(QPen(QColor("#303030"), 1.5))
-        p.setBrush(QBrush(col))
-        p.drawRect(QRectF(cx - 16, cy - 12, 32, 24))
-        tri = QPolygonF([QPointF(cx - 16, cy - 8), QPointF(cx - 16, cy + 8), QPointF(cx - 28, cy)])
-        p.drawPolygon(tri)
-        p.drawLine(QPointF(cx - 28, cy), QPointF(cx - 36, cy))
-        p.drawLine(QPointF(cx - 36, cy - 6), QPointF(cx - 36, cy + 6))
-        self._label(p, cx - 34, cy - 24, label, 10)
-        self.hits.append(Hit(QRectF(cx - 38, cy - 14, 56, 28), f"valve:{vid}", f"{label}: click to open/close"))
-
-    def _turbo(self, p: QPainter, cx: float, cy: float, tid: str, r: float = 40):
+    def _turbo(self, p: QPainter, cx: float, cy: float, tid: str, r: float = TURBO_R):
+        """Turbomolecular pump: housing ring + rotor blades, fill = the VI's turbo status colour."""
         tv = self.snap.turbos.get(tid) if self.snap else None
-        col = QColor(tv.color if tv else COLOR_OFF)
-        if tv and not tv.in_use:
-            col = QColor("#B0B0B0")
-        p.setPen(QPen(QColor("#303030"), 2))
-        p.setBrush(QBrush(col))
+        col = _c(tv.color) if tv else _c(COLOR_OFF)
+        in_use = not (tv and not tv.in_use)
+        if not in_use:
+            col = QColor("#E1E4E8")
+        pen = QPen(LINE, 1.8)
+        if not in_use:
+            pen.setStyle(Qt.DashLine)
+        p.setPen(pen)
+        grad = QRadialGradient(QPointF(cx - r * 0.3, cy - r * 0.3), r * 1.3)
+        grad.setColorAt(0.0, col.lighter(125))
+        grad.setColorAt(1.0, col)
+        p.setBrush(QBrush(grad))
         p.drawEllipse(QPointF(cx, cy), r, r)
-        p.setBrush(QBrush(QColor("#F4F4F4")))
-        p.drawEllipse(QPointF(cx, cy), r * 0.4, r * 0.4)
-        # rotor blades hint
-        p.setPen(QPen(QColor("#303030"), 1))
-        for k in range(8):
-            a = k * math.pi / 4
-            p.drawLine(QPointF(cx + math.cos(a) * r * 0.45, cy + math.sin(a) * r * 0.45),
-                       QPointF(cx + math.cos(a) * r * 0.9, cy + math.sin(a) * r * 0.9))
-        self.hits.append(Hit(QRectF(cx - r, cy - r, 2 * r, 2 * r), f"turbo:{tid}", "Turbo pump: click to start/stop/standby"))
-
-    def _primary(self, p: QPainter, cx: float, cy: float, r: float = 38):
-        col = QColor(COLOR_OFF)
-        if self.snap:
-            st = self.snap.primary_status
-            col = QColor({0: COLOR_OFF, 1: COLOR_ON, 2: COLOR_ERROR}[int(st)])
-            if int(st) != 2:
-                if self.snap.primary_running:
-                    col = QColor(COLOR_ON)
-                elif self.snap.primary_phase in ("powering", "stopping"):
-                    col = QColor(COLOR_SPIN_UP)      # powered, not turning yet / running down
-        p.setPen(QPen(QColor("#303030"), 2))
-        p.setBrush(QBrush(col))
-        p.drawEllipse(QPointF(cx, cy), r, r)
-        p.setPen(QPen(QColor("#303030"), 3))
-        for dy in (-10, 4):
-            path = QPainterPath(QPointF(cx - 14, cy + dy - 6))
-            path.lineTo(QPointF(cx, cy + dy + 6))
-            path.lineTo(QPointF(cx + 14, cy + dy - 6))
-            p.drawPath(path)
-        self.hits.append(Hit(QRectF(cx - r, cy - r, 2 * r, 2 * r), "primary", "Primary pump: click to start/stop"))
-
-    def _chiller(self, p: QPainter, x: float, y: float, w: float = 76, h: float = 76):
-        col = QColor(COLOR_OFF)
-        if self.snap:
-            col = QColor({0: COLOR_OFF, 1: COLOR_ON, 2: COLOR_ERROR}[int(self.snap.chiller_status)])
-        p.setPen(QPen(QColor("#303030"), 2))
-        p.setBrush(QBrush(col))
-        p.drawRect(QRectF(x, y, w, h))
-        p.setPen(QPen(QColor("#202020"), 2))
-        cx, cy = x + w / 2, y + h / 2
+        # rotor: six swept blades around a hub
+        p.setPen(QPen(LINE, 1.2))
+        p.setBrush(QBrush(QColor(255, 255, 255, 170)))
         for k in range(6):
             a = k * math.pi / 3
-            ex, ey = cx + math.cos(a) * 24, cy + math.sin(a) * 24
-            p.drawLine(QPointF(cx, cy), QPointF(ex, ey))
+            blade = QPainterPath(QPointF(cx + math.cos(a) * r * 0.28, cy + math.sin(a) * r * 0.28))
+            b1 = a + 0.55
+            blade.quadTo(QPointF(cx + math.cos(a + 0.25) * r * 0.75, cy + math.sin(a + 0.25) * r * 0.75),
+                         QPointF(cx + math.cos(b1) * r * 0.82, cy + math.sin(b1) * r * 0.82))
+            blade.lineTo(QPointF(cx + math.cos(a + 0.2) * r * 0.82, cy + math.sin(a + 0.2) * r * 0.82))
+            blade.quadTo(QPointF(cx + math.cos(a) * r * 0.55, cy + math.sin(a) * r * 0.55),
+                         QPointF(cx + math.cos(a) * r * 0.28, cy + math.sin(a) * r * 0.28))
+            p.drawPath(blade)
+        p.setBrush(QBrush(STEEL_1))
+        p.drawEllipse(QPointF(cx, cy), r * 0.26, r * 0.26)
+        self.hits.append(Hit(QRectF(cx - r, cy - r, 2 * r, 2 * r), f"turbo:{tid}",
+                             "Turbo pump: click to start/stop/standby"))
+
+    def _gauge_bubble(self, p: QPainter, cx: float, cy: float, tag: str = "PT"):
+        """ISA instrument bubble (pressure transmitter)."""
+        p.setPen(QPen(LINE, 1.3))
+        p.setBrush(QBrush(CARD))
+        p.drawEllipse(QPointF(cx, cy), 11, 11)
+        p.drawLine(QPointF(cx - 11, cy), QPointF(cx + 11, cy))
+        self._text(p, QRectF(cx - 11, cy - 10, 22, 10), tag, 6, True, INK, Qt.AlignCenter)
+
+    def _primary(self, p: QPainter, cx: float, cy: float, r: float = 26):
+        """Rotary / dry roughing pump: circle with the flow triangle (ISA pump symbol)."""
+        col = _c(COLOR_OFF)
+        if self.snap:
+            st = int(self.snap.primary_status)
+            col = _c({0: COLOR_OFF, 1: COLOR_ON, 2: COLOR_ERROR}[st])
+            if st != 2:
+                if self.snap.primary_running:
+                    col = _c(COLOR_ON)
+                elif self.snap.primary_phase in ("powering", "stopping"):
+                    col = _c(COLOR_SPIN_UP)      # powered, not turning yet / running down
+        p.setPen(QPen(LINE, 1.8))
+        grad = QRadialGradient(QPointF(cx - r * 0.3, cy - r * 0.3), r * 1.3)
+        grad.setColorAt(0.0, col.lighter(125))
+        grad.setColorAt(1.0, col)
+        p.setBrush(QBrush(grad))
+        p.drawEllipse(QPointF(cx, cy), r, r)
+        p.setBrush(QBrush(QColor(255, 255, 255, 190)))
+        p.drawPolygon(QPolygonF([QPointF(cx - r * 0.55, cy - r * 0.62), QPointF(cx - r * 0.55, cy + r * 0.62),
+                                 QPointF(cx + r * 0.75, cy)]))
+        self.hits.append(Hit(QRectF(cx - r, cy - r, 2 * r, 2 * r), "primary", "Primary pump: click to start/stop"))
+
+    def _chiller(self, p: QPainter, rect: QRectF):
+        col = _c(COLOR_OFF)
+        if self.snap:
+            col = _c({0: COLOR_OFF, 1: COLOR_ON, 2: COLOR_ERROR}[int(self.snap.chiller_status)])
+        self._card(p, rect, col)
+        icon = QRectF(rect.left() + 10, rect.top() + 8, 30, 30)
+        p.setPen(QPen(LINE, 1.3))
+        p.setBrush(QBrush(col))
+        p.drawRoundedRect(icon, 4, 4)
+        cx, cy = icon.center().x(), icon.center().y()
+        p.setPen(QPen(INK, 1.4))
+        for k in range(6):
+            a = k * math.pi / 3
+            p.drawLine(QPointF(cx, cy), QPointF(cx + math.cos(a) * 11, cy + math.sin(a) * 11))
             for sgn in (-1, 1):
                 b = a + sgn * math.pi / 5
-                p.drawLine(QPointF(cx + math.cos(a) * 15, cy + math.sin(a) * 15),
-                           QPointF(cx + math.cos(a) * 15 + math.cos(b) * 7, cy + math.sin(a) * 15 + math.sin(b) * 7))
-        self.hits.append(Hit(QRectF(x, y, w, h), "chiller", "Chiller: click to start/stop"))
+                q = QPointF(cx + math.cos(a) * 7, cy + math.sin(a) * 7)
+                p.drawLine(q, q + QPointF(math.cos(b) * 4, math.sin(b) * 4))
+        self._text(p, QRectF(rect.left() + 48, rect.top() + 6, rect.width() - 52, 14), self.cfg.chiller.label,
+                   8.5, True)
+        txt = self.snap.chiller_text if self.snap else "Chiller is Off"
+        self._text(p, QRectF(rect.left() + 48, rect.top() + 22, rect.width() - 52, 16),
+                   txt.replace("Chiller is ", ""), 8.5, False, INK_2)
+        self.hits.append(Hit(rect, "chiller", "Chiller: click to start/stop"))
 
     def _pressure_text(self, gid: str) -> str:
         if not self.snap:
             return "NaN"
         return format_pressure(self.snap.inputs.pressures_torr.get(gid, float("nan")), self.unit)
 
-    # ---- the diagram ---------------------------------------------------------
+    # ---- the vessel ---------------------------------------------------------
+    def _vessel(self, p: QPainter, r: QRectF):
+        """Horizontal cylindrical vacuum vessel with 2:1 dished heads and a steel finish."""
+        head = r.height() * 0.32
+        path = QPainterPath()
+        path.moveTo(r.left() + head, r.top())
+        path.lineTo(r.right() - head, r.top())
+        path.arcTo(QRectF(r.right() - 2 * head, r.top(), 2 * head, r.height()), 90, -180)
+        path.lineTo(r.left() + head, r.bottom())
+        path.arcTo(QRectF(r.left(), r.top(), 2 * head, r.height()), 270, -180)
+        path.closeSubpath()
+        grad = QLinearGradient(QPointF(0, r.top()), QPointF(0, r.bottom()))
+        grad.setColorAt(0.0, STEEL_2)
+        grad.setColorAt(0.18, STEEL_1)
+        grad.setColorAt(0.55, STEEL_2)
+        grad.setColorAt(1.0, STEEL_3)
+        p.setPen(QPen(LINE, 2))
+        p.setBrush(QBrush(grad))
+        p.drawPath(path)
+        # head seams + stiffening rings
+        p.setPen(QPen(QColor(61, 68, 77, 120), 1.2))
+        for x in (r.left() + head, r.right() - head):
+            p.drawLine(QPointF(x, r.top() + 1), QPointF(x, r.bottom() - 1))
+
+    # ---- main drawing -------------------------------------------------------
     def _draw(self, p: QPainter):
         cfg, snap = self.cfg, self.snap
         unit = unit_label(self.unit)
         turbos = cfg.turbos
-        n = max(1, len(turbos))
-        # geometry
-        ch_rect = QRectF(90, 20, 560, 190)           # chamber ellipse
-        manifold_y = 560                               # foreline manifold
-        spacing = 150 if n <= 2 else 165
-        xs = [ch_rect.center().x() - 40 + (i - (n - 1) / 2) * spacing for i in range(n)]
-        if n == 1:
-            xs = [330.0]
-        bypass_x = ch_rect.right() + 14 if n > 1 else ch_rect.right() - 80
-        # ---- pipes first (under everything)
-        for x in xs:
-            self._pipe(p, [(x, ch_rect.bottom() - 15), (x, manifold_y)])
-        self._pipe(p, [(xs[0] - 60 if n > 1 else 175, manifold_y), (bypass_x, manifold_y)])
-        self._pipe(p, [(bypass_x, ch_rect.center().y() + (30 if n == 1 else 0)), (bypass_x, manifold_y)])
-        self._pipe(p, [(185, manifold_y), (185, 600)])   # down to the primary pump
-        self._pipe(p, [(ch_rect.left() + 12, ch_rect.center().y() - 40), (52, ch_rect.center().y() - 40)])  # vent stub
-        # ---- chamber
-        p.setPen(QPen(QColor("#303030"), 2.5))
-        p.setBrush(QBrush(QColor("#CFCFCF")))
-        p.drawEllipse(ch_rect)
-        main = cfg.main_gauge
-        self._label(p, ch_rect.center().x(), ch_rect.top() + 48, f"{main.label} Pressure", 10, False, Qt.AlignHCenter)
-        big = QRectF(ch_rect.center().x() - 95, ch_rect.top() + 60, 190, 62)
-        self._box(p, big, [(self._pressure_text(main.id), 26, False)])
-        self._label(p, big.right() + 6, big.center().y(), unit, 10)
-        other = "mbar" if self.unit == "torr" else "torr"
-        small = QRectF(ch_rect.right() - 190, ch_rect.bottom() - 62, 80, 22)
-        self._label(p, small.left(), small.top() - 10, f"WRG ({unit_label(other)})", 9)
-        txt = format_pressure(snap.inputs.pressures_torr.get(main.id, float("nan")), other) if snap else "NaN"
-        self._box(p, small, [(txt, 9, False)])
-        # ---- vent valve (top left)
+        vessel, xs, bypass_x = self._layout()
+        groups = self._groups()
+        gcx = {vid: sum(xs[i] for i in idx) / len(idx) for vid, idx in groups}
+        pump_x = 120.0
+        right_end = bypass_x
+
+        # ======== pipes (under everything)
+        for vid, idx in groups:
+            cx = gcx[vid]
+            for i in idx:
+                self._pipe(p, [(xs[i], vessel.bottom()), (xs[i], JOIN_Y if len(idx) > 1 else TV_Y)])
+            if len(idx) > 1:
+                self._pipe(p, [(min(xs[i] for i in idx) - 2.5, JOIN_Y), (max(xs[i] for i in idx) + 2.5, JOIN_Y)])
+            self._pipe(p, [(cx, JOIN_Y if len(idx) > 1 else TV_Y), (cx, MANIFOLD_Y)])
+        bps = cfg.valves_of_kind("bypass")
+        if bps:
+            self._pipe(p, [(vessel.right() - 4, vessel.center().y()), (bypass_x, vessel.center().y()),
+                           (bypass_x, MANIFOLD_Y)])
+        self._pipe(p, [(pump_x, MANIFOLD_Y), (right_end + 2.5, MANIFOLD_Y)])
+        self._pipe(p, [(pump_x, MANIFOLD_Y), (pump_x, MANIFOLD_Y + 34)])
         vents = cfg.valves_of_kind("vent")
+        vent_y = vessel.top() + 34
         if vents:
-            self._horizontal_valve(p, 52, ch_rect.center().y() - 40, vents[0].id, vents[0].label)
-        # ---- left column: compressor / com potential + chiller
-        y0 = 250
-        if snap and snap.compressor_bar is not None:
-            self._label(p, 22, y0, "Compressor", 10)
-            self._label(p, 22, y0 + 15, "Pressure (Bar)", 10)
-            self._box(p, QRectF(40, y0 + 25, 46, 22), [(f"{snap.compressor_bar:.0f}" if snap.compressor_bar > 10 else f"{snap.compressor_bar:.1f}", 10, False)])
-        for ea in cfg.extra_analog[:1]:
-            v = snap.inputs.extra_analog.get(ea["id"], float("nan")) if snap else float("nan")
-            self._label(p, 22, y0 + 65, ea["label"], 9.5)
-            self._box(p, QRectF(30, y0 + 75, 66, 22), [(f"{v:.3f}", 10, False)])
-        self._chiller(p, 18, 372)
-        cbox = QRectF(4, 452, 116, 30)
-        ctext = snap.chiller_text if snap else "Chiller is Off"
-        self._box(p, cbox, [(ctext, 10, False)])
-        # ---- turbo branches (one turbo: the Main_V4.4 layout; several: compact columns, VC100 style)
+            self._pipe(p, [(vessel.left() + 8, vent_y), (vessel.left() - 64, vent_y)])
+
+        # ======== header
+        self._header(p, max(self.W, right_end + 40))
+
+        # ======== vessel + chamber readout
+        self._vessel(p, vessel)
+        for x in xs:
+            self._flange(p, x, vessel.bottom() + 2)
+        if bps:
+            self._flange(p, vessel.right() + 2, vessel.center().y(), vertical=False)
+        main = cfg.main_gauge
+        ro = QRectF(vessel.center().x() - 120, vessel.top() + 26, 240, 74)
+        self._card(p, ro, radius=6)
+        self._text(p, QRectF(ro.left() + 12, ro.top() + 4, ro.width() - 24, 16),
+                   f"CHAMBER  ·  {main.label.upper()}", 7.5, True, INK_2)
+        self._text(p, QRectF(ro.left() + 12, ro.top() + 18, ro.width() - 70, 40),
+                   self._pressure_text(main.id), 22, True, INK, Qt.AlignLeft | Qt.AlignVCenter, mono=True)
+        self._text(p, QRectF(ro.right() - 62, ro.top() + 18, 52, 40), unit, 11, False, INK_2,
+                   Qt.AlignRight | Qt.AlignVCenter)
+        other = "mbar" if self.unit == "torr" else "torr"
+        txt = format_pressure(snap.inputs.pressures_torr.get(main.id, float("nan")), other) if snap else "NaN"
+        self._text(p, QRectF(ro.left() + 12, ro.bottom() - 18, ro.width() - 24, 14),
+                   f"= {txt} {unit_label(other)}", 8, False, INK_2, mono=True)
+
+        # ======== vent (left head) and bypass (right line)
+        if vents:
+            self._valve(p, vessel.left() - 36, vent_y, vents[0].id, vents[0].label, vertical=False, label_side="above")
+            ax = vessel.left() - 64
+            p.setPen(QPen(LINE, 1.4))
+            p.drawLine(QPointF(ax, vent_y), QPointF(ax - 10, vent_y))
+            p.drawPolyline(QPolygonF([QPointF(ax - 4, vent_y - 6), QPointF(ax - 11, vent_y), QPointF(ax - 4, vent_y + 6)]))
+            self._label(p, ax - 14, vent_y, "ATM", 7.5, True, Qt.AlignRight, INK_2)
+        if bps:
+            self._valve(p, bypass_x, (vessel.bottom() + MANIFOLD_Y) / 2 + 20, bps[0].id, bps[0].label,
+                        label_side="right")
+
+        # ======== turbo branches
+        th_reached = cfg.thresholds.turbo_speed_reached_pct
         for i, tc in enumerate(turbos):
             x = xs[i]
             gate = cfg.valves[tc.gate_valve]
-            tvv = cfg.valves[tc.turbo_valve]
+            short = gate.label[:-len(" Valve")] if gate.label.endswith(" Valve") else gate.label
+            self._valve(p, x, GATE_Y, gate.id, short, label_side="right")
+            self.hits[-1].tooltip = f"{gate.label}: click to open/close"
+            self._turbo(p, x, TURBO_Y, tc.id)
             tv = snap.turbos.get(tc.id) if snap else None
-            speed_txt = "–" if (tv and not tv.has_speed) else f"{(tv.speed_pct if tv else 0):.0f}"
-            st_txt = tv.status.label if tv else "Turbo Off"
+            st_txt = tv.status.label.replace("Turbo ", "") if tv else "Off"
             if tv and not tv.in_use:
-                st_txt = "Turbo not in use"
-            g = cfg.turbo_gauge(tc.id)
-            if n == 1:
-                self._pneumatic_valve(p, x, 320, gate.id, gate.label)
-                self._turbo(p, x, 410, tc.id)
-                self._label(p, x + 44, 352, "Speed (%):", 9.5)
-                self._box(p, QRectF(x + 44, 360, 40, 20), [(speed_txt, 10, False)])
-                self._box(p, QRectF(x + 44, 392, 150, 28), [(st_txt, 9.5, False)])
-                if g:
-                    self._box(p, QRectF(x + 40, 440, 116, 40), [(g.label, 9, False), (f"{self._pressure_text(g.id)} {unit}", 9, False)])
-                    self._pipe(p, [(x + 12, 460), (x + 40, 460)])
-                self._pneumatic_valve(p, x, 520, tvv.id, tvv.label)
+                st_txt = "Not in use"
+            accent = _c(tv.color) if tv else _c(COLOR_OFF)
+            card = QRectF(x - COL_W / 2 + 8, CARD_Y, COL_W - 16, CARD_H)
+            self._card(p, card, accent)
+            self._text(p, QRectF(card.left() + 9, card.top() + 2, card.width() - 12, 15), tc.label, 8.5, True)
+            self._text(p, QRectF(card.left() + 9, card.top() + 27, card.width() - 12, 15), st_txt, 7.5, False, INK_2)
+            bar = QRectF(card.left() + 9, card.top() + 19, card.width() - 48, 6)
+            if tv is None or tv.has_speed:
+                pct = max(0.0, min(100.0, tv.speed_pct if tv else 0.0))
+                p.setPen(Qt.NoPen)
+                p.setBrush(QBrush(QColor("#E6EAEF")))
+                p.drawRoundedRect(bar, 3, 3)
+                if pct > 0:
+                    p.setBrush(QBrush(accent))
+                    p.drawRoundedRect(QRectF(bar.left(), bar.top(), bar.width() * pct / 100.0, bar.height()), 3, 3)
+                p.setPen(QPen(QColor(61, 68, 77, 140), 1))
+                mx = bar.left() + bar.width() * th_reached / 100.0
+                p.drawLine(QPointF(mx, bar.top() - 2), QPointF(mx, bar.bottom() + 2))
+                self._text(p, QRectF(bar.right() + 2, card.top() + 14, card.right() - bar.right() - 7, 16),
+                           f"{pct:.0f}%", 7.5, True, INK, Qt.AlignRight | Qt.AlignVCenter, mono=True)
             else:
-                self._pneumatic_valve(p, x, 300, gate.id, gate.label, label_dx=20)
-                self._turbo(p, x, 372, tc.id, r=30)
-                self._label(p, x + 34, 358, tc.label, 9, True)
-                self._label(p, x + 34, 374, "Speed (%):", 8.5)
-                self._box(p, QRectF(x + 92, 365, 34, 18), [(speed_txt, 9, False)])
-                self._box(p, QRectF(x - 66, 410, 132, 22), [(st_txt.replace("Turbo ", ""), 9, False)])
-                if g:
-                    self._box(p, QRectF(x - 58, 438, 116, 36), [(g.label, 8.5, False), (f"{self._pressure_text(g.id)} {unit}", 9, False)])
-                self._pneumatic_valve(p, x, 520, tvv.id, tvv.label, label_dx=20)
-        # ---- bypass valve (right)
-        bps = cfg.valves_of_kind("bypass")
-        if bps:
-            self._pneumatic_valve(p, bypass_x, 410, bps[0].id, bps[0].label, label_dx=22, label_below=(n > 1))
-        # ---- foreline gauge + primary
+                self._text(p, QRectF(card.left() + 9, card.top() + 15, card.width() - 18, 12),
+                           "no speed signal", 6.5, False, INK_2)
+
+        # ======== per turbo valve: backing gauge + turbo valve
+        for vid, idx in groups:
+            cx = gcx[vid]
+            g = cfg.turbo_gauge(turbos[idx[0]].id)
+            if g:
+                self._pipe(p, [(cx, GAUGE_Y), (cx + 22, GAUGE_Y)], width=3)
+                self._gauge_bubble(p, cx + 33, GAUGE_Y)
+                self._readout(p, QRectF(cx + 47, GAUGE_Y - 17, 118, 34), g.label, self._pressure_text(g.id), unit)
+            tvv = cfg.valves[vid]
+            self._valve(p, cx, TV_Y, tvv.id, tvv.label, label_side="right")
+
+        # ======== foreline: gauge, primary pump, exhaust, utilities
         fg = cfg.foreline_gauge
         if fg:
-            self._box(p, QRectF(6, 536, 150, 40), [(fg.label, 9.5, False), (f"{self._pressure_text(fg.id)} {unit}", 9.5, False)])
-        self._primary(p, 185, 600)
-        pbox = QRectF(2, 596, 142, 30)
-        self._box(p, pbox, [(snap.primary_text if snap else "Primary Pump is Off", 10, False)])
-        # Beside the pump: its drive frequency when that feedback is fitted and enabled, and the
-        # maintenance hour meter (which is why the frequency box sits above rather than here).
-        y_meter = 590
-        if cfg.primary.has_frequency:
-            hz = snap.primary_hz if snap else None
-            on = snap.primary_frequency_enabled if snap else False
-            self._label(p, 236, 534, "Pump frequency", 9)
-            self._box(p, QRectF(236, 542, 92, 24),
-                      [(f"{hz:.1f} Hz" if hz is not None else ("–" if on else "reader off"), 10, False)])
-            self.hits.append(Hit(QRectF(236, 542, 92, 24), "primary",
-                                 f"Primary pump drive frequency (0-{cfg.primary.frequency.max_hz:g} Hz)"
-                                 if on else "Frequency reader is switched off – tick "
-                                            "'Pump frequency reader connected' on the panel to use it"))
+            gx = pump_x + 62
+            self._pipe(p, [(gx, MANIFOLD_Y), (gx, MANIFOLD_Y - 22)], width=3)
+            self._gauge_bubble(p, gx, MANIFOLD_Y - 33)
+            self._readout(p, QRectF(gx - 59, MANIFOLD_Y - 98, 118, 36), fg.label, self._pressure_text(fg.id), unit)
+        self._primary(p, pump_x, MANIFOLD_Y + 34 + 26)
+        ey = MANIFOLD_Y + 60
+        p.setPen(QPen(LINE, 1.4))
+        p.drawLine(QPointF(pump_x - 26, ey), QPointF(pump_x - 44, ey))
+        p.drawPolyline(QPolygonF([QPointF(pump_x - 38, ey - 6), QPointF(pump_x - 45, ey), QPointF(pump_x - 38, ey + 6)]))
+        self._label(p, pump_x - 48, ey, "EXH", 7.5, True, Qt.AlignRight, INK_2)
+        # primary card: status, hours (+ frequency)
+        pc = QRectF(pump_x + 36, MANIFOLD_Y + 14, 150, 76 if cfg.primary.has_frequency else 58)
+        self._card(p, pc, _c(COLOR_ON) if (snap and snap.primary_running) else _c(COLOR_OFF))
+        self._text(p, QRectF(pc.left() + 10, pc.top() + 3, pc.width() - 14, 15), cfg.primary.label, 8.5, True)
+        self._text(p, QRectF(pc.left() + 10, pc.top() + 19, pc.width() - 14, 15),
+                   (snap.primary_text if snap else "Primary Pump is Off").replace(cfg.primary.label + " ", "")
+                   .replace("Primary Pump ", ""), 8, False, INK_2)
         hours = snap.primary_run_hours if snap else 0.0
-        self._label(p, 236, 582, "Total run hours", 9)
-        self._box(p, QRectF(236, y_meter, 92, 24), [(f"{hours:,.2f} h", 10, False)])
+        self._text(p, QRectF(pc.left() + 10, pc.top() + 36, pc.width() - 14, 16),
+                   f"Run hours  {hours:,.2f} h", 8, False, INK, mono=True)
         measured = cfg.primary.has_frequency or cfg.primary.has_read
-        self.hits.append(Hit(QRectF(236, y_meter, 92, 24), "primary",
+        self.hits.append(Hit(QRectF(pc.left(), pc.top() + 34, pc.width(), 18), "primary",
                              "Primary pump total operating hours – "
                              + ("counted from its read-back" if measured
                                 else "counted from the run command (no pump feedback fitted)")
                              + ", kept across restarts"))
-        # ---- state / mode badge (VI: Current/Target Facility State rings)
-        if snap:
-            badge = QRectF(ch_rect.left() - 60, 220, 250, 20)
-            mode_txt = {Mode.INITIALIZE: "Initialising", Mode.ADMIN: "Admin Control Mode", Mode.MANUAL: "Manual Control Mode (interlocked)",
-                        Mode.AUTO: "Auto Control Mode"}[snap.mode]
-            p.setPen(QPen(TEXT))
-            p.setFont(self._font(9.5, True))
-            p.drawText(QRectF(280, 215, 400, 18), Qt.AlignLeft | Qt.AlignVCenter, mode_txt)
-            if snap.mode == Mode.AUTO:
-                p.setFont(self._font(8.5, False))
-                p.drawText(QRectF(280, 232, 410, 18), Qt.AlignLeft | Qt.AlignVCenter,
-                           f"State: {snap.current.label}  →  Target: {snap.target.label}   (substate {snap.substate})")
-            if snap.hold_remaining_s > 0 and snap.hold_reason:
-                p.setPen(QPen(QColor("#8A4B00")))
-                p.setFont(self._font(8.5, True))
-                p.drawText(QRectF(280, 249, 410, 18), Qt.AlignLeft | Qt.AlignVCenter,
-                           f"{snap.hold_reason} – {snap.hold_remaining_s:.0f} s")
+        if cfg.primary.has_frequency:
+            hz = snap.primary_hz if snap else None
+            on = snap.primary_frequency_enabled if snap else False
+            self._text(p, QRectF(pc.left() + 10, pc.top() + 54, pc.width() - 14, 16),
+                       "Drive  " + (f"{hz:.1f} Hz" if hz is not None else ("–" if on else "reader off")),
+                       8, False, INK, mono=True)
+            self.hits.append(Hit(QRectF(pc.left(), pc.top() + 52, pc.width(), 18), "primary",
+                                 f"Primary pump drive frequency (0-{cfg.primary.frequency.max_hz:g} Hz)"
+                                 if on else "Frequency reader is switched off – tick "
+                                            "'Pump frequency reader connected' on the panel to use it"))
+        # utilities column
+        uy = VESSEL_BOT + 40
+        self._chiller(p, QRectF(LEFT_COL, uy, 112, 46))
+        uy += 58
+        if snap and snap.compressor_bar is not None:
+            low = cfg.thresholds.compressor_min_bar is not None and snap.compressor_bar < cfg.thresholds.compressor_min_bar
+            self._readout(p, QRectF(LEFT_COL, uy, 112, 36), "Compressed air", f"{snap.compressor_bar:.1f}", "bar",
+                          accent=_c(COLOR_ERROR) if low else _c(COLOR_ON))
+            uy += 48
+        for ea in cfg.extra_analog[:1]:
+            v = snap.inputs.extra_analog.get(ea["id"], float("nan")) if snap else float("nan")
+            self._readout(p, QRectF(LEFT_COL, uy, 112, 36), ea["label"], f"{v:.3f}", "V")
+            uy += 48
+
+    def _header(self, p: QPainter, width: float):
+        snap, cfg = self.snap, self.cfg
+        p.setPen(Qt.NoPen)
+        p.setBrush(QBrush(QColor("#E6EAEF")))
+        p.drawRect(QRectF(0, 0, width, HEADER_H))
+        p.setPen(QPen(CARD_EDGE, 1))
+        p.drawLine(QPointF(0, HEADER_H), QPointF(width, HEADER_H))
+        self._text(p, QRectF(14, 0, 330, HEADER_H), cfg.name or cfg.id, 10, True)
+        if not snap:
+            return
+        mode_txt = {Mode.INITIALIZE: "INITIALISING", Mode.ADMIN: "ADMIN", Mode.MANUAL: "MANUAL · INTERLOCKED",
+                    Mode.AUTO: "AUTO"}[snap.mode]
+        f = self._font(8, True)
+        p.setFont(f)
+        tw = p.fontMetrics().horizontalAdvance(mode_txt) + 22
+        pill = QRectF(350, 8, tw, 18)
+        p.setPen(Qt.NoPen)
+        p.setBrush(QBrush(QColor(MODE_COLORS[snap.mode])))
+        p.drawRoundedRect(pill, 9, 9)
+        self._text(p, pill, mode_txt, 8, True, QColor("#FFFFFF"), Qt.AlignCenter)
+        x = pill.right() + 12
+        if snap.mode == Mode.AUTO:
+            txt = f"{snap.current.label}  →  {snap.target.label}"
+            self._text(p, QRectF(x, 0, 360, HEADER_H), txt, 9, True)
+            p.setFont(self._font(9, True))
+            x += p.fontMetrics().horizontalAdvance(txt) + 10
+            self._text(p, QRectF(x, 0, 120, HEADER_H), f"substate {snap.substate}", 8, False, INK_2)
+            x += 90
+        if snap.hold_remaining_s > 0 and snap.hold_reason:
+            avail = max(200.0, width - x - 10)
+            p.setFont(self._font(8.5, True))
+            txt = p.fontMetrics().elidedText(f"{snap.hold_reason}", Qt.ElideRight, int(avail - 60))
+            self._text(p, QRectF(x, 0, avail, HEADER_H), f"Waiting: {txt} – {snap.hold_remaining_s:.0f} s",
+                       8.5, True, QColor("#9A6700"))

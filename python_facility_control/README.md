@@ -303,9 +303,102 @@ These deviate from the VI on purpose and are all driven by the facility profile:
 * CSV logging, zoomable plots, unit switch, Manual mode, config-driven facility layout.
 * "Reset Turbos" (error acknowledge) also works in Auto mode.
 * The VI appends "Shutt down due to error" every 100 ms while an error persists; here it is logged once.
-* HiPace **RS485** control (Pfeiffer PV library) is not ported – both D-SUB modes and the contact interface are.
+* HiPace turbos can be driven over **RS-485** (`control_mode: hipace_rs485`, VC100 Turbos 2 and 3 since
+  2026-10-09) – see the section below.  The D-SUB modes and the contact interface are unchanged.
 * Auto mode stops on error codes 5000–5011 (the VIs: 5000–5010; 5011 is the compressor error, which the
   VC100 VI reports under the gate code 5010).
+
+## VC100: six turbos (2026-10-13)
+
+The medium chamber now has six turbo branches.  `config/facility_vc100.yaml` carries them all:
+
+| Turbo | Pump | Control | Gate valve (cmd / read) | Backed through |
+|---|---|---|---|---|
+| Turbo 1 | Shimadzu | 6 status contacts (the VI) | Mod1 line5 / Mod2 line5 | Turbo 1 valve |
+| Turbo 2, 3 | Pfeiffer HiPace | RS-485 | Mod1 line6, 7 / Mod2 line6, 7 | Turbo 2, 3 valve |
+| **Turbo 4** | Shimadzu | **HD15 remote**, new NI-9472 in **slot 5** | **Mod5 line4 / Mod2 line22** | Turbo 1 valve (shared) |
+| **Turbo 5** | Pfeiffer HiPace | RS-485 | **Mod5 line3 / Mod2 line23** | Turbo 2 valve (shared) |
+| **Turbo 6** | Pfeiffer HiPace | RS-485 | **Mod5 line5 / Mod2 line24** | Turbo 3 valve (shared) |
+
+**Turbo 4 (Shimadzu HD15 remote).**  Outputs: Mod5 line0 = Reset (pulsed by *Reset Turbos*), line1 =
+Standby, line2 = Start/Stop.  Status inputs: Mod2 line18 = speed above 80 %, line19 = accelerating *or*
+decelerating, line20 = Alarm, line21 = Warning – **24 V = alarm / warning** (not inverted, unlike Turbo 1's
+normally-closed contacts).  The program maps these onto the six contacts Turbo 1 has
+(`model.normalize_contacts`): the motor command tells acceleration from deceleration, "speed reached"
+needs the > 80 % contact *and* not decelerating, and "still spinning" is any of the three.  Alarm and
+Warning raise error 5005 "Turbo 4 Alarm/Warning" (`warning_is_error: false` makes the warning display-only).
+
+**Shared turbo valves.**  Turbos 4/5/6 have no turbo valve or gauge of their own; each uses Turbo 1/2/3's
+(`turbo_valve:` / `gauge:` in the turbo block).  The diagram draws the turbos that share a valve side by side,
+joined above that one turbo valve and its one backing gauge (Turbo 1 + 4, Turbo 2 + 5, Turbo 3 + 6).  Auto mode holds a
+shared valve open while *any* turbo behind it is turning, Manual mode refuses to close it while any of
+them runs, and a turbo set `in_use: false` never closes the valve the other one still needs.
+
+DAQ use with this profile: **48 lines** (19 DO, 23 DI, 6 AI), none used twice – `tools/daq_check.py`
+lists them.
+
+## HiPace turbos over RS-485 in the facility program (VC100, 2026-10-09)
+
+Turbos 2 and 3 on the VC100 now run over RS-485 instead of their D-SUB lines, and the profile has room
+for **four HiPace** on the RS-485 link (a commented Turbo 4 / Turbo 5 template sits after Turbo 3 in
+`config/facility_vc100.yaml`).  A turbo block selects it with `control_mode: hipace_rs485`:
+
+```yaml
+    control_mode: hipace_rs485
+    hipace_rs485:
+      port: COM6          # turbos with the same port share one RS-485 segment ...
+      address: 2          # ... each with its own [P:797] address; one port per turbo also works
+```
+
+* **No DAQ lines** for such a turbo: motor ([P:010]), standby ([P:002]), Reset Turbos ([P:009]), speed
+  ([P:309] / [P:315]) and the error code ([P:303]) all go over the serial link.  The D-SUB blocks are
+  kept in the profile – `control_mode: hipace_dsub25` goes back to them.
+* One poller thread per COM port (`hal/hipace_rs485_turbos.py`).  At 9600 baud four pumps take about
+  a second per cycle, so the 100 ms control loop reads cached values and never waits on the bus.  A
+  command is sent before the next poll; a write that is lost to a timeout is resent.
+* Start-up takes RS-485 control (`[P:060] = 2`, `take_control: true`) and then commands everything off,
+  as for the D-SUB modes.  Exit sends the stop over RS-485 before the port is released; `[P:060]` is
+  left on RS-485 unless `restore_interface_on_exit: true`.
+* Errors (stop Auto mode with the turbo's `error_code`, 5007 on the VC100): `[P:303]` = `Err…`; **no
+  reply for `comm_timeout_s` (3 s)**; a control write refused (`_LOGIC`: RS-485 does not have control,
+  or the D-Sub remote-priority input is active); a COM port that cannot be opened (the program still
+  starts; the port is retried every 5 s).  `Wrn…` is shown as *Turbo Warning* and does not stop Auto
+  unless `warning_is_error: true`.  When the link is lost the **last known speed is kept**, so the
+  plant-safety rules keep backing a turbo that may still be spinning.
+* `[P:010]` read-back is cross-checked against the command (error 5005) once `motor_confirm_s` (5 s)
+  has passed since the command – the poller needs about a second to confirm it.
+* `tools/daq_check.py` polls the RS-485 turbos read-only (nothing is written, control is not taken).
+* **Close the bring-up panel before starting the facility program** – only one program can own a COM
+  port.  `pyserial` is now a requirement (`requirements.txt`).
+* The simulator (`--sim`) treats RS-485 turbos like any other turbo with a speed signal; the protocol
+  code itself is tested against the TC 400 simulator (`tests/test_hipace_rs485_facility.py`, including a
+  four-HiPace Auto pump-down).  `SIM4` is a simulated bus with four pumps at addresses 1–4.
+
+The protocol core moved from `tools/hipace_rs485.py` to `facility_control/drivers/pfeiffer_pv.py`
+unchanged; the tool re-exports it, so its command line, GUI and tests work as before.
+
+## HiPace RS-485 test panel (VC100 Turbos 2 and 3)
+
+A standalone tool, independent of the facility program, for bringing up the Pfeiffer HiPace / TC 400
+remote control over RS-485 (Pfeiffer Vacuum protocol, 9600 8N1) before the HAL uses it.
+
+```
+tools\hipace_rs485.bat --sim                     # try it on the simulator (any PC)
+tools\hipace_rs485.bat                           # lab PC: pick the COM port(s) in the window
+python tools\hipace_rs485.py --port COM6 scan    # command-line equivalents: scan / dump / watch /
+python tools\hipace_rs485.py --port COM6 --address 1 validate   # validate / read / control
+```
+
+* One shared bus (same COM port, two addresses) or one COM port per pump.  Both TC 400 ship at
+  address 1: connect one pump alone and change it ("Change RS-485 address…", [P:797]) first.
+* Monitoring is read-only.  Writes need **Enable control**; **STOP** is always allowed.
+  *Take RS-485 control* writes [P:060] = 2; on exit the tool stops the pumps it started and puts
+  [P:060] back to the value it found (unless you choose to leave them).
+* **Validation** tab: link, identity, address, every monitoring parameter, link quality over N
+  telegrams, error code / history, temperatures, control interface, D-Sub remote priority, and an
+  optional harmless write round trip.  *Record CSV* logs every poll to `logs/hipace_rs485_<date>.csv`.
+* Close the tool before the facility program uses the COM port.  The safety notes are at the top of
+  `tools/hipace_rs485.py`.
 
 ## Connecting to the real facility (bring-up)
 

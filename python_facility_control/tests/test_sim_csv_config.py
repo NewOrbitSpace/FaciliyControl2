@@ -35,10 +35,11 @@ def test_config_rejects_unknown_formula(cfg):
         build_config(raw)
 
 
-def test_three_turbo_profile_loads_and_recognises_states():
-    """The config layer must accept the VC100 3-turbo facility (full checks in test_vc100.py)."""
+def test_six_turbo_profile_loads_and_recognises_states():
+    """The config layer must accept the VC100 facility - six turbos, three turbo valves shared, eleven
+    valves since 2026-10-13 (full checks in test_vc100.py / test_vc100_new_tmps.py)."""
     cfg = load_config(str(CONFIG_DIR / "facility_vc100.yaml"))
-    assert len(cfg.turbos) == 3 and len(cfg.valves) == 8
+    assert len(cfg.turbos) == 6 and len(cfg.valves) == 11
     h = Harness(cfg, mode=Mode.ADMIN)
     c = Commands.all_off(cfg.valve_ids, cfg.turbo_ids)
     c.set_primary(True)

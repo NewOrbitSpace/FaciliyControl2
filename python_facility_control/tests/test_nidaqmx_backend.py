@@ -308,8 +308,13 @@ def test_turbo_speed_is_not_contaminated_by_the_gauge_before_it(cfg_freq, fake_d
 
 def test_speed_task_honours_the_per_turbo_sample_rate(fake_daq):
     """A dedicated task can finally use the VI's 4000 Hz x 2000 samples for the HP700 speed."""
-    from facility_control.config import CONFIG_DIR, load_config
-    vc = load_config(str(CONFIG_DIR / "facility_vc100.yaml"))
+    import yaml
+    from facility_control.config import CONFIG_DIR, build_config
+    raw = yaml.safe_load(open(CONFIG_DIR / "facility_vc100.yaml", encoding="utf-8"))
+    for t in raw["turbos"]:                 # Turbos 2/3 run on RS-485 since 2026-10-09: test their D-SUB wiring
+        if "hipace_dsub25" in t:
+            t["control_mode"] = "hipace_dsub25"
+    vc = build_config(raw)
     b = fake_daq.NiDaqmxBackend(vc)
     b.open()
     t = FakeTask.registry

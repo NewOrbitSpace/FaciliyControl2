@@ -4,6 +4,7 @@ PySide6-Essentials>=6.6
 pyqtgraph>=0.13
 numpy>=1.24
 PyYAML>=6.0
+pyserial>=3.5         # HiPace turbos over RS-485 (VC100) and tools/hipace_rs485.py
 # Real hardware only (the NI-DAQmx driver must also be installed on the lab desktop):
 #   <venv>\Scripts\pip install nidaqmx
 # Tests

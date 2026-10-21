@@ -72,7 +72,13 @@ class Interlocks:
                 if self._valve(cmds, inp, "vent"):
                     return Verdict(False, "Please Close Vent Valve first")
                 return Verdict(True)
-            return self._turbo_stopped(cmds, inp, v.turbo)          # closing while turbo runs would trap it
+            # closing while a turbo runs would trap it - every turbo backed through this valve
+            # (VC100: TMP4/5/6 share Turbo 1/2/3's valve)
+            for t in (self.cfg.turbos_on_valve(valve_id) or [None]):
+                verdict = self._turbo_stopped(cmds, inp, t.id if t else v.turbo)
+                if not verdict.allowed:
+                    return verdict
+            return Verdict(True)
         if v.kind == "bypass":
             if want_open:
                 if self._valve(cmds, inp, "vent"):

@@ -55,7 +55,7 @@ def channel_inventory(cfg):
         for key, kind in (("motor_do", "do"), ("standby_do", "do"), ("error_ack_do", "do"),
                           ("error_di", "di"), ("still_spinning_di", "di"), ("speed_ai", "ai"),
                           ("rotating_di", "di"), ("accelerating_di", "di"), ("at_speed_di", "di"),
-                          ("braking_di", "di"), ("alarm_di", "di"), ("warning_di", "di")):
+                          ("braking_di", "di"), ("alarm_di", "di"), ("warning_di", "di"), ("accel_decel_di", "di")):
             if key in p:
                 items.append((kind, cfg.phys(p[key]), f"{tc.label} {key} ({tc.control_mode})"))
     return items
@@ -133,7 +133,9 @@ def live_readings(cfg, seconds: float) -> None:
                 (f"{tid}: " + " ".join(f"{k}={'Y' if v else 'n'}" for k, v in ti.contacts.items()))
                 if ti.contacts else
                 (f"{tid}: err={'YES' if ti.error else 'no'} speed={ti.speed_pct:.0f}%"
-                 + (f" spinning={ti.still_spinning}" if ti.still_spinning else ""))
+                 + (f" spinning={ti.still_spinning}" if ti.still_spinning else "")
+                 + (f" [RS-485 {ti.rs485.get('port')}#{ti.rs485.get('address')}: {ti.error_text or '?'}, "
+                    f"motor={'on' if ti.motor_read else 'off'}, ctrl={ti.rs485.get('ctrl')}]" if ti.comm_ok is not None else ""))
                 for tid, ti in inp.turbos.items())
             print(time.strftime("%H:%M:%S"), f"(read {dt * 1000:.0f} ms)")
             print("   ", " | ".join(parts))

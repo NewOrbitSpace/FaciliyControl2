@@ -5,7 +5,8 @@
 #     run.bat --config config/facility_vc100.yaml --sim --time-scale 20
 #
 # Compared with the small chamber (facility_main_v4.4.yaml) the differences are: the channel map and
-# chassis name, three turbo branches (Turbo 1 = Shimadzu contact interface, Turbos 2/3 = HiPace D-SUB),
+# chassis name, six turbo branches since 2026-10-13 (Turbo 1 = Shimadzu contact interface, Turbo 4 = Shimadzu
+# HD15 remote, Turbos 2/3/5/6 = HiPace over RS-485; TMP4/5/6 share Turbo 1/2/3's turbo valve and gauge),
 # Edwards gauges in mBar, the compressed-air sensor, and the `auto_mode` rules at the bottom.
 
 facility:
@@ -75,6 +76,11 @@ valves:                       # cmd: NI-9375/9472 in slot 1 (24 V = open); read:
   gate1:        {label: "Gate 1 Valve",  cmd: Mod1/port0/line5, read: Mod2/port0/line5, kind: gate,   turbo: turbo1, fail_closed: false}
   gate2:        {label: "Gate 2 Valve",  cmd: Mod1/port0/line6, read: Mod2/port0/line6, kind: gate,   turbo: turbo2, fail_closed: false}
   gate3:        {label: "Gate 3 Valve",  cmd: Mod1/port0/line7, read: Mod2/port0/line7, kind: gate,   turbo: turbo3, fail_closed: false}
+  # 2026-10-13: gates of the new TMPs.  Commands on the new NI-9472 in slot 5 (line3 = TMP5, line4 = TMP4,
+  # line5 = TMP6), open read-backs on Mod2 line22..24.  TMP4/5/6 are backed through Turbo 1/2/3's turbo valve.
+  gate4:        {label: "Gate 4 Valve",  cmd: Mod5/port0/line4, read: Mod2/port0/line22, kind: gate,  turbo: turbo4, fail_closed: false}
+  gate5:        {label: "Gate 5 Valve",  cmd: Mod5/port0/line3, read: Mod2/port0/line23, kind: gate,  turbo: turbo5, fail_closed: false}
+  gate6:        {label: "Gate 6 Valve",  cmd: Mod5/port0/line5, read: Mod2/port0/line24, kind: gate,  turbo: turbo6, fail_closed: false}
 
 primary_pump:
   label: "Primary Pump"
@@ -119,15 +125,32 @@ turbos:
       error_code: 5005                     # VI: error 5005 'Turbo1 Alarm' / 'Turbo1 Warning'
       error_message: "{label} {what}"
       warning_is_error: true               # VI: a Warning also raises 5005 and stops Auto mode; false = show only
-  # ---- Turbo 2: Pfeiffer HiPace, D-SUB.  DO Mod3/port0/line3..5 = Motor / Standby / Reset; speed on Mod8/ai5
-  #      (+/-10 V, x10 = %); error on DI Mod2/port0/line16 (24 V = healthy).
+  # ---- Turbos 2 and 3: Pfeiffer HiPace / TC 400.  Since 2026-10-09 driven over RS-485
+  #      (control_mode: hipace_rs485 - motor, standby, reset, speed and error code on the serial link,
+  #      no DAQ lines).  The D-SUB blocks are kept below: set control_mode: hipace_dsub25 to go back.
+  #      Turbos on the same `port` share one RS-485 segment (each with its own address); a different
+  #      port per turbo also works.  Room for four HiPace - see the template after Turbo 3.
   - id: turbo2
     label: "Turbo 2"
     in_use: true
-    control_mode: hipace_dsub25
+    control_mode: hipace_rs485
     gate_valve: gate2
     turbo_valve: turbo2_valve
     gauge: turbo2_gauge
+    hipace_rs485:                          # ACTIVE (2026-10-09): TC 400 over RS-485, Pfeiffer Vacuum protocol
+      port: COM6                           # !! CHECK: the converter's COM port on the lab PC
+      address: 2                           # !! CHECK: this pump's [P:797] (both ship at 1 - change one first)
+      take_control: true                   # writes [P:060] = 2 at start-up (the D-Sub Motor/Standby lines are then ignored)
+      restore_interface_on_exit: false     # true = put [P:060] back to the D-Sub at exit (pump stopped either way)
+      comm_timeout_s: 3.0                  # no reply for this long -> error 5007 'no RS-485 reply' (stops Auto)
+      motor_confirm_s: 5.0                 # [P:010] read-back is cross-checked (5005) only this long after a command
+      error_code: 5007
+      error_message: "Turbo 2 Error: {error_text}"
+      error_requires_chiller: false
+      warning_is_error: false              # [P:303] 'Wrn...' is shown but does not stop Auto mode
+      standby_speed_min_pct: 40.0
+    # D-SUB (previous wiring): DO Mod3/port0/line3..5 = Motor / Standby / Reset; speed on Mod8/ai5
+    # (+/-10 V, x10 = %); error on DI Mod2/port0/line16 (24 V = healthy).
     hipace_dsub25:
       speed_ai: Mod8/ai5                   # 'Turbo_2_Speed_Read' (VI: min -10 V, max +10 V, Differential)
       speed_ai_min_v: -10.0
@@ -142,15 +165,27 @@ turbos:
       error_code: 5007                     # VI: 5007 'Turbo 2 Error.'
       error_message: "Turbo 2 Error."
       standby_speed_min_pct: 40.0          # VI: 'In Standby' shown only when standby is set and speed > 40 %
-  # ---- Turbo 3: Pfeiffer HiPace, D-SUB.  DO Mod3/port0/line6..7 = Motor / Standby (the VI creates only
-  #      two lines for Turbo 3 – there is NO reset line); speed on Mod8/ai6; error on DI Mod2/port0/line17.
   - id: turbo3
     label: "Turbo 3"
     in_use: true
-    control_mode: hipace_dsub25
+    control_mode: hipace_rs485
     gate_valve: gate3
     turbo_valve: turbo3_valve
     gauge: turbo3_gauge
+    hipace_rs485:                          # ACTIVE (2026-10-09): TC 400 over RS-485, Pfeiffer Vacuum protocol
+      port: COM6                           # !! CHECK: the converter's COM port on the lab PC
+      address: 3                           # !! CHECK: this pump's [P:797] (both ship at 1 - change one first)
+      take_control: true                   # writes [P:060] = 2 at start-up (the D-Sub Motor/Standby lines are then ignored)
+      restore_interface_on_exit: false     # true = put [P:060] back to the D-Sub at exit (pump stopped either way)
+      comm_timeout_s: 3.0                  # no reply for this long -> error 5007 'no RS-485 reply' (stops Auto)
+      motor_confirm_s: 5.0                 # [P:010] read-back is cross-checked (5005) only this long after a command
+      error_code: 5007
+      error_message: "Turbo 3 Error: {error_text}"
+      error_requires_chiller: false
+      warning_is_error: false              # [P:303] 'Wrn...' is shown but does not stop Auto mode
+      standby_speed_min_pct: 40.0
+    # D-SUB (previous wiring): DO Mod3/port0/line6..7 = Motor / Standby (the VI creates only two lines
+    # for Turbo 3 - there is NO reset line); speed on Mod8/ai6; error on DI Mod2/port0/line17.
     hipace_dsub25:
       speed_ai: Mod8/ai6                   # 'Turbo_3_Speed_Read'
       speed_ai_min_v: -10.0
@@ -163,6 +198,73 @@ turbos:
       # error_ack_do: Mod3/port0/line8     # not wired in the VI ('Reset Both HiPaces' only resets Turbo 2) – add if the cable has it
       error_code: 5007
       error_message: "Turbo 3 Error."
+      standby_speed_min_pct: 40.0
+  # ---- TMP4: Shimadzu on its HD15 remote connector (2026-10-13).  Outputs on the new NI-9472 in slot 5:
+  #      line0 = Reset, line1 = Standby, line2 = Start/Stop.  Status on Mod2: line18 = speed above 80 %,
+  #      line19 = accelerating OR decelerating, line20 = Alarm, line21 = Warning (24 V = condition present,
+  #      i.e. NOT inverted - unlike Turbo 1's normally-closed contacts).  Backed through Turbo 1's turbo
+  #      valve, so it shares Turbo 1's turbo valve and gauge.
+  - id: turbo4
+    label: "Turbo 4"
+    in_use: true
+    control_mode: shimadzu_contacts
+    gate_valve: gate4
+    turbo_valve: turbo1_valve
+    gauge: turbo1_gauge
+    shimadzu_contacts:
+      at_speed_di:      Mod2/port0/line18    # "spinning > 80 %"
+      at_speed_pct: 80.0                     # (what that contact means - used by the simulator)
+      accel_decel_di:   Mod2/port0/line19    # accelerating or decelerating; the motor command tells which
+      alarm_di:         Mod2/port0/line20
+      alarm_di_inverted: false               # 24 V = alarm
+      warning_di:       Mod2/port0/line21
+      warning_di_inverted: false             # 24 V = warning
+      motor_do:         Mod5/port0/line2     # Start / Stop
+      standby_do:       Mod5/port0/line1
+      error_ack_do:     Mod5/port0/line0     # Reset - pulsed by 'Reset Turbos'
+      error_ack_pulse_ms: 1000
+      error_code: 5005
+      error_message: "{label} {what}"
+      warning_is_error: true                 # as Turbo 1 (the VI); false = show the warning only
+  # ---- TMP5 and TMP6: Pfeiffer HiPace on the RS-485 bus with Turbos 2 and 3 (four HiPace in total).
+  #      Gates on Mod5 line3 / line5; backed through Turbo 2's / Turbo 3's turbo valve and gauge.
+  - id: turbo5
+    label: "Turbo 5"
+    in_use: true
+    control_mode: hipace_rs485
+    gate_valve: gate5
+    turbo_valve: turbo2_valve
+    gauge: turbo2_gauge
+    hipace_rs485:
+      port: COM6                           # !! CHECK: same converter as Turbos 2/3?
+      address: 5                           # !! CHECK: this pump's [P:797]
+      take_control: true
+      restore_interface_on_exit: false
+      comm_timeout_s: 3.0
+      motor_confirm_s: 5.0
+      error_code: 5007
+      error_message: "Turbo 5 Error: {error_text}"
+      error_requires_chiller: false
+      warning_is_error: false
+      standby_speed_min_pct: 40.0
+  - id: turbo6
+    label: "Turbo 6"
+    in_use: true
+    control_mode: hipace_rs485
+    gate_valve: gate6
+    turbo_valve: turbo3_valve
+    gauge: turbo3_gauge
+    hipace_rs485:
+      port: COM6                           # !! CHECK
+      address: 6                           # !! CHECK
+      take_control: true
+      restore_interface_on_exit: false
+      comm_timeout_s: 3.0
+      motor_confirm_s: 5.0
+      error_code: 5007
+      error_message: "Turbo 6 Error: {error_text}"
+      error_requires_chiller: false
+      warning_is_error: false
       standby_speed_min_pct: 40.0
 
 # ---------------------------------------------------------------- behaviour (VI constants, mBar where the VI uses mBar)

@@ -125,6 +125,42 @@ class ErrorCluster:
         self.status, self.code, self.source = False, 0, ""
 
 
+# Shimadzu contact interface: the six canonical status contacts the controller, Auto mode and the
+# interlocks understand (VC100 Turbo 1, wired exactly like the VI).
+CONTACT_NAMES = ("rotating", "accelerating", "at_speed", "braking", "alarm", "warning")
+# Extra raw contacts a remote connector may have instead (VC100 TMP4, Shimadzu HD15 remote 2026-10-13):
+#   accel_decel   one output for "accelerating OR decelerating"
+EXTRA_CONTACT_NAMES = ("accel_decel",)
+
+
+def normalize_contacts(raw: Dict[str, bool], motor_cmd: bool) -> Dict[str, bool]:
+    """Map whatever status contacts a Shimadzu interface has onto the six canonical ones.
+
+    `raw` is already de-inverted (True = condition present) and holds only the contacts that are
+    wired.  With the full six (Turbo 1) it is returned unchanged.  With the HD15 remote set
+    (speed > 80 % as `at_speed`, one accel/decel output, alarm, warning) the missing ones are
+    derived, using the motor command to tell the two directions of `accel_decel` apart:
+
+      accelerating = accel_decel AND motor commanded
+      braking      = accel_decel AND motor not commanded
+      at_speed     = speed-above contact, but not while braking (coasting down from full speed is
+                     not "speed reached")
+      rotating     = any of at_speed / accelerating / braking   (drives "still spinning")
+    """
+    out = {k: bool(raw.get(k, False)) for k in CONTACT_NAMES}
+    if "accel_decel" in raw:
+        ad = bool(raw["accel_decel"])
+        if "accelerating" not in raw:
+            out["accelerating"] = ad and motor_cmd
+        if "braking" not in raw:
+            out["braking"] = ad and not motor_cmd
+        if "at_speed" in raw:
+            out["at_speed"] = bool(raw["at_speed"]) and not out["braking"]
+    if "rotating" not in raw:
+        out["rotating"] = bool(raw.get("at_speed", False)) or out["accelerating"] or out["braking"]
+    return out
+
+
 @dataclass
 class TurboInputs:
     speed_pct: float = 0.0
@@ -136,6 +172,11 @@ class TurboInputs:
     # Shimadzu contact interface (VC100 Turbo 1): the six status contacts, already de-inverted
     # (True = the condition is present).  Empty for turbos with a speed signal.
     contacts: Dict[str, bool] = field(default_factory=dict)
+    # HiPace over RS-485: [P:303] 'Wrn...' (shown, does not stop Auto unless warning_is_error),
+    # link health and diagnostics for the panel / CSV.
+    warning: bool = False
+    comm_ok: Optional[bool] = None          # None = not a serial turbo
+    rs485: Dict[str, object] = field(default_factory=dict)
 
     @property
     def has_contacts(self) -> bool:

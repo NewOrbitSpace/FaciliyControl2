@@ -130,7 +130,7 @@ TURBO_MODES = ("bigred_dsub15", "hipace_dsub25", "hipace_rs485", "shimadzu_conta
 TURBO_ERROR_DEFAULTS = {
     "bigred_dsub15": (5007, "BRT Error. See Device LEDs for more info "),
     "hipace_dsub25": (5006, "HP2300 Error. See Device LEDs for more info "),
-    "hipace_rs485": (5006, "HP2300 Error Code: {error_text}"),
+    "hipace_rs485": (5006, "{label} Error: {error_text}"),
     "shimadzu_contacts": (5005, "{label} Alarm"),
 }
 
@@ -324,6 +324,9 @@ class FacilityConfig:
     def turbos_in_use(self) -> List[TurboConfig]:
         return [t for t in self.turbos if t.in_use]
 
+    def rs485_turbos(self) -> List[TurboConfig]:
+        return [t for t in self.turbos if t.control_mode == "hipace_rs485"]
+
     def gauge(self, gid: str) -> GaugeConfig:
         return next(g for g in self.gauges if g.id == gid)
 
@@ -342,7 +345,18 @@ class FacilityConfig:
         return self.gauge_by_role("foreline")
 
     def turbo_gauge(self, tid: str) -> Optional[GaugeConfig]:
+        """The gauge on a turbo's backing side: the turbo block's `gauge:` if given (several turbos may
+        share one - VC100 TMP4 reads Turbo 1's gauge), else the turbo gauge that names this turbo."""
+        tc = next((t for t in self.turbos if t.id == tid), None)
+        if tc is not None and tc.gauge:
+            g = next((g for g in self.gauges if g.id == tc.gauge), None)
+            if g is not None:
+                return g
         return next((g for g in self.gauges if g.role == "turbo" and g.turbo == tid), None)
+
+    def turbos_on_valve(self, valve_id: str) -> List[TurboConfig]:
+        """Every turbo backed through this turbo valve (VC100: TMP4/5/6 share Turbo 1/2/3's valve)."""
+        return [t for t in self.turbos if t.turbo_valve == valve_id]
 
     def valves_of_kind(self, kind: str) -> List[ValveConfig]:
         return [v for v in self.valves.values() if v.kind == kind]
@@ -362,14 +376,45 @@ _REQUIRED_TURBO_PARAMS = {
     "bigred_dsub15": ("speed_ai", "error_di", "motor_do"),
     "hipace_dsub25": ("speed_ai", "error_di", "motor_do"),
     "hipace_rs485": ("port",),
-    "shimadzu_contacts": ("rotating_di", "accelerating_di", "at_speed_di", "braking_di", "alarm_di", "warning_di", "motor_do"),
+    # Turbo 1 (VI) has all six contacts; the HD15 remote of TMP4 has speed>80 %, accel/decel, alarm,
+    # warning.  Required: alarm, warning, motor and at least one rotation contact (checked below).
+    "shimadzu_contacts": ("alarm_di", "warning_di", "motor_do"),
 }
+_SHIMADZU_ROTATION_KEYS = ("rotating_di", "at_speed_di", "accel_decel_di", "accelerating_di")
 
 
 def _check_turbo_params(tid: str, mode: str, params: Dict[str, Any]) -> None:
     missing = [k for k in _REQUIRED_TURBO_PARAMS.get(mode, ()) if k not in params]
     if missing:
         raise ValueError(f"turbo {tid}: {mode} block is missing {missing}")
+    if mode == "shimadzu_contacts" and not any(k in params for k in _SHIMADZU_ROTATION_KEYS):
+        raise ValueError(f"turbo {tid}: shimadzu_contacts needs at least one of {list(_SHIMADZU_ROTATION_KEYS)}")
+
+
+def check_rs485_turbos(turbos) -> None:
+    """HiPace over RS-485: every (port, address) unique - several pumps may share one port (one RS-485
+    segment) but each needs its own [P:797] address - and turbos on one port agree on baud/timeout."""
+    seen: Dict[Tuple[str, int], str] = {}
+    port_settings: Dict[str, Tuple[int, float]] = {}
+    for tc in turbos:
+        if tc.control_mode != "hipace_rs485":
+            continue
+        p = tc.params
+        port = str(p["port"]).upper()
+        adr = int(p.get("address", 1))
+        if not 1 <= adr <= 255:
+            raise ValueError(f"turbo {tc.id}: hipace_rs485.address {adr} outside 1..255")
+        if (port, adr) in seen:
+            raise ValueError(f"turbo {tc.id}: {p['port']} address {adr} is already used by {seen[(port, adr)]} "
+                             f"- give each HiPace on a shared bus its own [P:797] address")
+        seen[(port, adr)] = tc.id
+        settings = (int(p.get("baud", 9600)), float(p.get("timeout_s", 0.3)))
+        if port in port_settings and port_settings[port] != settings:
+            raise ValueError(f"turbo {tc.id}: {p['port']} baud/timeout differ from another turbo on the same port")
+        port_settings[port] = settings
+        sb = p.get("standby_speed_pct")
+        if sb is not None and not 20.0 <= float(sb) <= 100.0:
+            raise ValueError(f"turbo {tc.id}: hipace_rs485.standby_speed_pct must be 20..100")
 
 
 def _get(d: Dict[str, Any], key: str, default: Any = None) -> Any:
@@ -449,6 +494,8 @@ def build_config(raw: Dict[str, Any], source_path: str = "") -> FacilityConfig:
         _check_turbo_params(t["id"], mode, modes[mode])
         if t["gate_valve"] not in valves or t["turbo_valve"] not in valves:
             raise ValueError(f"turbo {t['id']}: gate/turbo valve not defined in valves")
+        if t.get("gauge") and t["gauge"] not in {g.id for g in gauges}:
+            raise ValueError(f"turbo {t['id']}: gauge {t['gauge']!r} not defined in gauges")
         turbos.append(TurboConfig(id=t["id"], label=t["label"], control_mode=mode, gate_valve=t["gate_valve"],
                                   turbo_valve=t["turbo_valve"], gauge=t.get("gauge"), in_use=bool(t.get("in_use", True)),
                                   params=modes[mode], all_modes=modes))
@@ -467,6 +514,8 @@ def build_config(raw: Dict[str, Any], source_path: str = "") -> FacilityConfig:
         if unknown:
             raise ValueError(f"{cls.__name__}: unknown keys {sorted(unknown)}")
         return cls(**block)
+
+    check_rs485_turbos(turbos)
 
     comp = raw.get("compressor") or {}
     buttons = None

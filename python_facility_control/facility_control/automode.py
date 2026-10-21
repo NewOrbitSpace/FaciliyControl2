@@ -193,12 +193,14 @@ class AutoStateMachine:
         below the turbo body, so no gas is pushed into a spinning turbo (`turbo_valve_gauge_rule`).
         """
         fore = self._foreline(inp)
+        want: Dict[str, bool] = {}
         for t in self._turbos():
             spin = self._spinning(inp, t, pct)
             if gauge_rule:
                 p_t = self._turbo_pressure(inp, t.id)
                 spin = spin and (prev.valves.get(t.turbo_valve, False) or fore < p_t)
-            cmds.valves[t.turbo_valve] = spin
+            want[t.turbo_valve] = want.get(t.turbo_valve, False) or spin   # shared valve: any turbo needs it
+        cmds.valves.update(want)
 
     # ------------------------------------------------------------- main entry
     def step(self, a: AutoInput) -> AutoOutput:
@@ -338,6 +340,7 @@ class AutoStateMachine:
             leaving = tgt_mid != S.PUMPING_TO_ROUGH
             any_prev = self._any_turbo_valve_prev(prev)
             bypass_prev = bool(bypass and prev.valves.get(bypass, False))
+            want_tv: Dict[str, bool] = {}
             for t in self._turbos():
                 if am.turbo_valve_gauge_rule:
                     # VC100 For-loop: TV_i := done ∨ TV_i_prev ∨ (bypass ∧ WRG < turbo gauge_i)
@@ -345,7 +348,8 @@ class AutoStateMachine:
                     open_i = done or prev.valves.get(t.turbo_valve, False) or early
                 else:
                     open_i = done or any_prev
-                cmds.valves[t.turbo_valve] = leaving and open_i
+                want_tv[t.turbo_valve] = want_tv.get(t.turbo_valve, False) or (leaving and open_i)
+            cmds.valves.update(want_tv)
             if bypass:
                 cmds.valves[bypass] = False if "vent" in b else bypass_flag
             if vent:
@@ -380,8 +384,10 @@ class AutoStateMachine:
             if am.overnight_backing_while_spinning:
                 # VC100: while any turbo is still above the slowing threshold keep the primary pump and
                 # chiller running and each spinning turbo's valve open; everything else is off
+                want_tv = {}
                 for t in self._turbos():
-                    cmds.valves[t.turbo_valve] = self._spinning(inp, t, slow_pct)
+                    want_tv[t.turbo_valve] = want_tv.get(t.turbo_valve, False) or self._spinning(inp, t, slow_pct)
+                cmds.valves.update(want_tv)
                 cmds.primary = spinning_slow
                 cmds.chiller = spinning_slow
             else:
