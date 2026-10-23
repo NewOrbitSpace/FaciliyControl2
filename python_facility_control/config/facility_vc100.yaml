@@ -78,9 +78,9 @@ valves:                       # cmd: NI-9375/9472 in slot 1 (24 V = open); read:
   gate3:        {label: "Gate 3 Valve",  cmd: Mod1/port0/line7, read: Mod2/port0/line7, kind: gate,   turbo: turbo3, fail_closed: false}
   # 2026-10-13: gates of the new TMPs.  Commands on the new NI-9472 in slot 5 (line3 = TMP5, line4 = TMP4,
   # line5 = TMP6), open read-backs on Mod2 line22..24.  TMP4/5/6 are backed through Turbo 1/2/3's turbo valve.
-  gate4:        {label: "Gate 4 Valve",  cmd: Mod5/port0/line4, read: Mod2/port0/line22, kind: gate,  turbo: turbo4, fail_closed: false}
-  gate5:        {label: "Gate 5 Valve",  cmd: Mod5/port0/line3, read: Mod2/port0/line23, kind: gate,  turbo: turbo5, fail_closed: false}
-  gate6:        {label: "Gate 6 Valve",  cmd: Mod5/port0/line5, read: Mod2/port0/line24, kind: gate,  turbo: turbo6, fail_closed: false}
+  gate4:        {label: "Gate 4 Valve",  cmd: Mod5/port0/line5, read: Mod2/port0/line23, kind: gate,  turbo: turbo4, fail_closed: false}
+  gate5:        {label: "Gate 5 Valve",  cmd: Mod5/port0/line3, read: Mod2/port0/line22, kind: gate,  turbo: turbo5, fail_closed: false}
+  gate6:        {label: "Gate 6 Valve",  cmd: Mod5/port0/line6, read: Mod2/port0/line24, kind: gate,  turbo: turbo6, fail_closed: false}
 
 primary_pump:
   label: "Primary Pump"
