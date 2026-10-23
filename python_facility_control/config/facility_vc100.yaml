@@ -138,7 +138,7 @@ turbos:
     turbo_valve: turbo2_valve
     gauge: turbo2_gauge
     hipace_rs485:                          # ACTIVE (2026-10-09): TC 400 over RS-485, Pfeiffer Vacuum protocol
-      port: COM6                           # !! CHECK: the converter's COM port on the lab PC
+      port: COM3                           # !! CHECK: the converter's COM port on the lab PC
       address: 2                           # !! CHECK: this pump's [P:797] (both ship at 1 - change one first)
       take_control: true                   # writes [P:060] = 2 at start-up (the D-Sub Motor/Standby lines are then ignored)
       restore_interface_on_exit: false     # true = put [P:060] back to the D-Sub at exit (pump stopped either way)
@@ -173,7 +173,7 @@ turbos:
     turbo_valve: turbo3_valve
     gauge: turbo3_gauge
     hipace_rs485:                          # ACTIVE (2026-10-09): TC 400 over RS-485, Pfeiffer Vacuum protocol
-      port: COM6                           # !! CHECK: the converter's COM port on the lab PC
+      port: COM3                           # !! CHECK: the converter's COM port on the lab PC
       address: 3                           # !! CHECK: this pump's [P:797] (both ship at 1 - change one first)
       take_control: true                   # writes [P:060] = 2 at start-up (the D-Sub Motor/Standby lines are then ignored)
       restore_interface_on_exit: false     # true = put [P:060] back to the D-Sub at exit (pump stopped either way)
@@ -236,7 +236,7 @@ turbos:
     turbo_valve: turbo2_valve
     gauge: turbo2_gauge
     hipace_rs485:
-      port: COM6                           # !! CHECK: same converter as Turbos 2/3?
+      port: COM3                           # !! CHECK: same converter as Turbos 2/3?
       address: 5                           # !! CHECK: this pump's [P:797]
       take_control: true
       restore_interface_on_exit: false
@@ -255,7 +255,7 @@ turbos:
     turbo_valve: turbo3_valve
     gauge: turbo3_gauge
     hipace_rs485:
-      port: COM6                           # !! CHECK
+      port: COM3                           # !! CHECK
       address: 6                           # !! CHECK
       take_control: true
       restore_interface_on_exit: false
