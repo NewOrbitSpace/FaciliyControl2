@@ -1,10 +1,10 @@
 """Small LabVIEW-look widgets: LED, status box, error cluster, grey 3-D buttons."""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QSize
+from PySide6.QtCore import QPoint, QRect, Qt, QSize
 from PySide6.QtGui import QColor, QFont, QPainter, QPen, QBrush
-from PySide6.QtWidgets import (QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QSizePolicy,
-                               QTextEdit, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QFrame, QGridLayout, QHBoxLayout, QLabel, QLayout, QLineEdit, QPushButton,
+                               QSizePolicy, QTextEdit, QVBoxLayout, QWidget)
 
 from ..model import ErrorCluster
 
@@ -22,6 +22,70 @@ QPushButton:hover { background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #FFF
 QPushButton:pressed { background: #B8B8B8; }
 QPushButton:disabled { color: #8A8A8A; background: #E6E6E6; }
 """
+
+
+class FlowLayout(QLayout):
+    """Left-to-right layout that wraps onto extra lines when it runs out of width.
+
+    Used for long rows of check boxes (plot trace toggles, sim faults) so they don't force a huge
+    minimum width on their panel and squeeze the facility diagram.
+    """
+
+    def __init__(self, parent=None, h_spacing: int = 6, v_spacing: int = 2):
+        super().__init__(parent)
+        self._items = []
+        self._h = h_spacing
+        self._v = v_spacing
+        self.setContentsMargins(0, 0, 0, 0)
+
+    def addItem(self, item):
+        self._items.append(item)
+
+    def count(self):
+        return len(self._items)
+
+    def itemAt(self, i):
+        return self._items[i] if 0 <= i < len(self._items) else None
+
+    def takeAt(self, i):
+        return self._items.pop(i) if 0 <= i < len(self._items) else None
+
+    def expandingDirections(self):
+        return Qt.Orientations(0)
+
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, width):
+        return self._do_layout(QRect(0, 0, width, 0), True)
+
+    def setGeometry(self, rect):
+        super().setGeometry(rect)
+        self._do_layout(rect, False)
+
+    def sizeHint(self):
+        return self.minimumSize()
+
+    def minimumSize(self):
+        size = QSize()
+        for it in self._items:
+            size = size.expandedTo(it.minimumSize())
+        m = self.contentsMargins()
+        return size + QSize(m.left() + m.right(), m.top() + m.bottom())
+
+    def _do_layout(self, rect, test_only):
+        m = self.contentsMargins()
+        r = rect.adjusted(m.left(), m.top(), -m.right(), -m.bottom())
+        x, y, line_h = r.x(), r.y(), 0
+        for it in self._items:
+            hint = it.sizeHint()
+            if x + hint.width() > r.right() + 1 and line_h > 0:
+                x, y, line_h = r.x(), y + line_h + self._v, 0
+            if not test_only:
+                it.setGeometry(QRect(QPoint(x, y), hint))
+            x += hint.width() + self._h
+            line_h = max(line_h, hint.height())
+        return y + line_h - rect.y() + m.bottom()
 
 
 class LED(QWidget):

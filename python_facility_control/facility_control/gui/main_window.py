@@ -17,7 +17,7 @@ from ..model import Mode, Snapshot, TabPage
 from ..units import UNITS, torr_to, to_torr, unit_label
 from .plots import PlotsWidget
 from .schematic import SchematicWidget
-from .widgets import BUTTON_STYLE, LED, LV_BG, ErrorClusterWidget, ValueBox, lv_button
+from .widgets import BUTTON_STYLE, LED, LV_BG, ErrorClusterWidget, FlowLayout, ValueBox, lv_button
 
 # Auto-mode buttons per tab page (VI 'Tab Control' pages) -> (label, normalised action)
 AUTO_BUTTONS: Dict[TabPage, List[tuple]] = {
@@ -98,7 +98,12 @@ class MainWindow(QMainWindow):
         top.addWidget(left)
         self.plots = PlotsWidget(self.cfg)
         top.addWidget(self.plots)
-        top.setSizes([700, 740])
+        # facility diagram ~60 % / pressure plots ~40 %; keeps that ratio when the window is resized
+        top.setChildrenCollapsible(False)
+        top.setStretchFactor(0, 3)
+        top.setStretchFactor(1, 2)
+        self.top_splitter = top
+        self._split_applied = False
         root.addWidget(top, 7)
 
         # ---- bottom row: mode/auto | error cluster | event log
@@ -239,6 +244,8 @@ class MainWindow(QMainWindow):
     def _build_sim_panel(self) -> QWidget:
         box = QGroupBox("Simulation (no DAQ connected) – fault injection")
         lay = QHBoxLayout(box)
+        flow = FlowLayout(h_spacing=10, v_spacing=2)   # wraps instead of widening the window
+        lay.addLayout(flow, 1)
         self.fault_boxes: Dict[str, QCheckBox] = {}
         faults = [("turbo_error", "Turbo error"), ("chiller_fault", "Chiller fault"), ("primary_fault", "Primary fault")]
         if any(t.control_mode == "shimadzu_contacts" for t in self.cfg.turbos):
@@ -252,9 +259,8 @@ class MainWindow(QMainWindow):
         for key, label in faults:
             cb = QCheckBox(label)
             cb.toggled.connect(lambda on, k=key: self.sim.set_fault(k, on))
-            lay.addWidget(cb)
+            flow.addWidget(cb)
             self.fault_boxes[key] = cb
-        lay.addStretch(1)
         lay.addWidget(QLabel("Plant time scale"))
         self.time_scale = QDoubleSpinBox()
         self.time_scale.setRange(0.1, 200.0)
@@ -262,6 +268,13 @@ class MainWindow(QMainWindow):
         self.time_scale.valueChanged.connect(lambda v: setattr(self.sim.sim, "time_scale", float(v)))
         lay.addWidget(self.time_scale)
         return box
+
+    def showEvent(self, ev):
+        super().showEvent(ev)
+        if not self._split_applied:                      # first show: real width is known now
+            self._split_applied = True
+            w = max(self.top_splitter.width(), 1)
+            self.top_splitter.setSizes([int(w * 0.6), w - int(w * 0.6)])
 
     # ------------------------------------------------------------------ slots
     def _on_unit(self, idx: int):

@@ -215,6 +215,11 @@ class Timings:
     # after it had its full settle time.  False: the loop keeps reading and only the decision step
     # waits (readings continue; moving devices are not cross-checked until their settle time is over).
     blocking_waits: bool = True
+    # Gate valves on a shared compressed-air line (VC100: six pneumatic gates on one supply) cannot
+    # all be opened at once.  > 0: at least this many seconds between two gate OPEN commands, in every
+    # mode; Auto opens the gates one by one and only starts the turbos once all of them are open.
+    # Closing is never delayed.  0 = open together (the VIs' behaviour).
+    gate_open_stagger_s: float = 0.0
 
 
 @dataclass
@@ -224,6 +229,9 @@ class AutoBehaviour:
     # Overnight Pump: keep the primary pump + chiller running and each spinning turbo's turbo valve
     # open until that turbo has slowed below the slowing threshold (VC100).  Main_V4.4 switches
     # everything off at once and only keeps the chiller while the turbo is above overnight_chiller_speed_pct.
+    # Pump to Rough / High Vac / Overnight first ask "Is the manual vent valve closed?".  Only for a
+    # facility that has a hand vent valve (small chamber); VC100 has none -> false in its profile.
+    ask_manual_vent_valve: bool = True
     overnight_backing_while_spinning: bool = False
     # Turbo valves compared against the turbo gauges (VC100):
     #   Pumping to Rough: a turbo valve may also open when the bypass is open and the chamber is

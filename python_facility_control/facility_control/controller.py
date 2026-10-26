@@ -160,6 +160,7 @@ class Controller:
         self.substate = 0
         self.tab = TabPage.FACILITY_OFF
         self.cmds = Commands.all_off(cfg.valve_ids, cfg.turbo_ids)
+        self._last_gate_open_t: Optional[float] = None      # gate_open_stagger_s (shared air line)
         self.error = ErrorCluster()
         self.running_led = False
         self.event_log: List[str] = []
@@ -282,6 +283,7 @@ class Controller:
     def iterate(self) -> None:
         cfg = self.cfg
         now = self.clock()
+        self._iter_now = now                 # one time base for Auto's decisions and the gate-stagger guard
         self.iteration += 1
         self.running_led = not self.running_led
         # ---- requests: immediate ones now, decisions queued for the DECIDE step
@@ -363,6 +365,7 @@ class Controller:
                 new = self._decide_manual_or_admin(new, inp, reqs)
         # ---- frame 4: command (only when a decision was made)
         if new is not None:
+            new = self._stagger_gate_openings(prev, new, now)
             self.cmds = new                          # indicators show the new command during the wait
             self._command(prev, new, now)
             self._event_log_changes(prev, new)
@@ -372,6 +375,37 @@ class Controller:
         self._accumulate_run_hours(inp, now)
         self._csv_row()
         self._publish()
+
+    def _stagger_gate_openings(self, prev: Commands, new: Commands, now: float) -> Commands:
+        """Shared compressed-air line: never open two gate valves within `gate_open_stagger_s`.
+
+        Applies in every mode.  Auto already opens its gates one at a time (and simply asks again on
+        the next iteration); a Manual/Admin click that comes too early is refused with a message.
+        Closing a gate is never held back."""
+        stagger = float(self.cfg.timings.gate_open_stagger_s or 0.0)
+        if stagger <= 0:
+            return new
+        opening = [v.id for v in self.cfg.valves_of_kind("gate")
+                   if new.valves.get(v.id, False) and not prev.valves.get(v.id, False)]
+        if not opening:
+            return new
+        last = self._last_gate_open_t
+        held = opening if (last is not None and now - last < stagger) else opening[1:]
+        if len(held) < len(opening):
+            self._last_gate_open_t = now
+            self.auto.mem.last_gate_open = now
+        for vid in held:
+            new.valves[vid] = False
+        if held:
+            wait = stagger if len(held) < len(opening) else max(0.0, stagger - (now - last))
+            labels = ", ".join(self.cfg.valves[v].label for v in held)
+            msg = (f"{labels} not opened: gate valves share one compressed-air line – "
+                   f"{stagger:g} s between gate openings (try again in {wait:.0f} s)")
+            if self.mode in (Mode.ADMIN, Mode.MANUAL):
+                self._info(msg)
+            else:
+                self._log(msg)
+        return new
 
     def _accumulate_run_hours(self, inp: Inputs, now: float) -> None:
         """Count the time the primary pump actually ran (read-back), for the maintenance meter."""
@@ -847,6 +881,8 @@ class Controller:
         `thresholds.vent_confirm_above_torr` (5e2 mBar) the chamber is plainly already pumped down,
         which is itself proof the hand valve is shut, so the dialog is skipped.  An unreadable or
         implausible gauge always asks, because then we know nothing."""
+        if not self.cfg.auto_mode.ask_manual_vent_valve:   # facility without a hand vent valve (VC100)
+            return False
         limit = self.cfg.thresholds.vent_confirm_above_torr
         if limit is None:
             return True
@@ -884,7 +920,7 @@ class Controller:
                 for t in ([r.arg] if r.arg else self.cfg.turbo_ids):
                     new.turbo_error_ack[t] = True
         error_active = self.error.status or (AUTO_ERROR_CODE_MIN <= self.error.code <= AUTO_ERROR_CODE_MAX and self.error.code != 0)
-        out = self.auto.step(AutoInput(inp, self.cmds, self.current, self.target, self.substate, buttons, self.clock(),
+        out = self.auto.step(AutoInput(inp, self.cmds, self.current, self.target, self.substate, buttons, getattr(self, "_iter_now", None) or self.clock(),
                                        error_active, self.turbo_on_threshold_torr, self.turbo_engage_time,
                                        self.skip_primary_warm))
         for line in out.log:

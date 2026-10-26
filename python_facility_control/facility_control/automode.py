@@ -72,6 +72,7 @@ class AutoMemory:
     last_bypass_block: object = None             # log 'bypass held shut' once per state, not per loop
     vent: ElapsedTimer = field(default_factory=lambda: ElapsedTimer(600.0, auto_reset=True))
     last_error_log: str = ""
+    last_gate_open: Optional[float] = None       # time of the last gate OPEN command (gate_open_stagger_s)
 
 
 @dataclass
@@ -157,6 +158,34 @@ class AutoStateMachine:
     def _set_gates(self, cmds: Commands, value: bool) -> None:
         for t in self._turbos():
             cmds.valves[t.gate_valve] = value
+
+    def _open_gates_staggered(self, cmds: Commands, prev: Commands, now: float, log: List[str]) -> bool:
+        """Open the gates of the turbos in use - all at once, or (gate_open_stagger_s > 0, VC100's
+        shared compressed-air line) one gate per `gate_open_stagger_s`, in turbo order.  Gates that are
+        already open stay open.  Returns True once every gate is open."""
+        stagger = float(self.cfg.timings.gate_open_stagger_s or 0.0)
+        if stagger <= 0:
+            self._set_gates(cmds, True)
+            return True
+        waiting: List[str] = []
+        for t in self._turbos():
+            if prev.valves.get(t.gate_valve, False):
+                cmds.valves[t.gate_valve] = True
+            elif t.gate_valve not in waiting:
+                waiting.append(t.gate_valve)
+        if not waiting:
+            return True
+        last = self.mem.last_gate_open
+        if last is None or now - last >= stagger:
+            gid = waiting.pop(0)
+            cmds.valves[gid] = True
+            self.mem.last_gate_open = now
+            total = len({t.gate_valve for t in self._turbos()})
+            log.append(f"Opening {self.cfg.valves[gid].label} ({total - len(waiting)}/{total})"
+                       + (f" – next gate in {stagger:g} s" if waiting else ""))
+        for gid in waiting:
+            cmds.valves[gid] = False
+        return not waiting
 
     def _set_motors(self, cmds: Commands, value: bool) -> None:
         for t in self._turbos():
@@ -434,21 +463,25 @@ class AutoStateMachine:
             elif substate == 3:
                 bp, gv, out_sub = False, False, 4        # close bypass
             elif substate == 4:
-                bp, gv, out_sub = False, True, 5         # open gate(s)
+                bp, gv, out_sub = False, True, 5         # open gate(s) - one by one on a shared air line
             else:  # 5 – start the turbo(s)
                 bp, gv, out_sub = False, True, 0
                 self._set_motors(cmds, True)
                 new_cur = S.PUMPING_TO_HIGH_VAC
             if bypass:
                 cmds.valves[bypass] = bp
-            self._set_gates(cmds, gv)
+            if gv:
+                if not self._open_gates_staggered(cmds, prev, a.now, log) and out_sub == 5:
+                    out_sub = 4                          # turbos start only when every gate is open
+            else:
+                self._set_gates(cmds, False)
             cur, tgt = new_cur, new_tgt
 
         # =====================================================================
         elif cur == S.PUMPING_TO_HIGH_VAC:
             tab = TabPage.PUMPING_TO_HIGH_VAC
             self._set_turbo_valves(cmds, True)
-            self._set_gates(cmds, True)
+            self._open_gates_staggered(cmds, prev, a.now, log)
             if bypass:
                 cmds.valves[bypass] = False
             if vent:

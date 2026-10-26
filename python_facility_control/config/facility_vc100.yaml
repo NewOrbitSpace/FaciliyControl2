@@ -307,9 +307,12 @@ timings:
   primary_settle_ms: 10000      # Wait 10 s after the primary pump is switched ON ...
   primary_settle_off_ms: 0      # ... nothing when it is switched off
   blocking_waits: true          # freeze the loop during the waits, exactly like the VI
+  gate_open_stagger_s: 5.0      # 2026-10-26: the six gate valves share one compressed-air line - open them
+                                # one at a time, >= 5 s apart (Auto starts the turbos once all are open)
 
 # ---------------------------------------------------------------- Auto-mode rules that differ from Main_V4.4
 auto_mode:
+  ask_manual_vent_valve: false             # 2026-10-26: VC100 has no hand vent valve - no 'Is the manual vent valve closed?'
   overnight_backing_while_spinning: true   # Overnight: primary + chiller keep running and each spinning turbo's
                                            # valve stays open until that turbo is below the slowing threshold
   turbo_valve_gauge_rule: true             # turbo valves compared with the turbo gauges (see docs/VC100_REFERENCE.md)

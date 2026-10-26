@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (QCheckBox, QFrame, QHBoxLayout, QLabel, QPushButt
 from ..config import FacilityConfig
 from ..model import Snapshot
 from ..units import torr_to, unit_label
+from .widgets import FlowLayout
 
 pg.setConfigOptions(antialias=False, background="w", foreground="k")
 
@@ -76,8 +77,7 @@ class PlotsWidget(QWidget):
         layout.setSpacing(3)
 
         # ---------------- toolbar: follow / zoom / axis resets
-        bar = QHBoxLayout()
-        bar.setSpacing(6)
+        bar = FlowLayout(h_spacing=6, v_spacing=2)      # wraps when the plot panel is narrow
         self.follow = QCheckBox("Follow (auto-scroll)")
         self.follow.setStyleSheet(TOUCH_CHECK)
         self.follow.setChecked(True)
@@ -108,7 +108,6 @@ class PlotsWidget(QWidget):
         self.auto_rescale.setChecked(True)
         bar.addWidget(self.auto_rescale)
 
-        bar.addStretch(1)
         self.window_label = QLabel("window: 30 min")
         bar.addWidget(self.window_label)
         layout.addLayout(bar)
@@ -156,9 +155,10 @@ class PlotsWidget(QWidget):
                         for i, (key, label) in enumerate(self.status_series)]))
 
     # ------------------------------------------------------------------ build helpers
-    def _build_trace_row(self, title: str, items) -> QHBoxLayout:
-        row = QHBoxLayout()
-        row.setSpacing(2)
+    def _build_trace_row(self, title: str, items) -> FlowLayout:
+        # wrapping row: a long list of traces (VC100 has ~20 status series) must not force the
+        # plot panel wider than its share of the window
+        row = FlowLayout(h_spacing=4, v_spacing=1)
         lab = QLabel(title)
         lab.setStyleSheet("font-size: 12px; font-weight: bold;")
         row.addWidget(lab)
@@ -169,7 +169,6 @@ class PlotsWidget(QWidget):
             cb.toggled.connect(lambda on, k=key: self._on_trace_toggled(k, on))
             row.addWidget(cb)
             self.trace_boxes[key] = cb
-        row.addStretch(1)
         return row
 
     # ------------------------------------------------------------------ controls
