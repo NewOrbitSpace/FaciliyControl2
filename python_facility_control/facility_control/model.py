@@ -222,11 +222,20 @@ class Commands:
     turbo_error_ack: Dict[str, bool] = field(default_factory=dict)
     primary_power: bool = False                            # physical relay 1 (mains power)
     primary_run: bool = False                              # physical relay 2 (start/run)
+    # Pfeiffer HiPace over RS-485 only: reduced-speed set value in % of nominal ([P:707] with the
+    # rotation speed setting mode [P:026] on).  Absent / None = full speed.  Only meaningful while the
+    # motor is on and standby is off - the controller clears it otherwise.
+    turbo_speed_pct: Dict[str, Optional[float]] = field(default_factory=dict)
 
     def copy(self) -> "Commands":
         return Commands(dict(self.valves), self.primary, self.chiller,
                         dict(self.turbo_motor), dict(self.turbo_standby), dict(self.turbo_error_ack),
-                        self.primary_power, self.primary_run)
+                        self.primary_power, self.primary_run, dict(self.turbo_speed_pct))
+
+    def speed_set(self, tid: str) -> Optional[float]:
+        """The reduced-speed set value of one turbo, or None for full speed."""
+        v = self.turbo_speed_pct.get(tid)
+        return None if v is None else float(v)
 
     def set_primary(self, on: bool) -> "Commands":
         """Set the demand *and* both relay lines together.  The controller normally derives the
@@ -246,7 +255,9 @@ class Commands:
             return NotImplemented
         return (self.valves == other.valves and self.primary == other.primary
                 and self.chiller == other.chiller and self.turbo_motor == other.turbo_motor
-                and self.turbo_standby == other.turbo_standby)
+                and self.turbo_standby == other.turbo_standby
+                and {k: v for k, v in self.turbo_speed_pct.items() if v is not None}
+                == {k: v for k, v in other.turbo_speed_pct.items() if v is not None})
 
 
 def primary_is_running(pump, inp: "Inputs", cmds: "Commands") -> bool:
@@ -286,6 +297,8 @@ class TurboView:
     still_spinning: Optional[bool] = None
     has_speed: bool = True          # False for the contact interface (status words only)
     contacts: Dict[str, bool] = field(default_factory=dict)
+    speed_set_pct: Optional[float] = None    # HiPace RS-485: commanded reduced speed (None = full)
+    speed_settable: bool = False             # this turbo accepts a speed set value (HiPace RS-485)
 
 
 @dataclass

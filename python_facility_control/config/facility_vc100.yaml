@@ -149,6 +149,8 @@ turbos:
       error_requires_chiller: false
       warning_is_error: false              # [P:303] 'Wrn...' is shown but does not stop Auto mode
       standby_speed_min_pct: 40.0
+      speed_set_min_pct: 20.0               # speed panel 'Set' slider range, % of nominal (TC 400 accepts 20..100)
+      speed_set_max_pct: 100.0
     # D-SUB (previous wiring): DO Mod3/port0/line3..5 = Motor / Standby / Reset; speed on Mod8/ai5
     # (+/-10 V, x10 = %); error on DI Mod2/port0/line16 (24 V = healthy).
     hipace_dsub25:
@@ -184,6 +186,8 @@ turbos:
       error_requires_chiller: false
       warning_is_error: false              # [P:303] 'Wrn...' is shown but does not stop Auto mode
       standby_speed_min_pct: 40.0
+      speed_set_min_pct: 20.0
+      speed_set_max_pct: 100.0
     # D-SUB (previous wiring): DO Mod3/port0/line6..7 = Motor / Standby (the VI creates only two lines
     # for Turbo 3 - there is NO reset line); speed on Mod8/ai6; error on DI Mod2/port0/line17.
     hipace_dsub25:
@@ -247,6 +251,8 @@ turbos:
       error_requires_chiller: false
       warning_is_error: false
       standby_speed_min_pct: 40.0
+      speed_set_min_pct: 20.0
+      speed_set_max_pct: 100.0
   - id: turbo6
     label: "Turbo 6"
     in_use: true
@@ -266,6 +272,8 @@ turbos:
       error_requires_chiller: false
       warning_is_error: false
       standby_speed_min_pct: 40.0
+      speed_set_min_pct: 20.0
+      speed_set_max_pct: 100.0
 
 # ---------------------------------------------------------------- behaviour (VI constants, mBar where the VI uses mBar)
 thresholds:

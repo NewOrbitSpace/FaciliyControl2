@@ -228,6 +228,11 @@ class Controller:
     def request_set_engage_time(self, epoch: Optional[float]): self.request("set_engage_time", epoch)
     def request_set_unit(self, unit: str): self.request("set_unit", unit)
 
+    def request_turbo_speed(self, tid: str, mode: str, pct: Optional[float] = None):
+        """Pfeiffer HiPace (RS-485) speed panel: mode 'off' | 'full' | 'standby' | 'set' (pct = set
+        value in % of nominal).  Manual / Admin mode only - Auto runs the turbos itself."""
+        self.request("turbo_speed", tid, (str(mode), pct))
+
     def request_set_frequency_enabled(self, on: bool):
         """Operator toggled 'pump frequency reader connected' on the panel."""
         self.request("set_frequency_enabled", bool(on))
@@ -572,7 +577,9 @@ class Controller:
                     and not self._suppressed(f"turbo:{tc.id}", now)):
                 err = err.merge(ErrorCluster.make(ERR_TURBO_MOTOR_CONFLICT, "Conflict between Turbo Motor command and read!"))
             self._turbo_views[tc.id] = TurboView(status, TURBO_COLORS[status], ti.speed_pct, turbo_error, motor_read,
-                                                 standby, tc.in_use, ti.still_spinning, tc.has_speed, dict(ti.contacts))
+                                                 standby, tc.in_use, ti.still_spinning, tc.has_speed, dict(ti.contacts),
+                                                 self.cmds.speed_set(tc.id) if tc.speed_settable else None,
+                                                 tc.speed_settable)
         # compressor pressure (VC100: < 5 bar for 5 s -> error; only if the profile has the sensor)
         if th.compressor_min_bar is not None and inp.compressor_bar is not None:
             low = inp.compressor_bar < th.compressor_min_bar
@@ -635,7 +642,17 @@ class Controller:
             # "Ignore Turbo Error if chiller off" - never applied to a lost RS-485 link
             turbo_error = turbo_error and bool(self.cmds.chiller)
         motor_read = ti.motor_read if tc.control_mode == "hipace_rs485" else motor_cmd
-        if motor_read:
+        speed_set = self.cmds.speed_set(tc.id) if tc.speed_settable else None
+        if motor_read and speed_set is not None and not standby_cmd:
+            # reduced speed: 'Speed Reached' means the set value is reached
+            tol = float(p.get("speed_set_tolerance_pct", 3.0))
+            if ti.speed_pct > speed_set + tol:
+                status = TurboStatus.SPINNING_DOWN    # slowing to the set value
+            elif ti.speed_pct >= speed_set - tol:
+                status = TurboStatus.SPEED_REACHED
+            else:
+                status = TurboStatus.SPINNING_UP
+        elif motor_read:
             sb_min = p.get("standby_speed_min_pct")
             standby_ok = standby_cmd and (sb_min is None or ti.speed_pct > float(sb_min))
             if standby_ok and sb_min is None:
@@ -728,6 +745,9 @@ class Controller:
         for i, r in enumerate(reqs):
             if r.kind == "user_cmd":
                 self._handle_user_cmd(str(r.arg), new, inp, manual)
+            elif r.kind == "turbo_speed":
+                mode, pct = r.arg2 if isinstance(r.arg2, tuple) else (str(r.arg2), None)
+                self._handle_turbo_speed(str(r.arg), mode, pct, new, inp, manual)
             elif r.kind == "turbo_error_ack":
                 for t in ([r.arg] if r.arg else cfg.turbo_ids):
                     new.turbo_error_ack[t] = True
@@ -814,6 +834,69 @@ class Controller:
                     else:
                         cmds.turbo_motor[tid], cmds.turbo_standby[tid] = True, True
                 self._open_dialog("three", f" Exit {tname} Standby Mode?", ["Yes, Spin Up", "No", " Yes, Spin Down"], apply)
+
+    def _handle_turbo_speed(self, tid: str, mode: str, pct: Optional[float], new: Commands, inp: Inputs,
+                            manual: bool) -> None:
+        """Off / Full speed / Standby / Set speed for one Pfeiffer HiPace on RS-485.
+
+        Starting a stopped pump or stopping a running one asks first (and, in Manual mode, goes through
+        the same interlock as clicking the turbo on the diagram).  Changing between Full, Standby and
+        a set value while the pump runs is applied at once - it never changes what is open or closed."""
+        cfg = self.cfg
+        if tid not in cfg.turbo_ids:
+            return
+        tc = cfg.turbo(tid)
+        if not tc.speed_settable:
+            self._info(f"{tc.label}: speed control is only available for the Pfeiffer HiPace pumps on RS-485")
+            return
+        if not tc.in_use:
+            self._info(f"{tc.label} is not in use")
+            return
+        tname = tc.label
+        motor = bool(new.turbo_motor.get(tid, False))
+        if mode == "off":
+            if not motor:
+                return
+
+            def apply(result, cmds, tid=tid):
+                if result == 0:
+                    cmds.turbo_motor[tid], cmds.turbo_standby[tid] = False, False
+                    cmds.turbo_speed_pct[tid] = None
+            self._open_dialog("two", f"Stop {tname}?", ["Yes", "No"], apply)
+            return
+        if mode not in ("full", "standby", "set"):
+            return
+        lo, hi = tc.speed_set_range
+        speed: Optional[float] = None
+        if mode == "set":
+            try:
+                speed = float(pct)
+            except (TypeError, ValueError):
+                self._info(f"{tname}: no speed set value given")
+                return
+            if math.isnan(speed):
+                return
+            speed = round(min(hi, max(lo, speed)), 1)
+            if speed >= 100.0:
+                speed = None                          # 100 % is simply full speed
+        standby = mode == "standby"
+        what = ("in standby" if standby else
+                "at full speed" if speed is None else f"at {speed:.0f} % speed")
+        if motor:                                     # already running: just change the speed
+            new.turbo_standby[tid] = standby
+            new.turbo_speed_pct[tid] = speed
+            return
+        if manual:
+            verdict = self.interlocks.turbo_motor(tid, True, new, inp)
+            if not verdict.allowed:
+                self._info(verdict.message)
+                return
+
+        def apply(result, cmds, tid=tid, standby=standby, speed=speed):
+            if result == 0:
+                cmds.turbo_motor[tid], cmds.turbo_standby[tid] = True, standby
+                cmds.turbo_speed_pct[tid] = speed
+        self._open_dialog("two", f"Start {tname} {what}?", ["Yes", "No"], apply)
 
     def recognise_state(self, c: Commands) -> Optional[Tuple[FacilityState, FacilityState, str]]:
         """Admin → Auto state recognition (exactly the VI's decision tree, on commanded states)."""
@@ -914,6 +997,8 @@ class Controller:
             self._open_dialog("two", MANUAL_VENT_QUESTION, ["Yes", "No"], apply, MANUAL_VENT_QUESTION)
             reqs = kept
 
+        if any(r.kind == "turbo_speed" for r in reqs):
+            self._log("Turbo speed panel ignored in Auto mode – switch to Manual or Admin to set a turbo speed")
         buttons: Set[str] = {str(r.arg) for r in reqs if r.kind == "auto_button"}
         for r in reqs:
             if r.kind == "turbo_error_ack":            # port addition: Reset Turbos works in Auto too
@@ -929,11 +1014,29 @@ class Controller:
         self.skip_primary_warm = out.skip_primary_warm
         self._elapsed_below = out.elapsed_below_threshold_s
         out.commands.turbo_error_ack = new.turbo_error_ack
+        # Auto runs every turbo at full speed (or its own standby): a reduced set value from
+        # Manual/Admin mode never carries over into the sequence
+        for tid, sp in list(out.commands.turbo_speed_pct.items()):
+            if sp is not None:
+                self._log(f"{self.cfg.turbo(tid).label}: speed set value cleared – Auto mode runs at full speed")
+            out.commands.turbo_speed_pct[tid] = None
         return out.commands
 
     # ------------------------------------------------------------------ frame 4
     def _command(self, prev: Commands, new: Commands, now: float) -> None:
         cfg, tm = self.cfg, self.cfg.timings
+        # a reduced speed set value only exists for a running HiPace (RS-485) that is not in standby;
+        # stop / standby / any other interface clears it, so a restart is always at full speed
+        for tc in cfg.turbos:
+            sp = new.turbo_speed_pct.get(tc.id)
+            if sp is None:
+                continue
+            if (not tc.speed_settable or not tc.in_use or not new.turbo_motor.get(tc.id, False)
+                    or new.turbo_standby.get(tc.id, False)):
+                new.turbo_speed_pct[tc.id] = None
+            else:
+                lo, hi = tc.speed_set_range
+                new.turbo_speed_pct[tc.id] = min(hi, max(lo, float(sp)))
         # turbos that are not in use never get commanded (VC100 'Turbo X in use?')
         for tc in cfg.turbos:
             if not tc.in_use:
@@ -1050,6 +1153,9 @@ class Controller:
                 self._log(f"{'Started' if new.turbo_motor.get(tc.id) else 'Stopped'} {tc.label} at {ts}")
             if prev.turbo_standby.get(tc.id) != new.turbo_standby.get(tc.id):
                 self._log(f"{tc.label} standby {'on' if new.turbo_standby.get(tc.id) else 'off'} at {ts}")
+            if prev.speed_set(tc.id) != new.speed_set(tc.id) and new.turbo_motor.get(tc.id, False):
+                sp = new.speed_set(tc.id)
+                self._log(f"{tc.label} speed set to " + ("full speed" if sp is None else f"{sp:.0f} %") + f" at {ts}")
 
     def _log(self, line: str) -> None:
         self.event_log.append(line)

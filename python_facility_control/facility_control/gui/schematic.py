@@ -70,7 +70,7 @@ GATE_Y = 240.0
 TURBO_Y = 304.0
 TURBO_R = 25.0
 CARD_Y = 336.0            # turbo status card top
-CARD_H = 44.0
+CARD_H = 52.0
 JOIN_Y = 402.0            # turbos of one turbo valve join here
 GAUGE_Y = 436.0
 TV_Y = 488.0              # turbo valve
@@ -79,6 +79,9 @@ COL_W = 106.0             # one turbo column
 GROUP_GAP = 30.0          # extra space between groups
 X0 = 250.0                # first turbo column
 LEFT_COL = 18.0           # utility cards
+READOUT_W, READOUT_H = 180.0, 50.0   # gauge readout cards (2026-10-27: larger for legibility)
+VALUE_PT = 14.5           # pressure value font in the readout cards
+LABEL_PT = 9.5            # valve / small labels
 
 
 class SchematicWidget(QWidget):
@@ -158,7 +161,7 @@ class SchematicWidget(QWidget):
         prev_single = False
         for gi, (_vid, idx) in enumerate(self._groups()):
             if gi:
-                x += COL_W + GROUP_GAP + (70.0 if prev_single else 0.0)   # room for a lone turbo's gauge card
+                x += COL_W + GROUP_GAP + (READOUT_W - 48.0 if prev_single else 0.0)   # room for a lone turbo's gauge card
             prev_single = len(idx) == 1
             for k, i in enumerate(idx):
                 if k:
@@ -225,10 +228,10 @@ class SchematicWidget(QWidget):
         """Instrument card: small caption, value in a fixed-width face, unit."""
         self._card(p, rect, accent)
         pad = 8.0
-        self._text(p, QRectF(rect.left() + pad, rect.top() + 2, rect.width() - 2 * pad, 14), caption, 7.5,
+        self._text(p, QRectF(rect.left() + pad, rect.top() + 2, rect.width() - 2 * pad, 16), caption, 9.0,
                    False, INK_2)
-        self._text(p, QRectF(rect.left() + pad, rect.top() + 15, rect.width() - 2 * pad, rect.height() - 17),
-                   f"{value} {unit}".rstrip(), 9.5, True, INK, Qt.AlignLeft | Qt.AlignVCenter, mono=True)
+        self._text(p, QRectF(rect.left() + pad, rect.top() + 17, rect.width() - 2 * pad, rect.height() - 19),
+                   f"{value} {unit}".rstrip(), VALUE_PT, True, INK, Qt.AlignLeft | Qt.AlignVCenter, mono=True)
 
     def _pipe(self, p: QPainter, pts: List[Tuple[float, float]], width: float = 5.0):
         path = QPainterPath(QPointF(*pts[0]))
@@ -286,13 +289,13 @@ class SchematicWidget(QWidget):
             p.drawLine(QPointF(dome.left(), dome.bottom()), QPointF(dome.right(), dome.bottom()))
             hit = QRectF(cx - s - 2, cy - s - 20, 2 * s + 4, 2 * s + 22)
         if label_side == "right":
-            self._label(p, cx + s + 6, cy, label, 8.5)
+            self._label(p, cx + s + 6, cy, label, LABEL_PT)
         elif label_side == "left":
-            self._label(p, cx - s - 24, cy, label, 8.5, align=Qt.AlignRight)
+            self._label(p, cx - s - 24, cy, label, LABEL_PT, align=Qt.AlignRight)
         elif label_side == "above":
-            self._label(p, cx, cy - s - 28, label, 8.5, align=Qt.AlignHCenter)
+            self._label(p, cx, cy - s - 28, label, LABEL_PT, align=Qt.AlignHCenter)
         elif label_side == "below":
-            self._label(p, cx, cy + s + 10, label, 8.5, align=Qt.AlignHCenter)
+            self._label(p, cx, cy + s + 10, label, LABEL_PT, align=Qt.AlignHCenter)
         self.hits.append(Hit(hit, f"valve:{vid}", f"{label}: click to open/close"))
 
     def _turbo(self, p: QPainter, cx: float, cy: float, tid: str, r: float = TURBO_R):
@@ -378,10 +381,10 @@ class SchematicWidget(QWidget):
                 q = QPointF(cx + math.cos(a) * 7, cy + math.sin(a) * 7)
                 p.drawLine(q, q + QPointF(math.cos(b) * 4, math.sin(b) * 4))
         self._text(p, QRectF(rect.left() + 48, rect.top() + 6, rect.width() - 52, 14), self.cfg.chiller.label,
-                   8.5, True)
+                   9.5, True)
         txt = self.snap.chiller_text if self.snap else "Chiller is Off"
         self._text(p, QRectF(rect.left() + 48, rect.top() + 22, rect.width() - 52, 16),
-                   txt.replace("Chiller is ", ""), 8.5, False, INK_2)
+                   txt.replace("Chiller is ", ""), 9.0, False, INK_2)
         self.hits.append(Hit(rect, "chiller", "Chiller: click to start/stop"))
 
     def _pressure_text(self, gid: str) -> str:
@@ -453,18 +456,18 @@ class SchematicWidget(QWidget):
         if bps:
             self._flange(p, vessel.right() + 2, vessel.center().y(), vertical=False)
         main = cfg.main_gauge
-        ro = QRectF(vessel.center().x() - 120, vessel.top() + 26, 240, 74)
+        ro = QRectF(vessel.center().x() - 150, vessel.top() + 18, 300, 98)
         self._card(p, ro, radius=6)
         self._text(p, QRectF(ro.left() + 12, ro.top() + 4, ro.width() - 24, 16),
-                   f"CHAMBER  ·  {main.label.upper()}", 7.5, True, INK_2)
-        self._text(p, QRectF(ro.left() + 12, ro.top() + 18, ro.width() - 70, 40),
-                   self._pressure_text(main.id), 22, True, INK, Qt.AlignLeft | Qt.AlignVCenter, mono=True)
-        self._text(p, QRectF(ro.right() - 62, ro.top() + 18, 52, 40), unit, 11, False, INK_2,
+                   f"CHAMBER  ·  {main.label.upper()}", 9.5, True, INK_2)
+        self._text(p, QRectF(ro.left() + 12, ro.top() + 20, ro.width() - 84, 52),
+                   self._pressure_text(main.id), 28, True, INK, Qt.AlignLeft | Qt.AlignVCenter, mono=True)
+        self._text(p, QRectF(ro.right() - 76, ro.top() + 20, 66, 52), unit, 14, False, INK_2,
                    Qt.AlignRight | Qt.AlignVCenter)
         other = "mbar" if self.unit == "torr" else "torr"
         txt = format_pressure(snap.inputs.pressures_torr.get(main.id, float("nan")), other) if snap else "NaN"
-        self._text(p, QRectF(ro.left() + 12, ro.bottom() - 18, ro.width() - 24, 14),
-                   f"= {txt} {unit_label(other)}", 8, False, INK_2, mono=True)
+        self._text(p, QRectF(ro.left() + 12, ro.bottom() - 24, ro.width() - 24, 20),
+                   f"= {txt} {unit_label(other)}", 10.5, False, INK_2, mono=True)
 
         # ======== vent (left head) and bypass (right line)
         if vents:
@@ -489,14 +492,18 @@ class SchematicWidget(QWidget):
             self._turbo(p, x, TURBO_Y, tc.id)
             tv = snap.turbos.get(tc.id) if snap else None
             st_txt = tv.status.label.replace("Turbo ", "") if tv else "Off"
+            sp = tv.speed_set_pct if (tv and tv.motor_read) else None
+            if sp is not None and tv.status.name in ("SPEED_REACHED", "SPINNING_UP", "SPINNING_DOWN"):
+                st_txt = {"SPEED_REACHED": f"At {sp:.0f}% set", "SPINNING_UP": f"Up to {sp:.0f}%",
+                          "SPINNING_DOWN": f"Down to {sp:.0f}%"}[tv.status.name]
             if tv and not tv.in_use:
                 st_txt = "Not in use"
             accent = _c(tv.color) if tv else _c(COLOR_OFF)
             card = QRectF(x - COL_W / 2 + 8, CARD_Y, COL_W - 16, CARD_H)
             self._card(p, card, accent)
-            self._text(p, QRectF(card.left() + 9, card.top() + 2, card.width() - 12, 15), tc.label, 8.5, True)
-            self._text(p, QRectF(card.left() + 9, card.top() + 27, card.width() - 12, 15), st_txt, 7.5, False, INK_2)
-            bar = QRectF(card.left() + 9, card.top() + 19, card.width() - 48, 6)
+            self._text(p, QRectF(card.left() + 9, card.top() + 2, card.width() - 12, 18), tc.label, 10.0, True)
+            self._text(p, QRectF(card.left() + 7, card.top() + 32, card.width() - 9, 18), st_txt, 8.5, False, INK_2)
+            bar = QRectF(card.left() + 9, card.top() + 23, card.width() - 50, 6)
             if tv is None or tv.has_speed:
                 pct = max(0.0, min(100.0, tv.speed_pct if tv else 0.0))
                 p.setPen(Qt.NoPen)
@@ -508,11 +515,15 @@ class SchematicWidget(QWidget):
                 p.setPen(QPen(QColor(61, 68, 77, 140), 1))
                 mx = bar.left() + bar.width() * th_reached / 100.0
                 p.drawLine(QPointF(mx, bar.top() - 2), QPointF(mx, bar.bottom() + 2))
-                self._text(p, QRectF(bar.right() + 2, card.top() + 14, card.right() - bar.right() - 7, 16),
-                           f"{pct:.0f}%", 7.5, True, INK, Qt.AlignRight | Qt.AlignVCenter, mono=True)
+                if sp is not None:                          # reduced-speed set value: a blue tick
+                    p.setPen(QPen(QColor("#2F81F7"), 2))
+                    sx = bar.left() + bar.width() * max(0.0, min(100.0, sp)) / 100.0
+                    p.drawLine(QPointF(sx, bar.top() - 3), QPointF(sx, bar.bottom() + 3))
+                self._text(p, QRectF(bar.right() + 2, card.top() + 17, card.right() - bar.right() - 6, 18),
+                           f"{pct:.0f}%", 9.0, True, INK, Qt.AlignRight | Qt.AlignVCenter, mono=True)
             else:
-                self._text(p, QRectF(card.left() + 9, card.top() + 15, card.width() - 18, 12),
-                           "no speed signal", 6.5, False, INK_2)
+                self._text(p, QRectF(card.left() + 7, card.top() + 18, card.width() - 9, 14),
+                           "no speed signal", 6.8, False, INK_2)
 
         # ======== per turbo valve: backing gauge + turbo valve
         for vid, idx in groups:
@@ -521,7 +532,8 @@ class SchematicWidget(QWidget):
             if g:
                 self._pipe(p, [(cx, GAUGE_Y), (cx + 22, GAUGE_Y)], width=3)
                 self._gauge_bubble(p, cx + 33, GAUGE_Y)
-                self._readout(p, QRectF(cx + 47, GAUGE_Y - 17, 118, 34), g.label, self._pressure_text(g.id), unit)
+                self._readout(p, QRectF(cx + 47, GAUGE_Y - READOUT_H / 2, READOUT_W, READOUT_H), g.label,
+                             self._pressure_text(g.id), unit)
             tvv = cfg.valves[vid]
             self._valve(p, cx, TV_Y, tvv.id, tvv.label, label_side="right")
 
@@ -531,7 +543,8 @@ class SchematicWidget(QWidget):
             gx = pump_x + 62
             self._pipe(p, [(gx, MANIFOLD_Y), (gx, MANIFOLD_Y - 22)], width=3)
             self._gauge_bubble(p, gx, MANIFOLD_Y - 33)
-            self._readout(p, QRectF(gx - 59, MANIFOLD_Y - 98, 118, 36), fg.label, self._pressure_text(fg.id), unit)
+            self._readout(p, QRectF(gx - 118, MANIFOLD_Y - 108, READOUT_W, READOUT_H), fg.label,
+                         self._pressure_text(fg.id), unit)
         self._primary(p, pump_x, MANIFOLD_Y + 34 + 26)
         ey = MANIFOLD_Y + 60
         p.setPen(QPen(LINE, 1.4))
@@ -539,17 +552,17 @@ class SchematicWidget(QWidget):
         p.drawPolyline(QPolygonF([QPointF(pump_x - 38, ey - 6), QPointF(pump_x - 45, ey), QPointF(pump_x - 38, ey + 6)]))
         self._label(p, pump_x - 48, ey, "EXH", 7.5, True, Qt.AlignRight, INK_2)
         # primary card: status, hours (+ frequency)
-        pc = QRectF(pump_x + 36, MANIFOLD_Y + 14, 150, 76 if cfg.primary.has_frequency else 58)
+        pc = QRectF(pump_x + 36, MANIFOLD_Y + 14, 170, 84 if cfg.primary.has_frequency else 64)
         self._card(p, pc, _c(COLOR_ON) if (snap and snap.primary_running) else _c(COLOR_OFF))
-        self._text(p, QRectF(pc.left() + 10, pc.top() + 3, pc.width() - 14, 15), cfg.primary.label, 8.5, True)
-        self._text(p, QRectF(pc.left() + 10, pc.top() + 19, pc.width() - 14, 15),
+        self._text(p, QRectF(pc.left() + 10, pc.top() + 3, pc.width() - 14, 17), cfg.primary.label, 9.5, True)
+        self._text(p, QRectF(pc.left() + 10, pc.top() + 21, pc.width() - 14, 17),
                    (snap.primary_text if snap else "Primary Pump is Off").replace(cfg.primary.label + " ", "")
-                   .replace("Primary Pump ", ""), 8, False, INK_2)
+                   .replace("Primary Pump ", ""), 9, False, INK_2)
         hours = snap.primary_run_hours if snap else 0.0
-        self._text(p, QRectF(pc.left() + 10, pc.top() + 36, pc.width() - 14, 16),
-                   f"Run hours  {hours:,.2f} h", 8, False, INK, mono=True)
+        self._text(p, QRectF(pc.left() + 10, pc.top() + 40, pc.width() - 14, 18),
+                   f"Run hours  {hours:,.2f} h", 9, False, INK, mono=True)
         measured = cfg.primary.has_frequency or cfg.primary.has_read
-        self.hits.append(Hit(QRectF(pc.left(), pc.top() + 34, pc.width(), 18), "primary",
+        self.hits.append(Hit(QRectF(pc.left(), pc.top() + 38, pc.width(), 20), "primary",
                              "Primary pump total operating hours – "
                              + ("counted from its read-back" if measured
                                 else "counted from the run command (no pump feedback fitted)")
@@ -557,26 +570,26 @@ class SchematicWidget(QWidget):
         if cfg.primary.has_frequency:
             hz = snap.primary_hz if snap else None
             on = snap.primary_frequency_enabled if snap else False
-            self._text(p, QRectF(pc.left() + 10, pc.top() + 54, pc.width() - 14, 16),
+            self._text(p, QRectF(pc.left() + 10, pc.top() + 60, pc.width() - 14, 18),
                        "Drive  " + (f"{hz:.1f} Hz" if hz is not None else ("–" if on else "reader off")),
-                       8, False, INK, mono=True)
-            self.hits.append(Hit(QRectF(pc.left(), pc.top() + 52, pc.width(), 18), "primary",
+                       9, False, INK, mono=True)
+            self.hits.append(Hit(QRectF(pc.left(), pc.top() + 58, pc.width(), 18), "primary",
                                  f"Primary pump drive frequency (0-{cfg.primary.frequency.max_hz:g} Hz)"
                                  if on else "Frequency reader is switched off – tick "
                                             "'Pump frequency reader connected' on the panel to use it"))
         # utilities column
         uy = VESSEL_BOT + 40
-        self._chiller(p, QRectF(LEFT_COL, uy, 112, 46))
+        self._chiller(p, QRectF(LEFT_COL, uy, 124, 50))
         uy += 58
         if snap and snap.compressor_bar is not None:
             low = cfg.thresholds.compressor_min_bar is not None and snap.compressor_bar < cfg.thresholds.compressor_min_bar
-            self._readout(p, QRectF(LEFT_COL, uy, 112, 36), "Compressed air", f"{snap.compressor_bar:.1f}", "bar",
+            self._readout(p, QRectF(LEFT_COL, uy, 124, READOUT_H), "Compressed air", f"{snap.compressor_bar:.1f}", "bar",
                           accent=_c(COLOR_ERROR) if low else _c(COLOR_ON))
-            uy += 48
+            uy += READOUT_H + 12
         for ea in cfg.extra_analog[:1]:
             v = snap.inputs.extra_analog.get(ea["id"], float("nan")) if snap else float("nan")
-            self._readout(p, QRectF(LEFT_COL, uy, 112, 36), ea["label"], f"{v:.3f}", "V")
-            uy += 48
+            self._readout(p, QRectF(LEFT_COL, uy, 124, READOUT_H), ea["label"], f"{v:.3f}", "V")
+            uy += READOUT_H + 12
 
     def _header(self, p: QPainter, width: float):
         snap, cfg = self.snap, self.cfg
@@ -585,7 +598,7 @@ class SchematicWidget(QWidget):
         p.drawRect(QRectF(0, 0, width, HEADER_H))
         p.setPen(QPen(CARD_EDGE, 1))
         p.drawLine(QPointF(0, HEADER_H), QPointF(width, HEADER_H))
-        self._text(p, QRectF(14, 0, 330, HEADER_H), cfg.name or cfg.id, 10, True)
+        self._text(p, QRectF(14, 0, 330, HEADER_H), cfg.name or cfg.id, 11, True)
         if not snap:
             return
         mode_txt = {Mode.INITIALIZE: "INITIALISING", Mode.ADMIN: "ADMIN", Mode.MANUAL: "MANUAL · INTERLOCKED",

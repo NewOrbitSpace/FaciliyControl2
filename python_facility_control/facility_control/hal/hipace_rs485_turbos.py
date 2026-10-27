@@ -20,6 +20,14 @@ gets a poller thread; the controller's `read()` returns the latest cached values
 what it last wrote successfully, so a write lost to a timeout is simply sent again on the next pass
 (rate-limited), and a stop never waits behind a slow poll of another pump for more than one telegram.
 
+Speed modes (2026-10-27): Off ([P:010] off), Full speed, Standby ([P:002] on, speed [P:717]) and a
+free set value ([P:707] 20..100 % with the rotation speed setting mode [P:026] on).  [P:026] is
+switched off again whenever the pump is stopped, put in standby or returned to full speed, and once
+at start-up, so a pump never keeps a reduced speed from an earlier session.
+
+Write order: a STOP is always sent first - before an error acknowledge or a speed change - so a
+refused or lost acknowledge can never hold the stop back.
+
 Per pump and pass: [P:309] speed, [P:010] pumping station, [P:303] error code, [P:002] standby;
 every `slow_poll_every` passes also [P:315] nominal speed, [P:023], [P:060], [P:300], temperatures,
 drive current.
@@ -105,8 +113,10 @@ class _Unit:
     pump: HiPace
     desired_motor: bool = False
     desired_standby: bool = False
+    desired_speed: Optional[float] = None      # reduced-speed set value in %, None = full speed
     applied_motor: Optional[bool] = None       # None = unknown -> always write once
     applied_standby: Optional[bool] = None
+    applied_speed: object = "unknown"          # last speed setting written ("unknown" -> write once)
     ack_pending: bool = False
     values: Dict[int, object] = field(default_factory=dict)
     last_ok: float = 0.0
@@ -241,11 +251,15 @@ class RS485Turbos:
         return msgs
 
     # ------------------------------------------------------------------ controller side
-    def set_commands(self, motor: Dict[str, bool], standby: Dict[str, bool]) -> None:
+    def set_commands(self, motor: Dict[str, bool], standby: Dict[str, bool],
+                     speed: Optional[Dict[str, Optional[float]]] = None) -> None:
+        speed = speed or {}
         with self.lock:
             for tid, u in self.units.items():
                 u.desired_motor = bool(motor.get(tid, False))
                 u.desired_standby = bool(standby.get(tid, False))
+                sp = speed.get(tid)
+                u.desired_speed = None if sp is None else float(sp)
 
     def error_ack(self, tid: str) -> None:
         u = self.units.get(tid)
@@ -321,13 +335,20 @@ class RS485Turbos:
                 self._apply(u)
                 self._poll(u)
 
+    @staticmethod
+    def _effective_speed(motor: bool, standby: bool, speed: Optional[float]) -> Optional[float]:
+        """A reduced set value only applies to a running pump that is not in standby."""
+        return speed if (motor and not standby and speed is not None) else None
+
     def _apply(self, u: _Unit) -> bool:
         """Bring the pump to the desired state.  Returns True when nothing is left to write."""
         if self.read_only:
             return True
         with self.lock:
             want_motor, want_sb, ack = u.desired_motor, u.desired_standby, u.ack_pending
-        todo = (want_motor != u.applied_motor) or (want_sb != u.applied_standby) or ack
+            want_speed = self._effective_speed(u.desired_motor, u.desired_standby, u.desired_speed)
+        todo = ((want_motor != u.applied_motor) or (want_sb != u.applied_standby) or ack
+                or want_speed != u.applied_speed)
         if not todo:
             return True
         now = self.clock()
@@ -336,24 +357,35 @@ class RS485Turbos:
             return False                            # rate-limit retries (a stop is never delayed)
         u.last_write_attempt = now
         try:
+            if stopping:
+                u.pump.stop()                       # [P:010] off - always allowed, always first
+                u.applied_motor = False
             if ack:
                 u.pump.ack_error()
                 with self.lock:
                     u.ack_pending = False
                     u.control_error = ""
                 u.events.append(f"{u.label}: error acknowledged over RS-485 ([P:009])")
+            # standby and speed mode before a start, so the pump heads straight for the right speed
+            if want_sb != u.applied_standby:
+                if want_sb or u.applied_standby is not None or want_motor:
+                    u.pump.set_standby(want_sb)
+                u.applied_standby = want_sb
+            if want_speed != u.applied_speed:
+                u.pump.set_speed(want_speed)        # [P:707] + [P:026] = 1, or [P:026] = 0
+                if want_speed is not None:
+                    u.events.append(f"{u.label}: speed set to {want_speed:.0f} % over RS-485 ([P:707])")
+                elif u.applied_speed not in (None, "unknown"):
+                    u.events.append(f"{u.label}: speed setting mode off ([P:026] = 0)")
+                u.applied_speed = want_speed
             if want_motor != u.applied_motor:
                 if want_motor:
                     if u.p["take_control"]:
                         u.pump.take_rs485_control()
                     u.pump.start()                  # [P:023] on if needed, [P:010] on
                 else:
-                    u.pump.stop()                   # [P:010] off - always allowed
+                    u.pump.stop()
                 u.applied_motor = want_motor
-            if want_sb != u.applied_standby:
-                if want_sb or u.applied_standby is not None or want_motor:
-                    u.pump.set_standby(want_sb)
-                u.applied_standby = want_sb
             with self.lock:
                 u.control_error = ""
             return True

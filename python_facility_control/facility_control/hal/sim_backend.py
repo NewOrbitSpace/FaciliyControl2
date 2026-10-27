@@ -38,6 +38,7 @@ class _Valve:
 class _Turbo:
     motor: bool = False
     standby: bool = False
+    speed_set: Optional[float] = None   # HiPace RS-485 reduced-speed set value (None = full)
     speed_pct: float = 0.0
     error: bool = False
     p_body_torr: float = 760.0     # gas node between gate and turbo valve
@@ -151,6 +152,8 @@ class SimBackend(HardwareBackend):
         for tid, t in st.turbos.items():
             t.motor = bool(cmds.turbo_motor.get(tid, False))
             t.standby = bool(cmds.turbo_standby.get(tid, False))
+            sp = cmds.turbo_speed_pct.get(tid)
+            t.speed_set = float(sp) if (sp is not None and self.config.turbo(tid).control_mode == "hipace_rs485") else None
 
     def set_frequency_enabled(self, on: bool) -> None:
         if self.config.primary.has_frequency:
@@ -208,7 +211,12 @@ class SimBackend(HardwareBackend):
                 t.error = True
             powered = st.chiller_on > 0.5  # chiller contactor also powers the turbo controllers
             if t.motor and powered and not t.error:
-                target = float(tcfg.params.get("standby_speed_pct", 66.0)) if t.standby else 100.0
+                if t.standby:
+                    target = float(tcfg.params.get("standby_speed_pct", 66.0))
+                elif t.speed_set is not None:
+                    target = t.speed_set
+                else:
+                    target = 100.0
                 if t.speed_pct < target:
                     t.speed_pct = min(target, t.speed_pct + 100.0 * dt / sim.turbo_spinup_s)
                 else:

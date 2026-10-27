@@ -287,7 +287,7 @@ class NiDaqmxBackend(HardwareBackend):
             self.tasks["primary_cmd"].write(bool(cmds.primary_run), auto_start=True)
         self.tasks["chiller_cmd"].write(bool(cmds.chiller), auto_start=True)
         if self.rs485:
-            self.rs485.set_commands(cmds.turbo_motor, cmds.turbo_standby)
+            self.rs485.set_commands(cmds.turbo_motor, cmds.turbo_standby, cmds.turbo_speed_pct)
         for tc in cfg.turbos:
             if tc.control_mode == "hipace_rs485":
                 continue

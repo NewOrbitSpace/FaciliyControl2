@@ -196,6 +196,7 @@ _P = [
     Param(9, "ErrorAckn", DT.BOOL_OLD, "", "w", "Error acknowledgement"),
     Param(10, "PumpgStatn", DT.BOOL_OLD, "", "rw", "Pumping station on/off (motor runs if [P:023] on)"),
     Param(23, "MotorPump", DT.BOOL_OLD, "", "rw", "Motor pump on/off"),
+    Param(26, "SpdSetMode", DT.U_SHORT, "", "rw", "Rotation speed setting mode: 0 off, 1 on (speed = [P:707])"),
     Param(60, "CtrlViaInt", DT.U_SHORT, "", "rw",
           "Control via interface: 1 remote, 2 RS-485, 4 PV.can, 8 fieldbus, 16 E74, 255 unlock"),
     Param(61, "IntSelLckd", DT.BOOL_OLD, "", "rw", "Interface selection locked"),
@@ -593,6 +594,20 @@ class HiPace:
     def ack_error(self) -> None:
         self.write(9, True)
 
+    def set_speed(self, pct: Optional[float]) -> None:
+        """Run at a reduced speed or back at full speed.
+
+        pct None -> rotation speed setting mode off ([P:026] = 0): nominal speed (or the standby
+        speed while [P:002] is on).  pct 20..100 -> [P:707] = pct, then [P:026] = 1.  The set value is
+        written first so the pump never heads for a stale value."""
+        if pct is None:
+            self.write(26, 0)
+            return
+        if not 20.0 <= pct <= 100.0:
+            raise ValueError("rotation speed set value must be 20..100 %")
+        self.write(707, float(pct))
+        self.write(26, 1)
+
     def set_standby_speed(self, pct: float) -> None:
         if not 20.0 <= pct <= 100.0:
             raise ValueError("standby speed must be 20..100 %")
@@ -779,7 +794,7 @@ class SimTC400:
         self.run_up_s = run_up_s
         self.time_scale = time_scale
         self.p: Dict[int, object] = {
-            2: False, 10: False, 23: True, 60: 1, 61: False, 300: False, 302: False, 303: "no Err",
+            2: False, 10: False, 23: True, 26: 0, 60: 1, 61: False, 300: False, 302: False, 303: "no Err",
             304: False, 305: False, 306: False, 307: False, 308: nominal_hz, 309: 0, 310: 0.0,
             311: 12873, 312: "010300", 313: 48.0, 314: 15021, 315: nominal_hz, 316: 0, 319: 412,
             326: 31, 330: 27, 336: 0, 342: 29, 346: 30, 349: "TC400", 354: "000200",
@@ -798,7 +813,12 @@ class SimTC400:
         running = self.p[10] and self.p[23] and error_kind(self.p[303]) != "error"
         target = 0.0
         if running:
-            target = self.nominal_hz * (self.p[717] / 100.0 if self.p[2] else 1.0)
+            if self.p[2]:                                   # standby has priority
+                target = self.nominal_hz * self.p[717] / 100.0
+            elif self.p[26]:                                # rotation speed setting mode
+                target = self.nominal_hz * self.p[707] / 100.0
+            else:
+                target = float(self.nominal_hz)
         rate = self.nominal_hz / self.run_up_s
         if self.speed < target:
             self.speed = min(target, self.speed + rate * dt)
@@ -837,7 +857,7 @@ class SimTC400:
             return "_RANGE"
         if len(t.data) != len(encode(par.dtype, value)):
             return "_RANGE"
-        control_params = (2, 9, 10, 23, 707)
+        control_params = (2, 9, 10, 23, 26, 707)
         rs485_has_control = self.p[60] != 255 and int(self.p[60]) & CTRL_RS485 and not self.p[300]
         if n in control_params and not rs485_has_control:
             return "_LOGIC"
@@ -846,7 +866,9 @@ class SimTC400:
                 return "_LOGIC"
             if value not in CTRL_INTERFACES:
                 return "_RANGE"
-        if n == 717 and not 20.0 <= value <= 100.0:
+        if n in (707, 717) and not 20.0 <= value <= 100.0:
+            return "_RANGE"
+        if n == 26 and value not in (0, 1):
             return "_RANGE"
         if n == 797 and not 1 <= value <= 255:
             return "_RANGE"

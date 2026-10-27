@@ -123,6 +123,19 @@ class TurboConfig:
     def has_error_ack(self) -> bool:
         return bool(self.params.get("error_ack_do")) or self.control_mode == "hipace_rs485"
 
+    @property
+    def speed_settable(self) -> bool:
+        """A free speed set value ([P:707]) can be commanded - Pfeiffer HiPace over RS-485 only."""
+        return self.control_mode == "hipace_rs485"
+
+    @property
+    def speed_set_range(self) -> Tuple[float, float]:
+        """Allowed set-value range in % of nominal (`speed_set_min_pct` / `speed_set_max_pct` in the
+        hipace_rs485 block; the TC 400 accepts 20..100 %)."""
+        lo = float(self.params.get("speed_set_min_pct", 20.0))
+        hi = float(self.params.get("speed_set_max_pct", 100.0))
+        return lo, hi
+
 
 TURBO_MODES = ("bigred_dsub15", "hipace_dsub25", "hipace_rs485", "shimadzu_contacts")
 # per-mode defaults for the error reported when the turbo signals a fault (all overridable per turbo
@@ -423,6 +436,10 @@ def check_rs485_turbos(turbos) -> None:
         sb = p.get("standby_speed_pct")
         if sb is not None and not 20.0 <= float(sb) <= 100.0:
             raise ValueError(f"turbo {tc.id}: hipace_rs485.standby_speed_pct must be 20..100")
+        lo, hi = tc.speed_set_range
+        if not 20.0 <= lo < hi <= 100.0:
+            raise ValueError(f"turbo {tc.id}: hipace_rs485.speed_set_min_pct / speed_set_max_pct must be "
+                             "20..100 with min < max")
 
 
 def _get(d: Dict[str, Any], key: str, default: Any = None) -> Any:

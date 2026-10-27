@@ -17,6 +17,7 @@ from ..model import Mode, Snapshot, TabPage
 from ..units import UNITS, torr_to, to_torr, unit_label
 from .plots import PlotsWidget
 from .schematic import SchematicWidget
+from .turbo_speed import TurboSpeedPanel
 from .widgets import BUTTON_STYLE, LED, LV_BG, ErrorClusterWidget, FlowLayout, ValueBox, lv_button
 
 # Auto-mode buttons per tab page (VI 'Tab Control' pages) -> (label, normalised action)
@@ -117,11 +118,15 @@ class MainWindow(QMainWindow):
         errbox.addWidget(self.clear_error, alignment=Qt.AlignCenter)
         bottom.addLayout(errbox, 1)
         logbox = QVBoxLayout()
+        # Pfeiffer HiPace (RS-485) speed: Off / Full / Standby / Set value (only if the profile has one)
+        self.speed_panel = TurboSpeedPanel(self.cfg, self.ctl)
+        if self.speed_panel.rows:
+            logbox.addWidget(self.speed_panel)
         logbox.addWidget(QLabel("Event log (temporary – cleared when the program stops)"))
         self.event_log = QPlainTextEdit()
         self.event_log.setReadOnly(True)
         self.event_log.setStyleSheet("background: #DCDCDC; border: 1px solid #909090; font-size: 12px;")
-        self.event_log.setMinimumHeight(120)
+        self.event_log.setMinimumHeight(90 if self.speed_panel.rows else 120)
         self.event_log.setMaximumHeight(220)
         logbox.addWidget(self.event_log, 1)
         tl = QHBoxLayout()
@@ -324,6 +329,8 @@ class MainWindow(QMainWindow):
         if new_iteration:
             self.plots.add_snapshot(snap)
         self.running_led.setOn(snap.running_led)
+        if self.speed_panel.rows:
+            self.speed_panel.update_from(snap)
         self.error_widget.set_error(snap.error)
         self.hw_label.setText(f"Hardware: {snap.hardware}")
         # event log
