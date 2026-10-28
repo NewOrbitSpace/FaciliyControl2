@@ -22,14 +22,15 @@ def vcfg():
 # ---------------------------------------------------------------------------- profile / pinout
 def test_new_lines_match_the_wiring(vcfg):
     g = vcfg.valves
-    assert (g["gate4"].cmd, g["gate4"].read) == ("Mod5/port0/line4", "Mod2/port0/line22")
-    assert (g["gate5"].cmd, g["gate5"].read) == ("Mod5/port0/line3", "Mod2/port0/line23")
-    assert (g["gate6"].cmd, g["gate6"].read) == ("Mod5/port0/line5", "Mod2/port0/line24")
+    # verified real wiring (test engineer, 2026-10-26)
+    assert (g["gate4"].cmd, g["gate4"].read) == ("Mod5/port0/line5", "Mod2/port0/line23")
+    assert (g["gate5"].cmd, g["gate5"].read) == ("Mod5/port0/line3", "Mod2/port0/line22")
+    assert (g["gate6"].cmd, g["gate6"].read) == ("Mod5/port0/line6", "Mod2/port0/line24")
     t4 = vcfg.turbo("turbo4")
     p = t4.params
     assert t4.control_mode == "shimadzu_contacts" and t4.gate_valve == "gate4"
     assert (p["error_ack_do"], p["standby_do"], p["motor_do"]) == ("Mod5/port0/line0", "Mod5/port0/line1", "Mod5/port0/line2")
-    assert (p["at_speed_di"], p["accel_decel_di"], p["alarm_di"], p["warning_di"]) == \
+    assert (p["at_speed_di"], p["rotating_di"], p["alarm_di"], p["warning_di"]) == \
         ("Mod2/port0/line18", "Mod2/port0/line19", "Mod2/port0/line20", "Mod2/port0/line21")
     assert p["alarm_di_inverted"] is False and p["warning_di_inverted"] is False       # 24 V = alarm / warning
     for new, old in (("turbo4", "turbo1"), ("turbo5", "turbo2"), ("turbo6", "turbo3")):
@@ -44,17 +45,24 @@ def test_new_lines_match_the_wiring(vcfg):
 
 # ---------------------------------------------------------------------------- HD15 contact mapping
 def test_hd15_contacts_map_onto_the_canonical_six():
-    # accelerating: motor on, accel/decel output active, not yet above 80 %
-    c = normalize_contacts({"at_speed": False, "accel_decel": True, "alarm": False, "warning": False}, True)
-    assert c["accelerating"] and not c["braking"] and c["rotating"] and not c["at_speed"]
-    # at speed: > 80 %, no longer accelerating
-    c = normalize_contacts({"at_speed": True, "accel_decel": False, "alarm": False, "warning": False}, True)
-    assert c["at_speed"] and c["rotating"] and not c["accelerating"]
-    # coasting down from full speed: braking, and NOT "speed reached" although still above 80 %
-    c = normalize_contacts({"at_speed": True, "accel_decel": True, "alarm": False, "warning": False}, False)
-    assert c["braking"] and not c["at_speed"] and c["rotating"]
-    # stopped
-    c = normalize_contacts({"at_speed": False, "accel_decel": False, "alarm": False, "warning": False}, False)
+    """TMP4 (corrected 2026-10-28): DI19 = running at ANY speed until fully stopped, DI18 = above 80 %
+    = full speed; standby (DO1) stays below 80 %.  Direction from the motor command."""
+    def raw(run, above):
+        return {"rotating": run, "at_speed": above, "alarm": False, "warning": False}
+    # started, running up (or in standby): running, not above 80 %
+    c = normalize_contacts(raw(True, False), True)
+    assert c["rotating"] and not c["at_speed"] and not c["braking"] and not c["accelerating"]
+    # full speed: above 80 % with the motor on
+    c = normalize_contacts(raw(True, True), True)
+    assert c["at_speed"] and c["rotating"] and not c["braking"]
+    # stopped by command, still above 80 %: spinning down, NOT "speed reached"
+    c = normalize_contacts(raw(True, True), False)
+    assert c["braking"] and not c["at_speed"] and c["above_pct"]
+    # below 80 %, still running: spinning down
+    c = normalize_contacts(raw(True, False), False)
+    assert c["braking"] and c["rotating"]
+    # fully stopped
+    c = normalize_contacts(raw(False, False), False)
     assert not any(c[k] for k in ("rotating", "accelerating", "braking", "at_speed"))
     # Turbo 1's full set passes through unchanged
     full = {"rotating": True, "accelerating": False, "at_speed": True, "braking": False, "alarm": False, "warning": True}
@@ -68,18 +76,18 @@ def test_daq_backend_wires_tmp4_and_the_new_gates(vcfg, fake_daq):
     t = FakeTask.registry
     assert [c.phys for c in t["turbo4_cmd"].channels] == ["cDAQ3Mod5/port0/line2", "cDAQ3Mod5/port0/line1"]
     assert t["turbo4_ack"].channels[0].phys == "cDAQ3Mod5/port0/line0"
-    assert [c.phys for c in t["turbo4_read"].channels] == [f"cDAQ3Mod2/port0/line{n}" for n in (18, 20, 21, 19)]
+    assert [c.phys for c in t["turbo4_read"].channels] == [f"cDAQ3Mod2/port0/line{n}" for n in (19, 18, 20, 21)]
     vc = [c.phys for c in t["valve_cmd"].channels]
-    assert vc[-3:] == ["cDAQ3Mod5/port0/line4", "cDAQ3Mod5/port0/line3", "cDAQ3Mod5/port0/line5"]
-    assert [c.phys for c in t["valve_read"].channels][-3:] == [f"cDAQ3Mod2/port0/line{n}" for n in (22, 23, 24)]
-    # motor on, > 80 % and the accel/decel output off -> at speed; alarm/warning lines low = healthy
+    assert vc[-3:] == ["cDAQ3Mod5/port0/line5", "cDAQ3Mod5/port0/line3", "cDAQ3Mod5/port0/line6"]
+    assert [c.phys for c in t["valve_read"].channels][-3:] == [f"cDAQ3Mod2/port0/line{n}" for n in (23, 22, 24)]
+    # motor on, running (DI19) and > 80 % (DI18) -> full speed; alarm/warning lines low = healthy
     cmds = Commands.all_off(vcfg.valve_ids, vcfg.turbo_ids)
     cmds.turbo_motor["turbo4"] = True
     b.write(cmds)
     assert t["turbo4_cmd"].writes[-1] == [True, False]
-    FakeTask.di_values.update({"cDAQ3Mod2/port0/line18": True, "cDAQ3Mod2/port0/line19": False,
+    FakeTask.di_values.update({"cDAQ3Mod2/port0/line18": True, "cDAQ3Mod2/port0/line19": True,
                                "cDAQ3Mod2/port0/line20": False, "cDAQ3Mod2/port0/line21": False,
-                               "cDAQ3Mod2/port0/line22": True})
+                               "cDAQ3Mod2/port0/line23": True})
     inp = b.read()
     c4 = inp.turbos["turbo4"].contacts
     assert c4["at_speed"] and c4["rotating"] and not c4["alarm"] and not inp.turbos["turbo4"].error

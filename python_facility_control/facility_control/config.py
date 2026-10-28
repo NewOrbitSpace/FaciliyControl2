@@ -112,6 +112,19 @@ class TurboConfig:
     in_use: bool = True
     params: Dict[str, Any] = field(default_factory=dict)   # the active mode's parameter block
     all_modes: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    # Auto mode: if this turbo's gate valve does not open when commanded, close it again, switch this
+    # turbo off and carry on with the others (popup `gate_failure_message`) instead of stopping Auto
+    # with a gate conflict.  VC100 TMP4 (new gate that sticks, 2026-10-28).
+    isolate_on_gate_failure: bool = False
+    gate_failure_message: str = ""
+    # RUNTIME, not from the profile: why the controller has taken this turbo out of Auto's set
+    # ("" = not taken out).  Cleared by Clear Error, a change to Manual/Admin, or Facility Off.
+    disabled_reason: str = ""
+
+    @property
+    def active(self) -> bool:
+        """In use and not taken out at run time."""
+        return self.in_use and not self.disabled_reason
 
     @property
     def has_speed(self) -> bool:
@@ -166,6 +179,15 @@ class Thresholds:
     manual_foreline_pressure_max_torr: float = 1.6
     compressor_min_bar: Optional[float] = None
     compressor_low_time_s: float = 0.0                 # VC100: the air pressure must be low for 5 s before the error
+    # Auto 'Pumping to High Vac': every turbo in use must reach full speed (Speed Reached, not in
+    # standby, no reduced set value) within this time, else '<Turbo> not at full speed' is logged and
+    # shown on its card.  None = no supervision.
+    turbo_full_speed_timeout_s: Optional[float] = None
+    # Engage Turbo below this chamber pressure (2026-10-28, VC100 1e-2 mBar): start the turbos with
+    # their gates still CLOSED, wait until every turbo is at its standby speed, then open the gates
+    # (one by one on a shared air line).  At or above it - or None - the VI's order: gates first,
+    # then the turbos.
+    turbo_start_before_gates_below_torr: Optional[float] = None
     # Optional separate threshold for the Engage-Turbo pressure check (x wiggle room).  None = the
     # turbo-on threshold is used for both checks, as in both VIs.
     engage_check_threshold_torr: Optional[float] = None
@@ -197,7 +219,8 @@ class Thresholds:
 # YAML keys of Thresholds that may be given in mBar instead of Torr: `<name>_mbar` replaces `<name>_torr`
 _TORR_KEYS = ("turbo_on_threshold", "gauge_error_threshold", "wrg_error_threshold", "turbo_high_pressure_shutoff",
               "manual_main_pressure_max", "manual_foreline_pressure_max", "bypass_first_above",
-              "overnight_skip_below", "engage_check_threshold", "vent_confirm_above")
+              "overnight_skip_below", "engage_check_threshold", "vent_confirm_above",
+              "turbo_start_before_gates_below")
 
 
 @dataclass
@@ -211,6 +234,12 @@ class Timings:
     primary_to_bypass_gap_s: float = 25.0
     valve_settle_ms: int = 1000
     gate_settle_ms: int = 9000
+    # Engage Turbo, turbos-first branch (thresholds.turbo_start_before_gates_below_torr): a turbo
+    # without a speed signal (Shimadzu contacts) counts as at standby once it has run this long and
+    # no longer reports accelerating; give up waiting after turbo_standby_timeout_s and open the
+    # gates anyway (logged).
+    turbo_standby_min_s: float = 20.0
+    turbo_standby_timeout_s: float = 600.0
     bypass_settle_ms: Optional[int] = None      # VC100 waits 2 s after a bypass command; None = valve_settle_ms
     chiller_settle_ms: int = 10000
     primary_settle_ms: int = 500                # wait after the primary pump is switched ON
@@ -343,7 +372,7 @@ class FacilityConfig:
         return next(t for t in self.turbos if t.id == tid)
 
     def turbos_in_use(self) -> List[TurboConfig]:
-        return [t for t in self.turbos if t.in_use]
+        return [t for t in self.turbos if t.active]
 
     def rs485_turbos(self) -> List[TurboConfig]:
         return [t for t in self.turbos if t.control_mode == "hipace_rs485"]
@@ -397,7 +426,7 @@ _REQUIRED_TURBO_PARAMS = {
     "bigred_dsub15": ("speed_ai", "error_di", "motor_do"),
     "hipace_dsub25": ("speed_ai", "error_di", "motor_do"),
     "hipace_rs485": ("port",),
-    # Turbo 1 (VI) has all six contacts; the HD15 remote of TMP4 has speed>80 %, accel/decel, alarm,
+    # Turbo 1 (VI) has all six contacts; the HD15 remote of TMP4 has speed>80 %, running, alarm,
     # warning.  Required: alarm, warning, motor and at least one rotation contact (checked below).
     "shimadzu_contacts": ("alarm_di", "warning_di", "motor_do"),
 }
@@ -523,7 +552,9 @@ def build_config(raw: Dict[str, Any], source_path: str = "") -> FacilityConfig:
             raise ValueError(f"turbo {t['id']}: gauge {t['gauge']!r} not defined in gauges")
         turbos.append(TurboConfig(id=t["id"], label=t["label"], control_mode=mode, gate_valve=t["gate_valve"],
                                   turbo_valve=t["turbo_valve"], gauge=t.get("gauge"), in_use=bool(t.get("in_use", True)),
-                                  params=modes[mode], all_modes=modes))
+                                  params=modes[mode], all_modes=modes,
+                                  isolate_on_gate_failure=bool(t.get("isolate_on_gate_failure", False)),
+                                  gate_failure_message=str(t.get("gate_failure_message") or "")))
 
     def dc(cls, block):
         block = dict(block or {})

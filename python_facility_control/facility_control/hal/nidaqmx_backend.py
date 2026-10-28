@@ -60,7 +60,8 @@ _TERMINAL_CONFIG = {
 
 
 # order of the Shimadzu status lines in the turbo DI task (= the VI's 'Turbo 1 <name>' channel names);
-# only the ones a turbo block actually wires are created (the HD15 remote of TMP4 has four, incl. accel_decel)
+# only the ones a turbo block actually wires are created (the HD15 remote of TMP4 has four: running, >80 %,
+# alarm, warning)
 CONTACT_NAMES = CANONICAL_CONTACTS + EXTRA_CONTACT_NAMES
 
 

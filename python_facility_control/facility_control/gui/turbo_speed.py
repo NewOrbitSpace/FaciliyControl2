@@ -1,51 +1,93 @@
-"""Speed panel for the Pfeiffer HiPace turbos on RS-485 (VC100: Turbo 2, 3, 5, 6).
+"""Speed window for one Pfeiffer HiPace turbo on RS-485 (VC100: Turbo 2, 3, 5, 6).
 
-One row per pump:  name | Off | Full | Standby | Set | slider (set value, % of nominal) | set | actual
+Opens when the operator clicks that turbo on the diagram (Manual / Admin mode):
 
-    Off       stop the pump ([P:010] off)                        - asks first
-    Full      nominal speed                                      - asks first if the pump is stopped
-    Standby   the pump's standby speed ([P:002] on, [P:717])     - asks first if the pump is stopped
-    Set       run at the slider value ([P:707], [P:026] on)      - asks first if the pump is stopped
+    Turbo 2 – Pfeiffer HiPace
+    Now: running at full speed  ·  actual 100 %  ·  Speed Reached
+    ( Off )  ( Full speed )  ( Standby )  ( Set speed )
+    Set speed  [=========|-----------]  [ 60 %]        <- only active with 'Set speed'
+                                   [ Start at 60 % ]  [ Close ]
 
-While a pump runs in 'Set', moving the slider changes its speed when the slider is released (or
-shortly after a keyboard change), so the RS-485 link is not flooded with writes.  The buttons always
-show what the controller is *commanding*, so a start that is still waiting for 'Yes' – or one the
-interlocks refused – snaps back.  The panel only works in Manual / Admin mode; Auto runs the turbos
-itself (at full speed / its own standby).
+    Off         stop the pump ([P:010] off)
+    Full speed  nominal speed
+    Standby     the pump's standby speed ([P:002] on, [P:717])
+    Set speed   run at the chosen value ([P:707], rotation speed setting mode [P:026] on)
+
+Nothing is sent until Apply is pressed; the Apply button always names what it will do ("Start at
+60 %", "Change to 45 %", "Stop Turbo 2" ...), so it is the confirmation - no second Yes/No box.  In
+Manual mode the interlocks still apply (e.g. "Please Turn Primary Pump On first").  The window stays
+open so the speed can be watched; in Auto mode its controls are disabled (Auto runs the turbos at
+full speed / its own standby).
 """
 from __future__ import annotations
 
 from typing import Dict, Optional
 
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import (QButtonGroup, QGridLayout, QGroupBox, QLabel, QPushButton, QSizePolicy, QSlider,
-                               QWidget)
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (QButtonGroup, QDialog, QFrame, QHBoxLayout, QLabel, QPushButton, QSlider,
+                               QSpinBox, QVBoxLayout, QWidget)
 
 from ..config import FacilityConfig
 from ..model import Mode, Snapshot
 
 MODES = ("off", "full", "standby", "set")
-LABELS = {"off": "Off", "full": "Full", "standby": "Standby", "set": "Set"}
+LABELS = {"off": "Off", "full": "Full speed", "standby": "Standby", "set": "Set speed"}
 TIPS = {
     "off": "Stop the pump",
     "full": "Run at full (nominal) speed",
     "standby": "Run at the pump's standby speed ([P:717])",
-    "set": "Run at the speed chosen with the slider ([P:707], rotation speed setting mode)",
+    "set": "Run at the speed chosen below ([P:707], rotation speed setting mode)",
 }
 CHECKED = {"off": "#C9CED4", "full": "#3FB950", "standby": "#E3B341", "set": "#2F81F7"}
-BTN = ("QPushButton {{ background: #F0F0F0; border: 1px solid #8A8A8A; border-radius: 3px; padding: 3px 6px;"
-       " font-size: 13px; min-width: 44px; min-height: 24px; color: black; }}"
-       " QPushButton:checked {{ background: {bg}; font-weight: bold; color: {fg}; }}"
-       " QPushButton:disabled {{ color: #9A9A9A; }}"
-       " QPushButton:checked:disabled {{ color: #5A5A5A; }}")
+BTN = ("QPushButton {{ background: #F0F0F0; border: 1px solid #8A8A8A; border-radius: 4px; padding: 6px 10px;"
+       " font-size: 14px; min-width: 84px; min-height: 30px; color: black; }}"
+       " QPushButton:checked {{ background: {bg}; font-weight: bold; color: {fg}; border: 2px solid #3D444D; }}"
+       " QPushButton:disabled {{ color: #9A9A9A; }}")
 
 
-class _Row:
-    def __init__(self, tid: str, label: str, lo: float, hi: float):
-        self.tid, self.label, self.lo, self.hi = tid, label, lo, hi
-        self.name = QLabel(label)
-        self.name.setStyleSheet("QLabel { font-size: 13px; font-weight: bold; }")
-        self.group = QButtonGroup()
+def commanded_mode(snap: Snapshot, tid: str):
+    """What the controller is commanding for this turbo: ('off'|'full'|'standby'|'set', set value)."""
+    c = snap.commands
+    if not c.turbo_motor.get(tid, False):
+        return "off", None
+    if c.turbo_standby.get(tid, False):
+        return "standby", None
+    sp = c.speed_set(tid)
+    return ("set", sp) if sp is not None else ("full", None)
+
+
+class TurboSpeedDialog(QDialog):
+    """Off / Full speed / Standby / Set speed for one HiPace (opened from the diagram)."""
+
+    def __init__(self, cfg: FacilityConfig, controller, tid: str, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.cfg, self.ctl, self.tid = cfg, controller, tid
+        self.tc = cfg.turbo(tid)
+        self.lo, self.hi = self.tc.speed_set_range
+        self.setWindowTitle(f"{self.tc.label} – speed")
+        self.setModal(False)
+        self.setAttribute(Qt.WA_DeleteOnClose, False)
+        self._commanded = "off"
+        self._commanded_set: Optional[float] = None
+        self._enabled: Optional[bool] = None
+        self._touched = False                 # operator picked something since the last apply
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(16, 14, 16, 12)
+        lay.setSpacing(10)
+        title = QLabel(f"{self.tc.label}  –  Pfeiffer HiPace (RS-485)")
+        title.setStyleSheet("QLabel { font-size: 16px; font-weight: bold; }")
+        lay.addWidget(title)
+        self.now = QLabel("")
+        self.now.setStyleSheet("QLabel { font-size: 14px; color: #1F2328; }")
+        lay.addWidget(self.now)
+        line = QFrame()
+        line.setFrameShape(QFrame.HLine)
+        line.setFrameShadow(QFrame.Sunken)
+        lay.addWidget(line)
+
+        row = QHBoxLayout()
+        self.group = QButtonGroup(self)
         self.group.setExclusive(True)
         self.buttons: Dict[str, QPushButton] = {}
         for m in MODES:
@@ -53,129 +95,152 @@ class _Row:
             b.setCheckable(True)
             b.setToolTip(TIPS[m])
             b.setStyleSheet(BTN.format(bg=CHECKED[m], fg="white" if m in ("full", "set") else "black"))
-            if m == "standby":
-                b.setStyleSheet(b.styleSheet() + " QPushButton { min-width: 66px; }")
+            b.clicked.connect(lambda _=False, m=m: self._on_pick(m))
             self.group.addButton(b)
             self.buttons[m] = b
+            row.addWidget(b)
+        lay.addLayout(row)
+
+        srow = QHBoxLayout()
+        self.slider_label = QLabel("Set speed")
+        self.slider_label.setStyleSheet("QLabel { font-size: 14px; }")
+        srow.addWidget(self.slider_label)
         self.slider = QSlider(Qt.Horizontal)
-        self.slider.setRange(int(round(lo)), int(round(hi)))
-        self.slider.setValue(int(round(min(hi, max(lo, 75.0)))))
+        self.slider.setRange(int(round(self.lo)), int(round(self.hi)))
         self.slider.setSingleStep(1)
         self.slider.setPageStep(5)
-        self.slider.setMinimumWidth(110)
-        self.slider.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.slider.setToolTip(f"Speed set value, {lo:.0f}..{hi:.0f} % of nominal")
-        self.value = QLabel("")
-        self.value.setMinimumWidth(48)
-        self.value.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        self.value.setStyleSheet("QLabel { font-size: 13px; font-weight: bold; font-family: Consolas, monospace; }")
-        self.actual = QLabel("")
-        self.actual.setMinimumWidth(104)
-        self.actual.setStyleSheet("QLabel { font-size: 13px; color: #333333; font-family: Consolas, monospace; }")
-        self.actual.setToolTip("Actual speed read from the pump ([P:309] / nominal)")
-        self.commanded: str = "off"
-        self.commanded_set: Optional[float] = None
-        self.debounce = QTimer()
-        self.debounce.setSingleShot(True)
-        self.debounce.setInterval(600)
-        self._show_value()
+        self.slider.setMinimumWidth(240)
+        self.slider.setToolTip(f"Speed set value, {self.lo:.0f}..{self.hi:.0f} % of nominal")
+        srow.addWidget(self.slider, 1)
+        self.spin = QSpinBox()
+        self.spin.setRange(int(round(self.lo)), int(round(self.hi)))
+        self.spin.setSuffix(" %")
+        self.spin.setStyleSheet("QSpinBox { font-size: 15px; font-weight: bold; min-width: 76px; min-height: 28px; }")
+        srow.addWidget(self.spin)
+        lay.addLayout(srow)
+        start = int(round(min(self.hi, max(self.lo, 75.0))))
+        self.slider.setValue(start)
+        self.spin.setValue(start)
+        self.slider.valueChanged.connect(self._on_slider)
+        self.spin.valueChanged.connect(self._on_spin)
 
-    def _show_value(self):
-        self.value.setText(f"{self.slider.value():d}%")
+        self.note = QLabel("")
+        self.note.setWordWrap(True)
+        self.note.setStyleSheet("QLabel { font-size: 12px; color: #8A4B00; }")
+        lay.addWidget(self.note)
 
+        brow = QHBoxLayout()
+        brow.addStretch(1)
+        self.apply_btn = QPushButton("Apply")
+        self.apply_btn.setStyleSheet("QPushButton { font-size: 14px; font-weight: bold; min-width: 160px;"
+                                     " min-height: 34px; padding: 4px 14px; }")
+        self.apply_btn.clicked.connect(self._on_apply)
+        self.apply_btn.setDefault(True)
+        brow.addWidget(self.apply_btn)
+        close = QPushButton("Close")
+        close.setStyleSheet("QPushButton { font-size: 14px; min-width: 90px; min-height: 34px; }")
+        close.clicked.connect(self.close)
+        brow.addWidget(close)
+        lay.addLayout(brow)
+        self._select("off")
 
-class TurboSpeedPanel(QGroupBox):
-    """Off / Full / Standby / Set-speed control for every speed-settable turbo of the facility."""
+    # ------------------------------------------------------------------ helpers
+    def selected(self) -> str:
+        for m, b in self.buttons.items():
+            if b.isChecked():
+                return m
+        return self._commanded
 
-    def __init__(self, cfg: FacilityConfig, controller, parent: Optional[QWidget] = None):
-        super().__init__("Pfeiffer turbo speed", parent)
-        self.cfg = cfg
-        self.ctl = controller
-        self.rows: Dict[str, _Row] = {}
-        self._enabled: Optional[bool] = None
-        self.setStyleSheet("QGroupBox { font-weight: bold; font-size: 13px; }")
-        grid = QGridLayout(self)
-        grid.setContentsMargins(8, 6, 8, 6)
-        grid.setHorizontalSpacing(4)
-        grid.setVerticalSpacing(3)
-        for r, tc in enumerate(t for t in cfg.turbos if t.speed_settable):
-            lo, hi = tc.speed_set_range
-            row = _Row(tc.id, tc.label, lo, hi)
-            grid.addWidget(row.name, r, 0)
-            for c, m in enumerate(MODES):
-                grid.addWidget(row.buttons[m], r, 1 + c)
-                row.buttons[m].clicked.connect(lambda _=False, tid=tc.id, m=m: self._on_mode(tid, m))
-            grid.addWidget(row.slider, r, 5)
-            grid.addWidget(row.value, r, 6)
-            grid.addWidget(row.actual, r, 7)
-            row.slider.valueChanged.connect(lambda _v, tid=tc.id: self._on_slider_value(tid))
-            row.slider.sliderReleased.connect(lambda tid=tc.id: self._apply_slider(tid))
-            row.debounce.timeout.connect(lambda tid=tc.id: self._apply_slider(tid))
-            if not tc.in_use:
-                row.name.setText(f"{tc.label} (not in use)")
-            self.rows[tc.id] = row
-        grid.setColumnStretch(5, 1)
+    def _select(self, mode: str):
+        self.buttons[mode].setChecked(True)
+        self._refresh_controls()
 
-    def __bool__(self) -> bool:          # a QGroupBox is truthy anyway; this makes "no HiPace" explicit
-        return bool(self.rows)
+    def _set_value(self, v: int):
+        for w in (self.slider, self.spin):
+            w.blockSignals(True)
+            w.setValue(int(v))
+            w.blockSignals(False)
 
-    # ------------------------------------------------------------------ user actions
-    def _on_mode(self, tid: str, mode: str):
-        row = self.rows[tid]
-        pct = float(row.slider.value()) if mode == "set" else None
-        self.ctl.request_turbo_speed(tid, mode, pct)
-        self._check(row, row.commanded)           # show the command, not the click, until it is applied
+    def _on_slider(self, v: int):
+        self.spin.blockSignals(True)
+        self.spin.setValue(v)
+        self.spin.blockSignals(False)
+        self._touched = True
+        self._refresh_controls()
 
-    def _on_slider_value(self, tid: str):
-        row = self.rows[tid]
-        row._show_value()
-        if row.commanded == "set" and not row.slider.isSliderDown():
-            row.debounce.start()                  # keyboard / wheel / click on the groove
+    def _on_spin(self, v: int):
+        self.slider.blockSignals(True)
+        self.slider.setValue(v)
+        self.slider.blockSignals(False)
+        self._touched = True
+        self._refresh_controls()
 
-    def _apply_slider(self, tid: str):
-        row = self.rows[tid]
-        row.debounce.stop()
-        if row.commanded != "set":
-            return                                # just preselecting the value for 'Set'
-        pct = float(row.slider.value())
-        if row.commanded_set is not None and abs(pct - row.commanded_set) < 0.5:
+    def _on_pick(self, mode: str):
+        self._touched = True
+        self._refresh_controls()
+
+    def _action(self):
+        """(button text, request or None) for what is selected, compared with what is commanded."""
+        sel = self.selected()
+        name = self.tc.label
+        pct = float(self.spin.value())
+        running = self._commanded != "off"
+        if sel == "off":
+            return (f"Stop {name}", ("off", None)) if running else ("Already stopped", None)
+        if sel == "set" and pct >= 100.0:
+            sel = "full"
+        if sel == self._commanded and (sel != "set" or (self._commanded_set is not None
+                                                        and abs(pct - self._commanded_set) < 0.5)):
+            return "No change", None
+        target = {"full": "full speed", "standby": "standby", "set": f"{pct:.0f} %"}[sel]
+        if not running:
+            text = "Start in standby" if sel == "standby" else f"Start at {target}"
+        else:
+            text = "Go to standby" if sel == "standby" else f"Change to {target}"
+        return text, (sel, pct if sel == "set" else None)
+
+    def _refresh_controls(self):
+        on = bool(self._enabled) and self.tc.in_use
+        for b in self.buttons.values():
+            b.setEnabled(on)
+        set_on = on and self.selected() == "set"
+        for w in (self.slider, self.spin, self.slider_label):
+            w.setEnabled(set_on)
+        text, req = self._action()
+        self.apply_btn.setText(text)
+        self.apply_btn.setEnabled(on and req is not None)
+
+    def _on_apply(self):
+        text, req = self._action()
+        if req is None:
             return
-        self.ctl.request_turbo_speed(tid, "set", pct)
+        mode, pct = req
+        self.ctl.request_turbo_speed(self.tid, mode, pct, confirmed=True)
+        self._touched = False
+        self.apply_btn.setEnabled(False)          # re-enabled by the next update once applied
 
     # ------------------------------------------------------------------ refresh from the controller
-    @staticmethod
-    def _check(row: _Row, mode: str):
-        b = row.buttons[mode]
-        if not b.isChecked():
-            b.setChecked(True)
-
     def update_from(self, snap: Snapshot):
         enabled = snap.mode in (Mode.ADMIN, Mode.MANUAL)
+        mode, sp = commanded_mode(snap, self.tid)
+        changed = (mode, sp) != (self._commanded, self._commanded_set)
+        self._commanded, self._commanded_set = mode, sp
         if enabled != self._enabled:
             self._enabled = enabled
-            self.setTitle("Pfeiffer turbo speed" if enabled
-                          else "Pfeiffer turbo speed  (Manual / Admin mode only – Auto runs at full speed)")
-        cmds = snap.commands
-        for tid, row in self.rows.items():
-            tc = self.cfg.turbo(tid)
-            motor = bool(cmds.turbo_motor.get(tid, False))
-            standby = bool(cmds.turbo_standby.get(tid, False))
-            sp = cmds.speed_set(tid)
-            mode = "off" if not motor else "standby" if standby else "set" if sp is not None else "full"
-            row.commanded, row.commanded_set = mode, sp
-            self._check(row, mode)
-            on = enabled and tc.in_use
-            for b in row.buttons.values():
-                b.setEnabled(on)
-            row.slider.setEnabled(on)
-            if mode == "set" and sp is not None and not row.slider.isSliderDown() and not row.debounce.isActive():
-                if row.slider.value() != int(round(sp)):
-                    row.slider.blockSignals(True)
-                    row.slider.setValue(int(round(sp)))
-                    row.slider.blockSignals(False)
-                    row._show_value()
-            tv = snap.turbos.get(tid)
-            if tv is None:
-                row.actual.setText("")
-            else:
-                row.actual.setText(f"actual {tv.speed_pct:3.0f}%")
+            self.note.setText("" if enabled else
+                              "Auto mode runs the turbos itself (full speed / standby). "
+                              "Switch to Manual or Admin mode to change this pump's speed.")
+        if changed or not self._touched:          # follow the controller unless the operator is choosing
+            self.buttons[mode].setChecked(True)
+            if mode == "set" and sp is not None:
+                self._set_value(int(round(sp)))
+            self._touched = False
+        tv = snap.turbos.get(self.tid)
+        what = {"off": "stopped", "full": "full speed", "standby": "standby",
+                "set": f"set to {sp:.0f} %" if sp is not None else "set speed"}[mode]
+        if tv is not None:
+            status = tv.status.label.replace("Turbo ", "")
+            self.now.setText(f"Now: <b>{what}</b>   ·   actual <b>{tv.speed_pct:.0f} %</b>   ·   {status}")
+        else:
+            self.now.setText(f"Now: <b>{what}</b>")
+        self._refresh_controls()

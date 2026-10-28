@@ -30,7 +30,7 @@ from PySide6.QtWidgets import QWidget
 
 from ..config import FacilityConfig
 from ..model import (COLOR_ERROR, COLOR_OFF, COLOR_ON, COLOR_SPIN_DOWN, COLOR_SPIN_UP, COLOR_STANDBY,
-                     COLOR_WARNING, Mode, Snapshot)
+                     COLOR_WARNING, Mode, Snapshot, contact_summary)
 from ..units import format_pressure, unit_label
 
 # ---------------------------------------------------------------------------- palette
@@ -116,7 +116,7 @@ class SchematicWidget(QWidget):
         pos = self._to_virtual(ev.position())
         for h in self.hits:
             if h.rect.contains(pos):
-                if self.clickable():
+                if self.clickable() and not h.target.startswith("info:"):   # info: tooltip only
                     self.commandRequested.emit(h.target)
                 return
 
@@ -125,10 +125,12 @@ class SchematicWidget(QWidget):
         tip = ""
         for h in self.hits:
             if h.rect.contains(pos):
-                tip = h.tooltip if self.clickable() else f"{h.tooltip} (switch to Admin/Manual mode to command)"
+                tip = h.tooltip if (self.clickable() or h.target.startswith("info:")) \
+                    else f"{h.tooltip} (switch to Admin/Manual mode to command)"
                 break
         self.setToolTip(tip)
-        self.setCursor(Qt.PointingHandCursor if (tip and self.clickable()) else Qt.ArrowCursor)
+        clickable_hit = any(h.rect.contains(pos) and not h.target.startswith("info:") for h in self.hits)
+        self.setCursor(Qt.PointingHandCursor if (clickable_hit and self.clickable()) else Qt.ArrowCursor)
 
     def _scale(self) -> Tuple[float, float, float]:
         s = min(self.width() / self.W, self.height() / self.H)
@@ -329,8 +331,10 @@ class SchematicWidget(QWidget):
             p.drawPath(blade)
         p.setBrush(QBrush(STEEL_1))
         p.drawEllipse(QPointF(cx, cy), r * 0.26, r * 0.26)
-        self.hits.append(Hit(QRectF(cx - r, cy - r, 2 * r, 2 * r), f"turbo:{tid}",
-                             "Turbo pump: click to start/stop/standby"))
+        tcfg = self.cfg.turbo(tid)
+        tip = ("Pfeiffer turbo: click for speed control (Off / Full speed / Standby / Set speed)"
+               if tcfg.speed_settable else "Turbo pump: click to start/stop/standby")
+        self.hits.append(Hit(QRectF(cx - r, cy - r, 2 * r, 2 * r), f"turbo:{tid}", tip))
 
     def _gauge_bubble(self, p: QPainter, cx: float, cy: float, tag: str = "PT"):
         """ISA instrument bubble (pressure transmitter)."""
@@ -496,13 +500,22 @@ class SchematicWidget(QWidget):
             if sp is not None and tv.status.name in ("SPEED_REACHED", "SPINNING_UP", "SPINNING_DOWN"):
                 st_txt = {"SPEED_REACHED": f"At {sp:.0f}% set", "SPINNING_UP": f"Up to {sp:.0f}%",
                           "SPINNING_DOWN": f"Down to {sp:.0f}%"}[tv.status.name]
+            st_col = INK_2
+            flagged = bool(tv and tv.not_full_speed)       # Auto high vac: not at full speed in time
+            if tv and tv.comm_silent_s > 0 and not tv.comm_lost:     # RS-485: slow, not yet lost
+                st_txt, st_col = f"No reply {tv.comm_silent_s:.0f} s", QColor("#B35900")
+            if tv and tv.isolated:                          # taken out by the controller
+                st_txt = "No reply – off" if "RS-485" in tv.isolated else "Gate stuck!"
+                st_col = _c(COLOR_ERROR)
+            elif tv and tv.comm_lost:
+                st_txt, st_col = "No RS-485 reply", _c(COLOR_ERROR)
             if tv and not tv.in_use:
                 st_txt = "Not in use"
             accent = _c(tv.color) if tv else _c(COLOR_OFF)
             card = QRectF(x - COL_W / 2 + 8, CARD_Y, COL_W - 16, CARD_H)
             self._card(p, card, accent)
             self._text(p, QRectF(card.left() + 9, card.top() + 2, card.width() - 12, 18), tc.label, 10.0, True)
-            self._text(p, QRectF(card.left() + 7, card.top() + 32, card.width() - 9, 18), st_txt, 8.5, False, INK_2)
+            self._text(p, QRectF(card.left() + 7, card.top() + 32, card.width() - 9, 18), st_txt, 8.5, st_col != INK_2, st_col)
             bar = QRectF(card.left() + 9, card.top() + 23, card.width() - 50, 6)
             if tv is None or tv.has_speed:
                 pct = max(0.0, min(100.0, tv.speed_pct if tv else 0.0))
@@ -520,10 +533,21 @@ class SchematicWidget(QWidget):
                     sx = bar.left() + bar.width() * max(0.0, min(100.0, sp)) / 100.0
                     p.drawLine(QPointF(sx, bar.top() - 3), QPointF(sx, bar.bottom() + 3))
                 self._text(p, QRectF(bar.right() + 2, card.top() + 17, card.right() - bar.right() - 6, 18),
-                           f"{pct:.0f}%", 9.0, True, INK, Qt.AlignRight | Qt.AlignVCenter, mono=True)
+                           f"{pct:.0f}%", 9.0, True, _c(COLOR_ERROR) if flagged else INK,
+                           Qt.AlignRight | Qt.AlignVCenter, mono=True)
             else:
-                self._text(p, QRectF(card.left() + 7, card.top() + 18, card.width() - 9, 14),
-                           "no speed signal", 6.8, False, INK_2)
+                # contact interface (Shimadzu TMP1 / TMP4): what its status contacts say right now
+                sig = contact_summary(tv.contacts if tv else {}, bool(tv.motor_read) if tv else False,
+                                      tc.params.get("at_speed_pct"), bool(tv.standby) if tv else False)
+                p.setFont(self._font(8.0, True))
+                sig = p.fontMetrics().elidedText(sig, Qt.ElideRight, int(card.width() - 12))
+                self._text(p, QRectF(card.left() + 8, card.top() + 16, card.width() - 10, 16),
+                           sig, 8.0, True, _c(COLOR_ERROR) if ("ALARM" in sig or flagged) else INK)
+                self.hits.append(Hit(QRectF(card.left(), card.top() + 14, card.width(), 18), f"info:{tc.id}",
+                                     "Status contacts: Accel = accelerating, Decel = decelerating, "
+                                     + (f">{tc.params['at_speed_pct']:.0f}% = speed above that, "
+                                        if tc.params.get("at_speed_pct") is not None else "At speed = rated speed, ")
+                                     + "On/Off = motor command (no contact active)"))
 
         # ======== per turbo valve: backing gauge + turbo valve
         for vid, idx in groups:

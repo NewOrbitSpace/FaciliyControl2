@@ -96,6 +96,7 @@ class SimBackend(HardwareBackend):
         self.state = SimState()
         self._last_t: Optional[float] = None
         self._sim_time = 0.0
+        self._last_motor: Dict[str, bool] = {}       # last motor command per turbo (RS-485 link-lost fault)
         for vid in config.valve_ids:
             self.state.valves[vid] = _Valve()
         for tid in config.turbo_ids:
@@ -151,6 +152,7 @@ class SimBackend(HardwareBackend):
         st.chiller_cmd = bool(cmds.chiller)
         for tid, t in st.turbos.items():
             t.motor = bool(cmds.turbo_motor.get(tid, False))
+            self._last_motor[tid] = t.motor
             t.standby = bool(cmds.turbo_standby.get(tid, False))
             sp = cmds.turbo_speed_pct.get(tid)
             t.speed_set = float(sp) if (sp is not None and self.config.turbo(tid).control_mode == "hipace_rs485") else None
@@ -351,9 +353,18 @@ class SimBackend(HardwareBackend):
                 th = cfg.thresholds
                 warn = bool(st.faults.get("turbo_warning") or st.faults.get(f"turbo_warning_{tid}")) if power else False
                 p = tcfg.params
-                if "accel_decel_di" in p:
+                # accelerating until the speed it is running up to: full speed, or standby speed
+                run_to = (float(p.get("standby_speed_pct", 66.0)) if t.standby
+                          else th.turbo_speed_reached_pct)
+                if "rotating_di" in p and "accelerating_di" not in p:
+                    # VC100 TMP4 (HD15 remote): DI19 'running' at any speed, DI18 speed > at_speed_pct
+                    raw = {"rotating": bool(power and spd > 1.0),
+                           "at_speed": bool(power and spd > float(p.get("at_speed_pct", 80.0))),
+                           "alarm": bool(t.error) if power else False, "warning": warn}
+                    contacts = normalize_contacts(raw, bool(t.motor))
+                elif "accel_decel_di" in p:
                     # HD15 remote (VC100 TMP4): speed > at_speed_pct, one accel/decel output, alarm, warning
-                    accel = bool(t.motor and power and not t.error and spd < th.turbo_speed_reached_pct)
+                    accel = bool(t.motor and power and not t.error and spd < run_to - 1.0)
                     decel = bool((not t.motor or t.error) and spd > 1.0)
                     raw = {"at_speed": spd > float(p.get("at_speed_pct", 80.0)),
                            "accel_decel": accel or decel,
@@ -362,7 +373,7 @@ class SimBackend(HardwareBackend):
                 else:
                     contacts = {
                         "rotating": spd > 1.0,
-                        "accelerating": bool(t.motor and power and not t.error and spd < th.turbo_speed_reached_pct),
+                        "accelerating": bool(t.motor and power and not t.error and spd < run_to - 1.0),
                         "at_speed": spd >= th.turbo_speed_reached_pct,
                         "braking": bool((not t.motor or t.error) and spd > th.turbo_slow_speed_pct),
                         "alarm": bool(t.error) if power else False,
@@ -377,7 +388,17 @@ class SimBackend(HardwareBackend):
                     # what the serial link would report: [P:303] text, link health
                     ti.error_text = "Err001" if ti.error else "no Err"
                     ti.comm_ok = True
-                    ti.rs485 = {"port": "SIM", "address": tcfg.params.get("address", 1)}
+                    ti.rs485 = {"port": "SIM", "address": tcfg.params.get("address", 1), "stats": "sim"}
+                    ti.standby_set_pct = float(tcfg.params.get("standby_speed_pct", 66.0))
+                    if st.faults.get(f"rs485_lost_{tid}") and power:
+                        # what RS485Turbos reports after comm_timeout_s of silence: error, last known
+                        # speed kept, motor read-back = the command (no conflict on top)
+                        ti.comm_ok = False
+                        ti.error = True
+                        ti.comm_silent_s = float(tcfg.params.get("comm_timeout_s", 20.0)) + 1.0
+                        ti.error_text = (f"no RS-485 reply from SIM address {tcfg.params.get('address', 1)} "
+                                         f"for {ti.comm_silent_s:.0f} s")
+                        ti.motor_read = self._last_motor.get(tid, ti.motor_read)
             inp.turbos[tid] = ti
         # the plant always has an air supply; a *reading* exists only if the facility has the sensor
         inp.compressor_bar = st.compressor_bar if cfg.has_compressor else None

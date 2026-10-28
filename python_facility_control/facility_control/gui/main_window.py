@@ -17,7 +17,7 @@ from ..model import Mode, Snapshot, TabPage
 from ..units import UNITS, torr_to, to_torr, unit_label
 from .plots import PlotsWidget
 from .schematic import SchematicWidget
-from .turbo_speed import TurboSpeedPanel
+from .turbo_speed import TurboSpeedDialog
 from .widgets import BUTTON_STYLE, LED, LV_BG, ErrorClusterWidget, FlowLayout, ValueBox, lv_button
 
 # Auto-mode buttons per tab page (VI 'Tab Control' pages) -> (label, normalised action)
@@ -78,7 +78,8 @@ class MainWindow(QMainWindow):
         lv = QVBoxLayout(left)
         lv.setContentsMargins(0, 0, 0, 0)
         self.schematic = SchematicWidget(self.cfg)
-        self.schematic.commandRequested.connect(self.ctl.request_user_cmd)
+        self.schematic.commandRequested.connect(self._on_diagram_click)
+        self.speed_dialogs: Dict[str, TurboSpeedDialog] = {}   # Pfeiffer HiPace speed windows
         lv.addWidget(self.schematic, 1)
         # row under the diagram: Running LED, STOP, Reset Turbos (as in the VC100 panel)
         row = QHBoxLayout()
@@ -118,15 +119,11 @@ class MainWindow(QMainWindow):
         errbox.addWidget(self.clear_error, alignment=Qt.AlignCenter)
         bottom.addLayout(errbox, 1)
         logbox = QVBoxLayout()
-        # Pfeiffer HiPace (RS-485) speed: Off / Full / Standby / Set value (only if the profile has one)
-        self.speed_panel = TurboSpeedPanel(self.cfg, self.ctl)
-        if self.speed_panel.rows:
-            logbox.addWidget(self.speed_panel)
         logbox.addWidget(QLabel("Event log (temporary – cleared when the program stops)"))
         self.event_log = QPlainTextEdit()
         self.event_log.setReadOnly(True)
         self.event_log.setStyleSheet("background: #DCDCDC; border: 1px solid #909090; font-size: 12px;")
-        self.event_log.setMinimumHeight(90 if self.speed_panel.rows else 120)
+        self.event_log.setMinimumHeight(120)
         self.event_log.setMaximumHeight(220)
         logbox.addWidget(self.event_log, 1)
         tl = QHBoxLayout()
@@ -258,6 +255,9 @@ class MainWindow(QMainWindow):
         if self.cfg.has_compressor:                      # only facilities with the air-pressure sensor
             faults.append(("compressor_low", "Compressor air low"))
         faults.append(("power_cut", "Power cut"))
+        for t in self.cfg.turbos:                        # Pfeiffer HiPace: RS-485 link lost
+            if t.control_mode == "hipace_rs485":
+                faults.append((f"rs485_lost_{t.id}", f"{t.label} RS-485 lost"))
         for vid, v in self.cfg.valves.items():
             faults.append((f"stuck_{vid}", f"{v.label} stuck"))
         faults.append((f"gauge_fault_{self.cfg.main_gauge.id}", "WRG fault"))
@@ -282,6 +282,27 @@ class MainWindow(QMainWindow):
             self.top_splitter.setSizes([int(w * 0.6), w - int(w * 0.6)])
 
     # ------------------------------------------------------------------ slots
+    def _on_diagram_click(self, target: str):
+        """A Pfeiffer HiPace (RS-485) opens its speed window; everything else goes to the controller
+        as before (the Yes/No questions of the VI)."""
+        if target.startswith("turbo:"):
+            tid = target.split(":", 1)[1]
+            if tid in self.cfg.turbo_ids and self.cfg.turbo(tid).speed_settable:
+                self.open_speed_dialog(tid)
+                return
+        self.ctl.request_user_cmd(target)
+
+    def open_speed_dialog(self, tid: str) -> TurboSpeedDialog:
+        dlg = self.speed_dialogs.get(tid)
+        if dlg is None:
+            dlg = TurboSpeedDialog(self.cfg, self.ctl, tid, parent=self)
+            self.speed_dialogs[tid] = dlg
+        dlg.update_from(self.ctl.snapshot())
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
+        return dlg
+
     def _on_unit(self, idx: int):
         self.unit = self.unit_combo.itemData(idx)
         self.plots.set_unit(self.unit)
@@ -314,6 +335,8 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(200, self._wait_stop)
 
     def closeEvent(self, ev):
+        for dlg in self.speed_dialogs.values():
+            dlg.close()
         if not self.ctl.finished.is_set():
             self.ctl.request_stop()
             self.ctl.join(15.0)
@@ -329,8 +352,9 @@ class MainWindow(QMainWindow):
         if new_iteration:
             self.plots.add_snapshot(snap)
         self.running_led.setOn(snap.running_led)
-        if self.speed_panel.rows:
-            self.speed_panel.update_from(snap)
+        for dlg in self.speed_dialogs.values():
+            if dlg.isVisible():
+                dlg.update_from(snap)
         self.error_widget.set_error(snap.error)
         self.hw_label.setText(f"Hardware: {snap.hardware}")
         # event log

@@ -142,7 +142,11 @@ turbos:
       address: 2                           # !! CHECK: this pump's [P:797] (both ship at 1 - change one first)
       take_control: true                   # writes [P:060] = 2 at start-up (the D-Sub Motor/Standby lines are then ignored)
       restore_interface_on_exit: false     # true = put [P:060] back to the D-Sub at exit (pump stopped either way)
-      comm_timeout_s: 3.0                  # no reply for this long -> error 5007 'no RS-485 reply' (stops Auto)
+      comm_warn_s: 3.0                     # no reply for this long -> "No reply N s" on the card (warning only)
+      comm_timeout_s: 20.0                 # ... for this long -> link lost (2026-10-28: was 3 s, tripped on a busy bus)
+      isolate_on_comm_loss: true           # Auto: link lost -> only this turbo is taken out (gate closed, told to
+                                           # stop, backing kept); the rest carries on.  false = error stops Auto
+      port_reset_s: 10.0                   # every pump on the port silent this long -> port closed and re-opened
       motor_confirm_s: 5.0                 # [P:010] read-back is cross-checked (5005) only this long after a command
       error_code: 5007
       error_message: "Turbo 2 Error: {error_text}"
@@ -179,7 +183,10 @@ turbos:
       address: 3                           # !! CHECK: this pump's [P:797] (both ship at 1 - change one first)
       take_control: true                   # writes [P:060] = 2 at start-up (the D-Sub Motor/Standby lines are then ignored)
       restore_interface_on_exit: false     # true = put [P:060] back to the D-Sub at exit (pump stopped either way)
-      comm_timeout_s: 3.0                  # no reply for this long -> error 5007 'no RS-485 reply' (stops Auto)
+      comm_warn_s: 3.0
+      comm_timeout_s: 20.0
+      isolate_on_comm_loss: true
+      port_reset_s: 10.0
       motor_confirm_s: 5.0                 # [P:010] read-back is cross-checked (5005) only this long after a command
       error_code: 5007
       error_message: "Turbo 3 Error: {error_text}"
@@ -205,20 +212,26 @@ turbos:
       standby_speed_min_pct: 40.0
   # ---- TMP4: Shimadzu on its HD15 remote connector (2026-10-13).  Outputs on the new NI-9472 in slot 5:
   #      line0 = Reset, line1 = Standby, line2 = Start/Stop.  Status on Mod2: line18 = speed above 80 %,
-  #      line19 = accelerating OR decelerating, line20 = Alarm, line21 = Warning (24 V = condition present,
+  #      line19 = running at any speed (until fully stopped), line20 = Alarm, line21 = Warning (24 V = condition present,
   #      i.e. NOT inverted - unlike Turbo 1's normally-closed contacts).  Backed through Turbo 1's turbo
   #      valve, so it shares Turbo 1's turbo valve and gauge.
   - id: turbo4
     label: "Turbo 4"
     in_use: true
+    # Gate 4 is new and sometimes sticks shut (2026-10-28).  In Auto, if it does not open when
+    # commanded: close it, switch TMP4 off, show this popup and carry on with the other turbos
+    # (instead of a gate conflict that stops Auto).  'Clear Error' lets Auto try TMP4 again.
+    isolate_on_gate_failure: true
+    gate_failure_message: "Unable to open TMP4 gate valve, might need Thor's hammer!"
     control_mode: shimadzu_contacts
     gate_valve: gate4
     turbo_valve: turbo1_valve
     gauge: turbo1_gauge
     shimadzu_contacts:
-      at_speed_di:      Mod2/port0/line18    # "spinning > 80 %"
+      at_speed_di:      Mod2/port0/line18    # "spinning > 80 %" = full speed (standby stays below 80 %)
       at_speed_pct: 80.0                     # (what that contact means - used by the simulator)
-      accel_decel_di:   Mod2/port0/line19    # accelerating or decelerating; the motor command tells which
+      rotating_di:      Mod2/port0/line19    # 'running': on whenever the rotor turns, at ANY speed, until it has
+                                             # fully stopped (corrected 2026-10-28 - it is NOT accel/decel)
       alarm_di:         Mod2/port0/line20
       alarm_di_inverted: false               # 24 V = alarm
       warning_di:       Mod2/port0/line21
@@ -244,7 +257,10 @@ turbos:
       address: 5                           # !! CHECK: this pump's [P:797]
       take_control: true
       restore_interface_on_exit: false
-      comm_timeout_s: 3.0
+      comm_warn_s: 3.0
+      comm_timeout_s: 20.0
+      isolate_on_comm_loss: true
+      port_reset_s: 10.0
       motor_confirm_s: 5.0
       error_code: 5007
       error_message: "Turbo 5 Error: {error_text}"
@@ -265,7 +281,10 @@ turbos:
       address: 6                           # !! CHECK
       take_control: true
       restore_interface_on_exit: false
-      comm_timeout_s: 3.0
+      comm_warn_s: 3.0
+      comm_timeout_s: 20.0
+      isolate_on_comm_loss: true
+      port_reset_s: 10.0
       motor_confirm_s: 5.0
       error_code: 5007
       error_message: "Turbo 6 Error: {error_text}"
@@ -294,6 +313,11 @@ thresholds:
   manual_foreline_pressure_max_mbar: 2.13
   compressor_min_bar: 5.0              # 'Air Compressor Pressure Calc (Bar) < 5.0'
   compressor_low_time_s: 5.0           # ... for 5 s ('Elapsed Time5') -> "Compressor Pressure Below 5 Bar!" (stops Auto mode)
+  turbo_start_before_gates_below_mbar: 1.0e-2   # Engage below this: turbos start with the gates CLOSED, run up to
+                                       # standby, THEN the gates open (2026-10-28).  At/above it: the VI's order
+                                       # (gates first, then turbos).  null = always the VI's order.
+  turbo_full_speed_timeout_s: 900      # Auto 'Pumping to High Vac': a turbo not at full speed after 15 min is logged
+                                       # ("!! Turbo N NOT at full speed ...") and its speed reading turns red (2026-10-27)
   # Pumping-to-Rough start order: the VC100 VI always starts the primary pump first and opens the bypass
   # after 20 s (null below keeps that).  Set e.g. bypass_first_above_mbar: 50.0 for the test engineer's rule
   # used on the small chamber (bypass first above 5e1 mBar).
@@ -311,6 +335,9 @@ timings:
   valve_settle_ms: 1000         # Wait after a valve command changed ...
   bypass_settle_ms: 2000        # ... 2000 ms if the bypass changed ...
   gate_settle_ms: 9000          # ... 9000 ms if a gate changed
+  turbo_standby_min_s: 20.0     # turbos-first Engage: a Shimadzu (no speed signal) counts as at standby after this
+                                #   long running and no longer 'Accel'; a HiPace when at its [P:717] standby speed
+  turbo_standby_timeout_s: 600  # ... not all at standby after 10 min -> logged, gates opened anyway
   chiller_settle_ms: 10000      # Wait 10 s after the chiller command changed
   primary_settle_ms: 10000      # Wait 10 s after the primary pump is switched ON ...
   primary_settle_off_ms: 0      # ... nothing when it is switched off

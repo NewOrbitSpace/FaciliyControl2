@@ -30,7 +30,7 @@ import time
 from dataclasses import dataclass, field, replace
 from typing import Callable, Dict, List, Optional, Protocol, Set, Tuple
 
-from .automode import SUB_ROUGH_ENTRY, SUB_ROUGH_WAIT, AutoInput, AutoStateMachine
+from .automode import SUB_ROUGH_ENTRY, SUB_ROUGH_WAIT, AutoInput, AutoStateMachine, turbo_is_spinning
 from .config import TURBO_ERROR_DEFAULTS, FacilityConfig
 from .hal.base import HardwareBackend
 from .interlocks import Interlocks
@@ -40,7 +40,7 @@ from .model import (AUTO_ERROR_CODE_MAX, AUTO_ERROR_CODE_MIN, ERR_BRT_DEVICE, ER
                     ERR_CHILLER_CONFLICT, ERR_COMPRESSOR_LOW, ERR_DAQ, ERR_GATE_CONFLICT, ERR_PRIMARY_CONFLICT,
                     ERR_TURBO_DEVICE, ERR_TURBO_MOTOR_CONFLICT, ERR_TURBO_VALVE_CONFLICT, ERR_VENT_CONFLICT,
                     TURBO_COLORS, Commands, ErrorCluster, FacilityState, Inputs, Mode, OnOffError, Snapshot,
-                    primary_is_running,
+                    contact_summary, primary_is_running,
                     TabPage, TurboStatus, TurboView)
 
 
@@ -186,6 +186,12 @@ class Controller:
         self._elapsed_below = 0.0
         self._valve_errors: Dict[str, bool] = {}
         self._turbo_views: Dict[str, TurboView] = {}
+        self._high_vac_since: Optional[float] = None     # Auto entered Pumping to High Vac (full-speed check)
+        self._force_command = False                      # write commands this iteration even while held
+        self._comm_lost: Set[str] = set()                # RS-485 turbos currently past comm_timeout_s
+        for tc in cfg.turbos:                            # runtime take-outs never survive a restart
+            tc.disabled_reason = ""
+        self._not_full: Set[str] = set()                 # turbos already reported 'not at full speed'
         self._primary_status = OnOffError.OFF
         self._chiller_status = OnOffError.OFF
         self._last_csv = 0.0
@@ -228,10 +234,12 @@ class Controller:
     def request_set_engage_time(self, epoch: Optional[float]): self.request("set_engage_time", epoch)
     def request_set_unit(self, unit: str): self.request("set_unit", unit)
 
-    def request_turbo_speed(self, tid: str, mode: str, pct: Optional[float] = None):
-        """Pfeiffer HiPace (RS-485) speed panel: mode 'off' | 'full' | 'standby' | 'set' (pct = set
-        value in % of nominal).  Manual / Admin mode only - Auto runs the turbos itself."""
-        self.request("turbo_speed", tid, (str(mode), pct))
+    def request_turbo_speed(self, tid: str, mode: str, pct: Optional[float] = None, confirmed: bool = False):
+        """Pfeiffer HiPace (RS-485) speed control: mode 'off' | 'full' | 'standby' | 'set' (pct = set
+        value in % of nominal).  Manual / Admin mode only - Auto runs the turbos itself.
+        confirmed=True: the operator already confirmed in the turbo's speed window (its Apply
+        button names the action), so no second Yes/No question - the interlocks still apply."""
+        self.request("turbo_speed", tid, (str(mode), pct, bool(confirmed)))
 
     def request_set_frequency_enabled(self, on: bool):
         """Operator toggled 'pump frequency reader connected' on the panel."""
@@ -315,11 +323,13 @@ class Controller:
         self.inputs = inp
         # ---- frame 1: status / errors (always; settling devices are not cross-checked)
         self.error = self._evaluate_errors(inp, now)
+        self._supervise_full_speed(now)
         # ---- frame 2: clear error
         if getattr(self, "_clear_requested", False):
             self._clear_requested = False
             self.error = ErrorCluster()
             self._log("Error cleared by user")
+            self._restore_taken_out("Clear Error")
         self.sleep(cfg.status_wait_ms / 1000.0)
         # ---- error-ack pulse end
         for tid, until in list(self._ack_until.items()):
@@ -353,6 +363,8 @@ class Controller:
                     if self.mode != Mode.MANUAL:
                         self._log("Manual (interlocked) Control Mode Enabled")
                     self.mode = Mode.MANUAL
+                if self.mode in (Mode.ADMIN, Mode.MANUAL):
+                    self._restore_taken_out(f"{self.mode.name.title()} mode")
             reqs = [r for r in reqs if r.kind not in ("admin_mode", "manual_mode")]
             if self.mode == Mode.INITIALIZE:
                 new = self._decide_initialize(new)
@@ -368,6 +380,12 @@ class Controller:
             if self._deferred and self.mode in (Mode.ADMIN, Mode.MANUAL):
                 reqs, self._deferred = self._deferred, []
                 new = self._decide_manual_or_admin(new, inp, reqs)
+        # a turbo just taken out (stuck gate) is switched off and its gate closed at once, even while a
+        # settle wait holds the decisions
+        if new is None and self._force_command and self._pending is None:
+            new = prev.copy()
+            new.turbo_error_ack = {t: False for t in cfg.turbo_ids}
+        self._force_command = False
         # ---- frame 4: command (only when a decision was made)
         if new is not None:
             new = self._stagger_gate_openings(prev, new, now)
@@ -527,6 +545,8 @@ class Controller:
         for vid, v in cfg.valves.items():
             conflict = (bool(self.cmds.valves.get(vid, False)) != bool(inp.valve_reads.get(vid, False))
                         and not self._suppressed(f"valve:{vid}", now))
+            if conflict and v.kind == "gate" and self._gate_failed_to_open(vid, inp):
+                conflict = False                     # handled: that turbo is taken out, Auto carries on
             self._valve_errors[vid] = conflict
             if conflict:
                 code = VALVE_ERROR_CODES.get(v.kind, ERR_GATE_CONFLICT)
@@ -570,7 +590,11 @@ class Controller:
             ti = inp.turbos.get(tc.id)
             if ti is None:
                 continue
+            err_before = err
             status, turbo_error, err = self._turbo_status(tc, ti, err)
+            comm_lost = tc.control_mode == "hipace_rs485" and ti.comm_ok is False
+            if self._comm_watch(tc, ti, comm_lost):
+                err = err_before                       # handled: only that turbo is taken out
             motor_read = ti.motor_read if tc.control_mode == "hipace_rs485" else bool(self.cmds.turbo_motor.get(tc.id, False))
             standby = bool(self.cmds.turbo_standby.get(tc.id, False))
             if (tc.control_mode == "hipace_rs485" and ti.motor_read != bool(self.cmds.turbo_motor.get(tc.id, False))
@@ -579,7 +603,9 @@ class Controller:
             self._turbo_views[tc.id] = TurboView(status, TURBO_COLORS[status], ti.speed_pct, turbo_error, motor_read,
                                                  standby, tc.in_use, ti.still_spinning, tc.has_speed, dict(ti.contacts),
                                                  self.cmds.speed_set(tc.id) if tc.speed_settable else None,
-                                                 tc.speed_settable)
+                                                 tc.speed_settable, False, tc.disabled_reason,
+                                                 ti.comm_silent_s if (ti.comm_warning or comm_lost) else 0.0,
+                                                 comm_lost)
         # compressor pressure (VC100: < 5 bar for 5 s -> error; only if the profile has the sensor)
         if th.compressor_min_bar is not None and inp.compressor_bar is not None:
             low = inp.compressor_bar < th.compressor_min_bar
@@ -595,6 +621,114 @@ class Controller:
             self._log(f"ERROR {err.code}: {err.source}")
         self.last_error_seen = key
         return err
+
+    def _gate_failed_to_open(self, vid: str, inp: Inputs) -> bool:
+        """Auto mode, a gate commanded OPEN still reads closed after its settle time, and its turbo
+        has `isolate_on_gate_failure` (VC100 TMP4): close that gate, switch that turbo off, take it out
+        of Auto's set and tell the operator - instead of a gate conflict that stops Auto (and with it
+        the whole facility).  Returns True when the conflict is handled this way."""
+        if self.mode != Mode.AUTO:
+            return False
+        if not self.cmds.valves.get(vid, False) or inp.valve_reads.get(vid, False):
+            return False                             # only 'commanded open, reads closed'
+        tcs = [t for t in self.cfg.turbos if t.gate_valve == vid and t.in_use and t.isolate_on_gate_failure]
+        if not tcs:
+            return False
+        for tc in tcs:
+            if tc.disabled_reason:
+                continue                             # already taken out; the close is on its way
+            msg = tc.gate_failure_message or f"Unable to open the {tc.label} gate valve"
+            tc.disabled_reason = msg
+            self._force_command = True
+            self._log(f"!! {msg} – {self.cfg.valves[vid].label} closed and {tc.label} switched off; "
+                      f"Auto carries on with the other turbos ({time.strftime('%H:%M:%S')})")
+            # a popup that does NOT hold the control loop (the facility keeps running underneath it)
+            self.dialogs.ask("info", f"{msg}\n\n{self.cfg.valves[vid].label} has been closed and {tc.label} "
+                                     f"switched off. The rest of the facility carries on in Auto.\n\n"
+                                     f"Press 'Clear Error' to let Auto try {tc.label} again.", ["OK"])
+        return True
+
+    def _comm_watch(self, tc, ti, comm_lost: bool) -> bool:
+        """RS-485 link to one HiPace lost (no reply for `comm_timeout_s`).
+
+        Auto mode with `isolate_on_comm_loss`: take just that turbo out - close its gate, command it
+        off (the poller keeps sending the stop until the pump answers), keep its turbo valve and the
+        primary pump on while it may still be spinning (its last known speed is kept), popup, and let
+        Auto carry on with the others.  Returns True when the comm error is handled this way, so it
+        does not stop Auto.  Otherwise (Manual/Admin, option off) it stays the turbo error it was."""
+        if not comm_lost:
+            if tc.id in self._comm_lost:
+                self._comm_lost.discard(tc.id)
+                self._log(f"{tc.label} answering on RS-485 again"
+                          + (" – press 'Clear Error' to put it back in service" if tc.disabled_reason else ""))
+            return False
+        self._comm_lost.add(tc.id)
+        if (self.mode != Mode.AUTO or not tc.in_use
+                or not bool(tc.params.get("isolate_on_comm_loss", False))):
+            return False
+        if tc.disabled_reason:
+            return True                                  # already out (this or another reason)
+        rs = ti.rs485 or {}
+        msg = f"No RS-485 reply from {tc.label} ({rs.get('port', '?')} address {rs.get('address', '?')})"
+        tc.disabled_reason = msg
+        self._force_command = True
+        gate = self.cfg.valves[tc.gate_valve].label
+        self._log(f"!! {ti.error_text or msg} – {gate} closed, {tc.label} commanded off, its turbo valve and "
+                  f"the primary pump kept on while it may still spin; Auto carries on with the other turbos "
+                  f"({time.strftime('%H:%M:%S')}; link stats: {rs.get('stats', '-')})")
+        self.dialogs.ask("info", f"{msg}.\n\n{gate} has been closed and {tc.label} told to stop (the stop "
+                         f"is repeated until the pump answers). Its turbo valve and the primary pump stay on "
+                         f"while it may still be spinning. The rest of the facility carries on in Auto.\n\n"
+                         f"Check the RS-485 cable and converter, then press 'Clear Error' to put {tc.label} "
+                         f"back in service.", ["OK"])
+        return True
+
+    def _restore_taken_out(self, why: str) -> None:
+        """Give turbos taken out at run time back to Auto / the operator."""
+        for tc in self.cfg.turbos:
+            if tc.disabled_reason:
+                tc.disabled_reason = ""
+                self._log(f"{tc.label} back in use ({why})")
+
+    def _supervise_full_speed(self, now: float) -> None:
+        """Auto 'Pumping to High Vac': every turbo in use must be at FULL speed - status Speed Reached,
+        not in standby, no reduced set value - within `thresholds.turbo_full_speed_timeout_s` of
+        entering the state.  A turbo that is not is logged once (with what its signals say) and
+        flagged on its diagram card; Auto keeps running (it is not a fault the VI knew about)."""
+        cfg = self.cfg
+        limit = cfg.thresholds.turbo_full_speed_timeout_s
+        in_hv = self.mode == Mode.AUTO and self.current == FacilityState.PUMPING_TO_HIGH_VAC
+        if not limit or not in_hv:
+            self._high_vac_since = None
+            self._not_full = set()
+            return
+        if self._high_vac_since is None:
+            self._high_vac_since = now
+        waited = now - self._high_vac_since
+        for tc in cfg.turbos:
+            tv = self._turbo_views.get(tc.id)
+            if not tc.active or tv is None:
+                continue
+            full = (tv.status == TurboStatus.SPEED_REACHED and not self.cmds.turbo_standby.get(tc.id, False)
+                    and self.cmds.speed_set(tc.id) is None)
+            if full:
+                if tc.id in self._not_full:
+                    self._not_full.discard(tc.id)
+                    self._log(f"{tc.label} now at full speed ({time.strftime('%H:%M:%S')})")
+                continue
+            if waited >= float(limit):
+                tv.not_full_speed = True
+                if tc.id not in self._not_full:
+                    self._not_full.add(tc.id)
+                    if tc.has_speed:
+                        seen = f"speed {tv.speed_pct:.0f} %"
+                    else:
+                        seen = "signals: " + contact_summary(tv.contacts, tv.motor_read, tc.params.get("at_speed_pct"),
+                                                             bool(self.cmds.turbo_standby.get(tc.id, False)))
+                    self._log(f"!! {tc.label} NOT at full speed after {waited / 60:.0f} min in Pumping to High Vac "
+                              f"({tv.status.label.replace('Turbo ', '')}; {seen}; "
+                              f"motor {'on' if self.cmds.turbo_motor.get(tc.id) else 'OFF'}, "
+                              f"standby {'ON' if self.cmds.turbo_standby.get(tc.id) else 'off'}) – check the pump")
 
     def _turbo_status(self, tc, ti, err: ErrorCluster) -> Tuple[TurboStatus, bool, ErrorCluster]:
         """Turbo status word + device error for one turbo (VI 'Turbo Status' case structures).
@@ -628,7 +762,9 @@ class Controller:
             elif ti.contact("at_speed"):
                 status = TurboStatus.SPEED_REACHED
             elif ti.contact("rotating") or ti.contact("braking"):
-                status = TurboStatus.SPINNING_DOWN
+                status = TurboStatus.SPINNING_DOWN if not motor_cmd else TurboStatus.SPINNING_UP
+            elif motor_cmd:
+                status = TurboStatus.SPINNING_UP      # commanded on, no contact yet (TMP4: below 80 %)
             else:
                 status = TurboStatus.OFF
             turbo_error = alarm or (warning and bool(p.get("warning_is_error", True)))
@@ -746,8 +882,9 @@ class Controller:
             if r.kind == "user_cmd":
                 self._handle_user_cmd(str(r.arg), new, inp, manual)
             elif r.kind == "turbo_speed":
-                mode, pct = r.arg2 if isinstance(r.arg2, tuple) else (str(r.arg2), None)
-                self._handle_turbo_speed(str(r.arg), mode, pct, new, inp, manual)
+                args = tuple(r.arg2) if isinstance(r.arg2, tuple) else (str(r.arg2),)
+                mode, pct, confirmed = (args + (None, False))[:3]
+                self._handle_turbo_speed(str(r.arg), mode, pct, new, inp, manual, bool(confirmed))
             elif r.kind == "turbo_error_ack":
                 for t in ([r.arg] if r.arg else cfg.turbo_ids):
                     new.turbo_error_ack[t] = True
@@ -836,7 +973,7 @@ class Controller:
                 self._open_dialog("three", f" Exit {tname} Standby Mode?", ["Yes, Spin Up", "No", " Yes, Spin Down"], apply)
 
     def _handle_turbo_speed(self, tid: str, mode: str, pct: Optional[float], new: Commands, inp: Inputs,
-                            manual: bool) -> None:
+                            manual: bool, confirmed: bool = False) -> None:
         """Off / Full speed / Standby / Set speed for one Pfeiffer HiPace on RS-485.
 
         Starting a stopped pump or stopping a running one asks first (and, in Manual mode, goes through
@@ -862,7 +999,10 @@ class Controller:
                 if result == 0:
                     cmds.turbo_motor[tid], cmds.turbo_standby[tid] = False, False
                     cmds.turbo_speed_pct[tid] = None
-            self._open_dialog("two", f"Stop {tname}?", ["Yes", "No"], apply)
+            if confirmed:
+                apply(0, new)
+            else:
+                self._open_dialog("two", f"Stop {tname}?", ["Yes", "No"], apply)
             return
         if mode not in ("full", "standby", "set"):
             return
@@ -896,7 +1036,10 @@ class Controller:
             if result == 0:
                 cmds.turbo_motor[tid], cmds.turbo_standby[tid] = True, standby
                 cmds.turbo_speed_pct[tid] = speed
-        self._open_dialog("two", f"Start {tname} {what}?", ["Yes", "No"], apply)
+        if confirmed:
+            apply(0, new)
+        else:
+            self._open_dialog("two", f"Start {tname} {what}?", ["Yes", "No"], apply)
 
     def recognise_state(self, c: Commands) -> Optional[Tuple[FacilityState, FacilityState, str]]:
         """Admin → Auto state recognition (exactly the VI's decision tree, on commanded states)."""
@@ -1011,6 +1154,8 @@ class Controller:
         for line in out.log:
             self._log(line)
         self.current, self.target, self.substate, self.tab = out.current, out.target, out.substate, out.tab
+        if self.current == FacilityState.FACILITY_OFF:
+            self._restore_taken_out("Facility Off – next pump-down tries it again")
         self.skip_primary_warm = out.skip_primary_warm
         self._elapsed_below = out.elapsed_below_threshold_s
         out.commands.turbo_error_ack = new.turbo_error_ack
@@ -1039,12 +1184,15 @@ class Controller:
                 new.turbo_speed_pct[tc.id] = min(hi, max(lo, float(sp)))
         # turbos that are not in use never get commanded (VC100 'Turbo X in use?')
         for tc in cfg.turbos:
-            if not tc.in_use:
+            if not tc.active:                    # not in use, or taken out at run time (stuck gate)
                 new.turbo_motor[tc.id] = False
                 new.turbo_standby[tc.id] = False
                 new.valves[tc.gate_valve] = False
-                # a shared turbo valve stays under the control of the turbos that are in use
-                if not any(t.in_use for t in cfg.turbos_on_valve(tc.turbo_valve)):
+                # a shared turbo valve stays under the control of the turbos that are in use - and
+                # stays open while a taken-out turbo is still coasting down (it needs its backing)
+                coasting = tc.in_use and turbo_is_spinning(self.inputs.turbos.get(tc.id),
+                                                           cfg.thresholds.slowing_pct)
+                if not any(t.active for t in cfg.turbos_on_valve(tc.turbo_valve)) and not coasting:
                     new.valves[tc.turbo_valve] = False
         self._sequence_primary(new, now)          # demand -> physical relay line(s)
         try:

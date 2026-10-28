@@ -73,6 +73,8 @@ class AutoMemory:
     vent: ElapsedTimer = field(default_factory=lambda: ElapsedTimer(600.0, auto_reset=True))
     last_error_log: str = ""
     last_gate_open: Optional[float] = None       # time of the last gate OPEN command (gate_open_stagger_s)
+    standby_wait_start: Optional[float] = None   # Engage, turbos-first: when the turbos were started
+    hv_request_wrg: Optional[float] = None       # chamber pressure when high vac was asked for (Torr)
 
 
 @dataclass
@@ -187,6 +189,27 @@ class AutoStateMachine:
             cmds.valves[gid] = False
         return not waiting
 
+    def _at_standby(self, inp: Inputs, t: TurboConfig, waited: float) -> bool:
+        """Engage, turbos-first branch: has this turbo reached its standby speed?
+
+        Speed signal (HiPace): speed within 3 % of its standby speed ([P:717] read from the pump, else
+        the profile's standby_speed_pct, else the Pfeiffer default 66.7 %) - or above it.
+        Shimadzu contacts (no speed): run for at least turbo_standby_min_s, no longer accelerating,
+        no alarm."""
+        ti = inp.turbos.get(t.id)
+        if ti is None or ti.error:
+            return False
+        if ti.has_contacts:
+            # no speed signal: running, run up for `standby_runup_s` (per turbo, else
+            # timings.turbo_standby_min_s) and - if the pump has one (TMP1) - no 'accelerating' contact.
+            # TMP4 only has 'running' (DI19) and '>80 %' (DI18): standby stays below 80 %, so the
+            # run-up time is all there is to go by.
+            runup = float(t.params.get("standby_runup_s", self.tm.turbo_standby_min_s))
+            return (waited >= runup and ti.contact("rotating") and not ti.contact("accelerating")
+                    and not ti.contact("alarm"))
+        target = ti.standby_set_pct if ti.standby_set_pct is not None else t.params.get("standby_speed_pct", 66.7)
+        return ti.speed_pct >= float(target) - 3.0
+
     def _set_motors(self, cmds: Commands, value: bool) -> None:
         for t in self._turbos():
             cmds.turbo_motor[t.id] = value
@@ -255,6 +278,8 @@ class AutoStateMachine:
         slow_pct = th.slowing_pct                                          # 'Turbo slowing Threshold (%)'
         spinning_slow = self._any_spinning(inp, slow_pct)                 # Overnight / Venting / Turbo slowing
         wrg = self._wrg(inp)
+        if "pump_to_high_vac" in b:
+            self.mem.hv_request_wrg = wrg               # Engage decides turbos-first on this pressure
         substate = a.substate
         out_sub = 0
         tab = TabPage.FACILITY_OFF
@@ -426,6 +451,7 @@ class AutoStateMachine:
             new_tgt = S.PUMPING_TO_HIGH_VAC if time_reached else tgt
             if time_reached:
                 log.append(f"Timestamp reached, turning on pumps at {_ts()}")
+                self.mem.hv_request_wrg = wrg
             if "vent" in b:
                 new_cur, new_tgt = S.VENTING, S.VENTING
             if "pump_to_rough" in b:
@@ -463,14 +489,56 @@ class AutoStateMachine:
             elif substate == 3:
                 bp, gv, out_sub = False, False, 4        # close bypass
             elif substate == 4:
-                bp, gv, out_sub = False, True, 5         # open gate(s) - one by one on a shared air line
+                first = th.turbo_start_before_gates_below_torr
+                # decided on the chamber pressure when high vac was ASKED for: opening the turbo valves
+                # (turbo bodies not yet evacuated) lifts the chamber well above it before this point
+                asked = self.mem.hv_request_wrg
+                p_dec = min(wrg, asked) if (asked is not None and not math.isnan(asked)) else wrg
+                if first is not None and th.wrg_error_threshold_torr < p_dec < first:
+                    wrg_shown = p_dec
+                    # low pressure (2026-10-28): turbos first, gates closed -> they run up to standby
+                    bp, gv, out_sub = False, False, 6
+                    self._set_motors(cmds, True)
+                    self.mem.standby_wait_start = a.now
+                    log.append(f"Chamber at {torr_to('mbar', wrg_shown):.1e} mBar (< {torr_to('mbar', first):.0e}): "
+                               f"starting the turbos with the gates closed – the gates open once every turbo "
+                               f"is at standby speed ({_ts()})")
+                else:
+                    bp, gv, out_sub = False, True, 5     # open gate(s) - one by one on a shared air line
+            elif substate == 6:                          # turbos-first: wait for standby speed
+                bp, gv = False, False
+                self._set_motors(cmds, True)
+                start = self.mem.standby_wait_start if self.mem.standby_wait_start is not None else a.now
+                self.mem.standby_wait_start = start
+                waited = a.now - start
+                waiting = [t.label for t in self._turbos() if not self._at_standby(inp, t, waited)]
+                out_sub = 6
+                if not waiting:
+                    out_sub = 7
+                    log.append(f"Turbos at standby speed after {waited:.0f} s – opening the gate valves ({_ts()})")
+                elif waited >= float(self.tm.turbo_standby_timeout_s):
+                    out_sub = 7
+                    log.append(f"!! {', '.join(waiting)} not at standby speed after {waited / 60:.0f} min – "
+                               f"opening the gate valves anyway ({_ts()})")
+            elif substate == 7:                          # turbos-first: open the gates, turbos running
+                bp, gv = False, None                     # gates handled here
+                self._set_motors(cmds, True)
+                out_sub = 7
+                if self._open_gates_staggered(cmds, prev, a.now, log):
+                    out_sub = 0
+                    self.mem.standby_wait_start = None
+                    self.mem.hv_request_wrg = None
+                    new_cur = S.PUMPING_TO_HIGH_VAC
             else:  # 5 – start the turbo(s)
                 bp, gv, out_sub = False, True, 0
                 self._set_motors(cmds, True)
+                self.mem.hv_request_wrg = None
                 new_cur = S.PUMPING_TO_HIGH_VAC
             if bypass:
                 cmds.valves[bypass] = bp
-            if gv:
+            if gv is None:
+                pass
+            elif gv:
                 if not self._open_gates_staggered(cmds, prev, a.now, log) and out_sub == 5:
                     out_sub = 4                          # turbos start only when every gate is open
             else:
@@ -648,10 +716,20 @@ class AutoStateMachine:
             all_off()
             cur = S.FACILITY_OFF
 
-        # --- VC100: turbo standby line = motor commanded while its gate is closed
+        if cur in (S.FACILITY_OFF, S.VENTING):
+            self.mem.hv_request_wrg = None             # a stale request pressure never carries over
+        # --- VC100: turbo standby line = motor commanded while its gate is closed - except in
+        #     Pumping to High Vac, where every turbo runs at full speed (2026-10-27), even while a gate
+        #     is still waiting for its turn on the shared compressed-air line
         if am.standby_when_gate_closed:
             for t in self._turbos():
-                cmds.turbo_standby[t.id] = bool(cmds.turbo_motor.get(t.id, False)) and not cmds.valves.get(t.gate_valve, False)
+                cmds.turbo_standby[t.id] = (bool(cmds.turbo_motor.get(t.id, False))
+                                            and not cmds.valves.get(t.gate_valve, False)
+                                            and cur != S.PUMPING_TO_HIGH_VAC)
+        if cur == S.PUMPING_TO_HIGH_VAC:
+            for t in self._turbos():
+                cmds.turbo_standby[t.id] = False
+                cmds.turbo_speed_pct[t.id] = None          # never a reduced speed in high vac
 
         # --- global protection: never strand a spinning turbo (2026-09-22)
         # A turbo that is turning must keep a path to the backing pump.  The VIs' own state logic can
@@ -669,7 +747,9 @@ class AutoStateMachine:
         # turbo is still at ~99 %; the turbo body reached ~27 mBar and the drive tripped, error 5007).
         # So the rule is: while a turbo is turning, its valve stays open AND the primary keeps running.
         needs_backing = False
-        for t in self._turbos():
+        # every turbo that is fitted - also one the controller has just taken out (stuck gate): it
+        # may still be coasting down and needs its backing as much as any other
+        for t in [t for t in cfg.turbos if t.in_use]:
             # the same "still spinning" threshold the state machine itself uses (slowing_pct, 15 %),
             # so Facility Off is never reached with a valve this rule is holding open
             spinning = self._spinning(inp, t, slow_pct)

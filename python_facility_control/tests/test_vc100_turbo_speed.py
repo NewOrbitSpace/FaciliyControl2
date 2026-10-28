@@ -200,39 +200,396 @@ def test_profile_speed_range_validation():
     assert not c.turbo("turbo1").speed_settable and c.turbo("turbo2").speed_settable
 
 
-# ---------------------------------------------------------------------------- GUI panel
-def test_speed_panel_rows_and_mode_gating():
+def test_confirmed_request_skips_the_question_but_not_the_interlocks():
+    h = Harness(_vc100(), mode=Mode.ADMIN)
+    h.step(2)
+    n = len(h.dialogs.log)
+    h.ctl.request_turbo_speed("turbo2", "set", 50, confirmed=True)
+    s = h.step(2)
+    assert s.commands.turbo_motor["turbo2"] and s.commands.speed_set("turbo2") == 50.0
+    assert len(h.dialogs.log) == n                            # no Yes/No box
+    h.ctl.request_turbo_speed("turbo2", "off", confirmed=True)
+    s = h.step(2)
+    assert not s.commands.turbo_motor["turbo2"]
+    m = Harness(_vc100(), mode=Mode.MANUAL)
+    m.step(2)
+    m.ctl.request_turbo_speed("turbo2", "full", confirmed=True)   # primary off -> interlock refuses
+    s = m.step(2)
+    assert not s.commands.turbo_motor["turbo2"] and any(k == "info" for k, _ in m.dialogs.log)
+
+
+# ---------------------------------------------------------------------------- GUI: speed window
+def test_clicking_a_pfeiffer_turbo_opens_its_speed_window():
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     pytest.importorskip("PySide6")
     from PySide6.QtWidgets import QApplication
     app = QApplication.instance() or QApplication([])
     from facility_control.gui.main_window import MainWindow
-    h = Harness(_vc100(), mode=Mode.AUTO)
+    h = Harness(_vc100(), mode=Mode.ADMIN)
     win = MainWindow(h.cfg, h.ctl, sim_backend=h.backend)
     win.show()
     h.step(2)
     win._poll(); app.processEvents()
-    panel = win.speed_panel
-    assert sorted(panel.rows) == ["turbo2", "turbo3", "turbo5", "turbo6"]
-    assert not panel.rows["turbo2"].buttons["set"].isEnabled()          # Auto: disabled
-    h.ctl.mode = Mode.ADMIN
+    n = len(h.dialogs.log)
+    win._on_diagram_click("turbo:turbo2")                   # Pfeiffer -> speed window, no Yes/No box
     h.step(1)
-    win._poll(); app.processEvents()
-    row = panel.rows["turbo2"]
-    assert row.buttons["set"].isEnabled() and row.buttons["off"].isChecked()
-    row.slider.setValue(45)
-    row.buttons["set"].click()
+    assert "turbo2" in win.speed_dialogs and win.speed_dialogs["turbo2"].isVisible()
+    assert len(h.dialogs.log) == n and not h.ctl.snapshot().commands.turbo_motor["turbo2"]
+    dlg = win.speed_dialogs["turbo2"]
+    assert dlg.buttons["off"].isChecked() and not dlg.apply_btn.isEnabled()
+    assert not dlg.slider.isEnabled()                       # slider only with 'Set speed'
+    dlg.buttons["set"].click()
+    assert dlg.slider.isEnabled()
+    dlg.slider.setValue(45)
+    assert dlg.spin.value() == 45 and dlg.apply_btn.text() == "Start at 45 %"
+    dlg.apply_btn.click()
     h.step(2)
     win._poll(); app.processEvents()
-    assert row.buttons["set"].isChecked() and h.ctl.snapshot().commands.speed_set("turbo2") == 45.0
-    # slider moved while in Set -> applied after release
-    row.slider.setSliderDown(True)
-    row.slider.setValue(65)
-    row.slider.setSliderDown(False)          # emits sliderReleased
+    assert h.ctl.snapshot().commands.speed_set("turbo2") == 45.0
+    assert dlg.buttons["set"].isChecked() and dlg.apply_btn.text() == "No change"
+    dlg.spin.setValue(70)
+    assert dlg.apply_btn.text() == "Change to 70 %"
+    dlg.apply_btn.click()
     h.step(1)
-    assert h.ctl.snapshot().commands.speed_set("turbo2") == 65.0
-    row.buttons["full"].click()
+    assert h.ctl.snapshot().commands.speed_set("turbo2") == 70.0
+    win._poll(); app.processEvents()
+    dlg.buttons["standby"].click()
+    assert dlg.apply_btn.text() == "Go to standby"
+    dlg.apply_btn.click()
+    h.step(1)
+    assert h.ctl.snapshot().commands.turbo_standby["turbo2"]
+    win._poll(); app.processEvents()
+    dlg.buttons["off"].click()
+    assert dlg.apply_btn.text() == "Stop Turbo 2"
+    dlg.apply_btn.click()
+    h.step(1)
+    assert not h.ctl.snapshot().commands.turbo_motor["turbo2"]
+    # a Shimadzu turbo keeps the old Yes/No question
+    win._on_diagram_click("turbo:turbo1")
+    h.step(1)
+    assert "turbo1" not in win.speed_dialogs and len(h.dialogs.log) > n
+    # Auto mode: window controls disabled
+    h.ctl.mode = Mode.AUTO
     h.step(1)
     win._poll(); app.processEvents()
-    assert row.buttons["full"].isChecked() and h.ctl.snapshot().commands.speed_set("turbo2") is None
+    assert not dlg.buttons["full"].isEnabled() and "Auto mode" in dlg.note.text()
     win.close()
+
+
+# ---------------------------------------------------------------------------- Shimadzu contacts / full speed
+def test_contact_summary_words():
+    from facility_control.model import contact_summary
+    assert contact_summary({}, False) == "Off"
+    assert contact_summary({}, True) == "On"                                   # commanded, no contact active
+    assert contact_summary({"accelerating": True, "rotating": True}, True, 80.0) == "Accel · <80%"
+    assert contact_summary({"braking": True, "rotating": True}, False, 80.0) == "Decel · <80%"
+    assert contact_summary({}, True, 80.0) == "<80%"                          # TMP4 running, below 80 %
+    assert contact_summary({}, False, 80.0) == "Off"                          # TMP4 stopped
+    assert contact_summary({"at_speed": True, "rotating": True}, True, 80.0) == ">80%"
+    assert contact_summary({"at_speed": True, "accelerating": True}, True, 80.0) == "Accel · >80%"
+    assert contact_summary({"at_speed": True}, True) == "At speed"             # TMP1: rated-speed contact
+    assert contact_summary({"rotating": True}, False) == "Rotating"
+    assert contact_summary({"alarm": True}, True).startswith("ALARM")
+
+
+def _auto_high_vac(cfg, max_iter=30000, hv_steps=3000):
+    from facility_control.model import FacilityState as S
+    h = Harness(cfg)
+    h.step(2)
+    h.ctl.request_auto_button("pump_to_high_vac")
+    in_hv = []
+    for _ in range(max_iter):
+        s = h.step()
+        if s.current == S.PUMPING_TO_HIGH_VAC:
+            in_hv.append(s)
+            if all(tv.status == TurboStatus.SPEED_REACHED for tv in s.turbos.values()) or len(in_hv) > hv_steps:
+                break
+    return h, in_hv
+
+
+def test_auto_high_vac_runs_every_turbo_at_full_speed():
+    c = _vc100()
+    h, hv = _auto_high_vac(c)
+    assert hv, "never reached Pumping to High Vac"
+    for s in hv:                                             # never standby / reduced speed in high vac
+        assert not any(s.commands.turbo_standby.values())
+        assert all(s.commands.speed_set(t) is None for t in c.turbo_ids)
+        assert all(s.commands.turbo_motor[t.id] for t in c.turbos if t.in_use)
+    last = hv[-1]
+    assert all(tv.status == TurboStatus.SPEED_REACHED for tv in last.turbos.values())
+    assert not any(tv.not_full_speed for tv in last.turbos.values())
+    assert last.turbos["turbo4"].contacts["at_speed"] and not last.turbos["turbo4"].contacts["accelerating"]
+
+
+def test_turbo_not_at_full_speed_is_reported():
+    c = _vc100()
+    c.thresholds.turbo_full_speed_timeout_s = 60.0
+    c.turbo("turbo4").params["at_speed_pct"] = 101.0          # simulated TMP4 never reports '>80 %'
+    h, hv = _auto_high_vac(c, hv_steps=50)
+    assert hv
+    h.advance_plant(120)
+    s = h.step(3)
+    assert s.current.name == "PUMPING_TO_HIGH_VAC"             # Auto keeps running
+    assert s.turbos["turbo4"].not_full_speed and not s.turbos["turbo2"].not_full_speed
+    msg = [l for l in s.event_log if "Turbo 4 NOT at full speed" in l]
+    assert len(msg) == 1 and "signals:" in msg[0] and "standby off" in msg[0]
+
+
+# ---------------------------------------------------------------------------- TMP4 gate sticks (2026-10-28)
+def _to_high_vac_with_stuck_gate4(max_iter=40000):
+    from facility_control.model import FacilityState as S
+    c = _vc100()
+    h = Harness(c)
+    h.backend.set_fault("stuck_gate4", True)
+    h.step(2)
+    h.ctl.request_auto_button("pump_to_high_vac")
+    for _ in range(max_iter):
+        s = h.step()
+        if s.current == S.PUMPING_TO_HIGH_VAC and all(
+                s.turbos[t].status == TurboStatus.SPEED_REACHED for t in c.turbo_ids if t != "turbo4"):
+            return h, s
+        assert s.mode == Mode.AUTO and not s.error.status, f"Auto stopped: {s.error.source}"
+    raise AssertionError("high vac not reached")
+
+
+def test_stuck_tmp4_gate_takes_tmp4_out_and_auto_carries_on():
+    h, s = _to_high_vac_with_stuck_gate4()
+    assert not s.commands.valves["gate4"] and not s.commands.turbo_motor["turbo4"]
+    assert all(s.commands.turbo_motor[t] for t in ("turbo1", "turbo2", "turbo3", "turbo5", "turbo6"))
+    assert all(s.commands.valves[g] for g in ("gate1", "gate2", "gate3", "gate5", "gate6"))
+    assert s.commands.valves["turbo1_valve"]                      # TMP1 (and a coasting TMP4) stay backed
+    pops = [m for k, m in h.dialogs.log if k == "info" and "Thor's hammer" in m]
+    assert len(pops) == 1 and pops[0].startswith("Unable to open TMP4 gate valve, might need Thor's hammer!")
+    assert any("Thor's hammer" in l and "Auto carries on" in l for l in s.event_log)
+    assert s.turbos["turbo4"].isolated and not s.turbos["turbo1"].isolated
+    # stays out: no retry loop, no second popup
+    s = h.step(20)
+    assert not s.commands.valves["gate4"] and len([m for k, m in h.dialogs.log if "Thor" in m]) == 1
+
+
+def test_clear_error_lets_auto_try_tmp4_again():
+    h, s = _to_high_vac_with_stuck_gate4()
+    h.backend.set_fault("stuck_gate4", False)                      # the hammer worked
+    h.ctl.request_clear_error()
+    for _ in range(400):
+        s = h.step()
+        if s.commands.valves["gate4"] and s.commands.turbo_motor["turbo4"] and s.inputs.valve_reads["gate4"]:
+            break
+    assert s.commands.valves["gate4"] and s.commands.turbo_motor["turbo4"] and not s.turbos["turbo4"].isolated
+    assert any("Turbo 4 back in use (Clear Error)" in l for l in s.event_log)
+    assert s.mode == Mode.AUTO and not s.error.status
+
+
+def test_stuck_gate_still_an_error_for_turbos_without_the_option_and_in_manual():
+    c = _vc100()
+    h = Harness(c, mode=Mode.ADMIN)
+    h.backend.set_fault("stuck_gate4", True)
+    h.step(2)
+    h.ctl.request_user_cmd("valve:gate4")
+    s = h.step(4)
+    assert s.error.status and "Gate 4" in s.error.source             # Admin/Manual: the usual conflict
+    assert not s.turbos["turbo4"].isolated
+
+
+# ---------------------------------------------------------------------------- RS-485 link handling (2026-10-28)
+def test_write_echo_counts_as_alive_and_warning_comes_before_error():
+    import time as _t
+    from test_hipace_rs485_facility import _turbos
+    sim = _bus(1)
+    t = _turbos(1)
+    t[0].params.update({"comm_warn_s": 0.15, "comm_timeout_s": 0.6})
+    m = _mgr(sim, t)
+    m.poll_once()
+    u = m.units["turbo1"]
+    u.last_ok = m.clock() - 100.0
+    m.set_commands({"turbo1": True}, {})
+    assert m._apply(u)
+    assert m.clock() - u.last_ok < 1.0                       # the write echo proved the pump alive
+    sim.dead = True
+    _t.sleep(0.25)
+    ti = m.inputs("turbo1")
+    assert ti.comm_warning and ti.comm_ok and not ti.error and ti.comm_silent_s > 0.15
+    _t.sleep(0.45)
+    ti = m.inputs("turbo1")
+    assert not ti.comm_ok and ti.error and "no RS-485 reply" in ti.error_text
+
+
+def test_poller_asks_the_quietest_pump_first_and_spreads_slow_polls():
+    from facility_control.drivers.pfeiffer_pv import parse_telegram
+    sim = _bus(4)
+    m = _mgr(sim)
+    assert len({u.polls % 10 for u in m.units.values()}) == 4    # slow sets in different passes
+    now = m.clock()
+    for i, tid in enumerate(["turbo1", "turbo2", "turbo3", "turbo4"]):
+        m.units[tid].last_ok = now - (1 if tid != "turbo3" else 50)
+    sim.received.clear()
+    m.poll_once_ordered()
+    first_query = next(parse_telegram(x) for x in sim.received if parse_telegram(x).action == 0)
+    assert first_query.address == 3
+
+
+def test_port_is_reopened_when_every_pump_on_it_is_silent():
+    import time as _t
+    from test_hipace_rs485_facility import _turbos
+    from facility_control.hal.hipace_rs485_turbos import RS485Turbos
+    sim = _bus(2)
+    opened = []
+
+    def factory(*a):
+        opened.append(a)
+        return sim
+    t = _turbos(2)
+    for x in t:
+        x.params.update({"port_reset_s": 0.2, "comm_timeout_s": 5.0})
+    m = RS485Turbos(t, serial_factory=factory)
+    m.open(start_threads=False)
+    for b in m.buses.values():
+        b.gap_s = 0.0
+    m.set_commands({"turbo1": True}, {})
+    m.poll_once_ordered()
+    assert sim.pumps[1].p[10] and len(opened) == 1
+    sim.dead = True
+    _t.sleep(0.3)
+    m.poll_once_ordered()
+    assert len(opened) == 2 and any("re-opened" in e for e in m.take_events())
+    sim.dead = False
+    sim.pumps[1].p[10] = False                                  # the pump lost its state meanwhile
+    m.poll_once_ordered()
+    assert sim.pumps[1].p[10] and m.inputs("turbo1").comm_ok    # desired state sent again
+
+
+def _vc100_high_vac():
+    from facility_control.model import FacilityState as S
+    c = _vc100()
+    h = Harness(c)
+    h.step(2)
+    h.ctl.request_auto_button("pump_to_high_vac")
+    for _ in range(40000):
+        s = h.step()
+        if s.current == S.PUMPING_TO_HIGH_VAC and all(
+                tv.status == TurboStatus.SPEED_REACHED for tv in s.turbos.values()):
+            return h, s
+    raise AssertionError("high vac not reached")
+
+
+def test_lost_rs485_link_takes_out_only_that_turbo_in_auto():
+    h, s = _vc100_high_vac()
+    h.backend.set_fault("rs485_lost_turbo2", True)
+    s = h.step(3)
+    assert s.mode == Mode.AUTO and s.current.name == "PUMPING_TO_HIGH_VAC" and not s.error.status
+    assert not s.commands.turbo_motor["turbo2"] and not s.commands.valves["gate2"]
+    assert s.commands.valves["turbo2_valve"] and s.commands.primary          # backing kept
+    assert all(s.commands.turbo_motor[t] for t in ("turbo1", "turbo3", "turbo4", "turbo5", "turbo6"))
+    assert s.turbos["turbo2"].isolated and s.turbos["turbo2"].comm_lost
+    pops = [m for k, m in h.dialogs.log if k == "info" and "No RS-485 reply from Turbo 2" in m]
+    assert len(pops) == 1
+    assert any("!! no RS-485 reply" in l and "Auto carries on" in l for l in s.event_log)
+    s = h.step(10)
+    assert len([m for k, m in h.dialogs.log if "No RS-485 reply" in m]) == 1      # no popup storm
+    # link back + Clear Error -> Turbo 2 back in service
+    h.backend.set_fault("rs485_lost_turbo2", False)
+    s = h.step(1)
+    assert any("Turbo 2 answering on RS-485 again" in l for l in s.event_log)
+    h.ctl.request_clear_error()
+    for _ in range(300):
+        s = h.step()
+        if s.commands.turbo_motor["turbo2"] and s.commands.valves["gate2"]:
+            break
+    s = h.step(1)                                               # the card follows one cycle later
+    assert s.commands.turbo_motor["turbo2"] and s.commands.valves["gate2"] and not s.turbos["turbo2"].isolated
+
+
+def test_lost_rs485_link_is_still_an_error_in_manual_mode():
+    h = Harness(_vc100(), mode=Mode.ADMIN)
+    h.step(2)
+    h.backend.set_fault("rs485_lost_turbo3", True)
+    s = h.step(2)
+    assert s.error.status and "no RS-485 reply" in s.error.source and not s.turbos["turbo3"].isolated
+
+
+# ---------------------------------------------------------------------------- low-pressure engage (2026-10-28)
+def _rough_then_high_vac(cfg):
+    from facility_control.model import FacilityState as S
+    h = Harness(cfg)
+    h.step(2)
+    h.ctl.request_auto_button("pump_to_rough")
+    for _ in range(3000):                                       # until it waits for the pressure
+        if h.step().substate == 3:
+            break
+    h.advance_plant(60)                                         # roughing ends near 4e-3 mBar
+    s = h.step(2)
+    p_mbar = s.inputs.pressure(cfg.main_gauge.id) / 0.750061683
+    h.ctl.request_auto_button("pump_to_high_vac")
+    trace = []
+    for _ in range(40000):
+        s = h.step()
+        if s.current in (S.ENGAGE_TURBO, S.PUMPING_TO_HIGH_VAC):
+            trace.append(s)
+        if s.current == S.PUMPING_TO_HIGH_VAC:
+            return h, s, trace, p_mbar
+    raise AssertionError("high vac not reached")
+
+
+def test_below_1e2_mbar_turbos_reach_standby_before_any_gate_opens():
+    c = _vc100()
+    h, s, trace, p0 = _rough_then_high_vac(c)
+    assert p0 < 1e-2
+    gates = [t.gate_valve for t in c.turbos]
+    first_gate = next(i for i, x in enumerate(trace) if any(x.commands.valves[g] for g in gates))
+    first_motor = next(i for i, x in enumerate(trace) if any(x.commands.turbo_motor.values()))
+    assert first_motor < first_gate                                   # turbos first ...
+    before = trace[first_gate - 1]
+    assert all(before.commands.turbo_motor[t] and before.commands.turbo_standby[t] for t in c.turbo_ids)
+    assert all(before.turbos[t].speed_pct >= 60 for t in ("turbo2", "turbo3", "turbo5", "turbo6"))
+    log = "\n".join(s.event_log)
+    assert "starting the turbos with the gates closed" in log and "Turbos at standby speed" in log
+    assert "not at standby speed" not in log                          # every turbo made it, no timeout
+    assert not any(s.commands.turbo_standby.values())                 # high vac: full speed
+
+
+def test_above_threshold_keeps_the_vi_order_gates_first():
+    c = _vc100()
+    c.thresholds.turbo_start_before_gates_below_torr = 1e-6           # never 'low enough'
+    h, s, trace, p0 = _rough_then_high_vac(c)
+    gates = [t.gate_valve for t in c.turbos]
+    first_gate = next(i for i, x in enumerate(trace) if any(x.commands.valves[g] for g in gates))
+    first_motor = next(i for i, x in enumerate(trace) if any(x.commands.turbo_motor.values()))
+    assert first_gate < first_motor
+    assert "starting the turbos with the gates closed" not in "\n".join(s.event_log)
+
+
+# ---------------------------------------------------------------------------- TMP4 signals corrected (2026-10-28)
+def test_tmp4_card_words_follow_running_and_above_80():
+    from facility_control.model import contact_summary, normalize_contacts
+
+    def card(run, above, motor, standby=False):
+        c = normalize_contacts({"rotating": run, "at_speed": above, "alarm": False, "warning": False}, motor)
+        return contact_summary(c, motor, 80.0, standby)
+    assert card(False, False, False) == "Off"
+    assert card(False, False, True) == "On"                       # commanded, not turning yet
+    assert card(True, False, True) == "Accel · <80%"
+    assert card(True, True, True) == ">80%"                        # = full speed
+    assert card(True, False, True, standby=True) == "Standby · <80%"
+    assert card(True, True, False) == "Decel · >80%"
+    assert card(True, False, False) == "Decel · <80%"
+
+
+def test_tmp4_reaches_speed_reached_in_the_simulator():
+    c = _vc100()
+    h = Harness(c, mode=Mode.ADMIN)
+    h.step(2)
+    h.ctl.request_user_cmd("chiller")
+    h.step(2)
+    h.backend.set_fault("no_pressure_trip", True)
+    h.ctl.request_user_cmd("turbo:turbo4")                        # Shimadzu: the Yes/No start question
+    s = h.step(2)
+    assert s.commands.turbo_motor["turbo4"]
+    assert s.turbos["turbo4"].status in (TurboStatus.SPINNING_UP, TurboStatus.OFF)
+    h.advance_plant(600)
+    s = h.step(1)
+    assert s.turbos["turbo4"].status == TurboStatus.SPEED_REACHED
+    assert s.turbos["turbo4"].contacts["rotating"] and s.turbos["turbo4"].contacts["at_speed"]
+    h.dialogs.answers.put(0)                                      # 'Stop Turbo 4?' -> Yes
+    h.ctl.request_user_cmd("turbo:turbo4")
+    s = h.step(2)
+    assert not s.commands.turbo_motor["turbo4"] and s.turbos["turbo4"].status == TurboStatus.SPINNING_DOWN

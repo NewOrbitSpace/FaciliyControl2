@@ -33,10 +33,20 @@ every `slow_poll_every` passes also [P:315] nominal speed, [P:023], [P:060], [P:
 drive current.
 
 Failure handling (what the controller sees in TurboInputs):
-  * no successful reply for `comm_timeout_s` (default 3 s) -> error "no RS-485 reply ..." -> the
-    turbo's error code (stops Auto mode).  The LAST KNOWN speed is kept, deliberately: the plant
-    rules hold a spinning turbo's valve open and the primary pump on, and an unknown speed must be
-    treated as "may still be spinning", not as 0.
+  * ANY good reply counts as "alive" - a poll answer or the echo of a write (2026-10-28: write
+    echoes did not count before, so a pump busy taking start commands looked silent).
+  * no reply for `comm_warn_s` (default 3 s) -> `comm_warning` + `comm_silent_s`: shown on the
+    panel, NOT an error - one slow pass of a busy bus is not a lost pump.
+  * no reply for `comm_timeout_s` (default 20 s) -> error "no RS-485 reply ...".  The controller
+    then takes just that turbo out in Auto (`isolate_on_comm_loss`) instead of stopping everything.
+    The LAST KNOWN speed is kept, deliberately: the plant rules hold a spinning turbo's valve open
+    and the primary pump on, and an unknown speed must be treated as "may still be spinning".
+  * every pump on a port silent for `port_reset_s` (default 10 s) -> the port is closed and opened
+    again and RS-485 control re-taken (a hung USB/RS-485 converter) - no program restart needed.
+
+Poll order (2026-10-28): every pass polls the pump that has been silent longest first, writes are
+sent before each poll, and the slow parameter set is spread over the passes (one pump at a time
+instead of all four in the same pass), so no pump waits behind a whole bus of slow polls.
   * a control write rejected with _LOGIC (RS-485 does not have control: [P:060] != 2 or the D-Sub
     remote-priority input is active) -> error with that text, until a write succeeds again.
   * [P:303] starting with "Err" -> error; "Wrn" -> warning (shown, does not stop Auto unless
@@ -63,7 +73,7 @@ from ..config import check_rs485_turbos as validate_rs485_turbos
 from ..model import TurboInputs
 
 FAST = (309, 10, 303, 2)
-SLOW = (315, 23, 60, 300, 310, 326, 342, 346)
+SLOW = (315, 23, 60, 300, 310, 326, 342, 346, 717)    # 717: standby speed (Engage waits for it)
 TEMP_NAMES = {326: "electronics", 342: "bearing", 346: "motor"}
 
 DEFAULTS = {
@@ -72,7 +82,9 @@ DEFAULTS = {
     "timeout_s": 0.3,
     "take_control": True,
     "restore_interface_on_exit": False,
-    "comm_timeout_s": 3.0,
+    "comm_warn_s": 3.0,
+    "comm_timeout_s": 20.0,
+    "port_reset_s": 10.0,
     "slow_poll_every": 10,
     "standby_speed_pct": None,      # write [P:717] at start-up when set (20..100 %)
     "nominal_hz": None,             # fallback until [P:315] has been read
@@ -167,6 +179,11 @@ class RS485Turbos:
             u = _Unit(tc.id, tc.label, p, pump, opened_at=now)
             self.units[tc.id] = u
             self._by_port.setdefault(key, []).append(u)
+        for units in self._by_port.values():         # spread the slow parameter set over the passes
+            for i, u in enumerate(units):
+                every = max(1, int(u.p["slow_poll_every"]))
+                u.polls = (i * every) // max(1, len(units))
+        self._last_reset: Dict[str, float] = {k: now for k in self._by_port}
         for u in self.units.values():
             self._connect(u)
         if start_threads:
@@ -297,9 +314,17 @@ class RS485Turbos:
             ti.error = True
         ti.still_spinning = (ti.speed_pct > 5.0) if hz is not None else None
         ti.temps = {name: f"{v[n]} °C" for n, name in TEMP_NAMES.items() if v.get(n) is not None}
+        sb = v.get(717) if v.get(717) is not None else u.p.get("standby_speed_pct")
+        ti.standby_set_pct = float(sb) if sb is not None else None
         ti.comm_ok = True
         silent = now - (last_ok or u.opened_at)
-        if silent > float(u.p["comm_timeout_s"]):
+        timeout_s = float(u.p["comm_timeout_s"])
+        warn_s = min(float(u.p.get("comm_warn_s") or timeout_s), timeout_s)
+        ti.comm_silent_s = silent
+        if warn_s < silent <= timeout_s:
+            ti.comm_warning = True
+            ti.motor_read = desired            # stale read-back: no motor conflict on a slow bus
+        if silent > timeout_s:
             ti.comm_ok = False
             ti.error = True
             ti.error_text = (f"no RS-485 reply from {u.pump.bus.port} address {u.pump.address} "
@@ -319,14 +344,63 @@ class RS485Turbos:
     def _run(self, units: List[_Unit]) -> None:
         key = str(units[0].p["port"]).upper()
         while not self._stop.is_set():
-            self._retry_port(key, units[0].p)
-            for u in units:
-                for w in units:                     # writes first, before every pump's poll
-                    self._apply(w)
-                if self._stop.is_set():
-                    return
-                self._poll(u)
+            self._pass(key, units)
             self._stop.wait(self.idle_s)
+
+    def _pass(self, key: str, units: List[_Unit]) -> None:
+        """One pass over a port: the pump silent longest is polled first; writes (a stop above all)
+        go out before every poll."""
+        self._retry_port(key, units[0].p)
+        self._maybe_reset_port(key, units)
+        with self.lock:
+            order = sorted(units, key=lambda u: u.last_ok or u.opened_at)
+        for u in order:
+            for w in units:
+                self._apply(w)
+            if self._stop.is_set():
+                return
+            self._poll(u)
+
+    def _maybe_reset_port(self, key: str, units: List[_Unit]) -> None:
+        """Every pump on this port silent for `port_reset_s`: close the port, open it again and take
+        RS-485 control again - what a program restart would have done, without stopping the facility."""
+        if self.read_only or key in self.port_errors:
+            return                                  # a port that cannot be opened has its own retry
+        now = self.clock()
+        reset_s = float(units[0].p.get("port_reset_s") or 0.0)
+        if reset_s <= 0:
+            return
+        silent = min(now - (u.last_ok or u.opened_at) for u in units)
+        if silent < reset_s or now - self._last_reset.get(key, 0.0) < reset_s:
+            return
+        self._last_reset[key] = now
+        p = units[0].p
+        bus = self.buses[key]
+        try:
+            with bus.lock:
+                try:
+                    bus.ser.close()
+                except Exception:
+                    pass
+                bus.ser = self._open_serial(p)
+        except Exception as exc:
+            self.port_errors[key] = f"cannot open {p['port']}: {exc}"
+            with bus.lock:
+                bus.ser = _NoPort()
+            for u in units:
+                u.events.append(f"{u.label}: {p['port']} silent for {silent:.0f} s - re-opening it failed ({exc})")
+            return
+        for u in units:
+            u.events.append(f"{u.label}: no reply on {p['port']} for {silent:.0f} s - port closed and re-opened")
+            u.applied_motor = None                  # unknown after a reset: send the desired state again
+            u.applied_standby = None
+            u.applied_speed = "unknown"
+            self._connect(u)
+
+    def poll_once_ordered(self) -> None:
+        """One pass per port exactly as the poller thread does it (tests)."""
+        for key, units in self._by_port.items():
+            self._pass(key, units)
 
     def poll_once(self) -> None:
         """One full pass over every port (tests, or a caller without threads)."""
@@ -388,10 +462,12 @@ class RS485Turbos:
                 u.applied_motor = want_motor
             with self.lock:
                 u.control_error = ""
+                u.last_ok = self.clock()            # the pump answered every write: it is alive
             return True
         except PVRejected as exc:
             with self.lock:
                 u.control_error = f"RS-485 command refused: {exc}"
+                u.last_ok = self.clock()            # a refusal is still an answer
         except PVError:
             pass                                    # timeout etc.: retried next pass, comm watchdog reports it
         return False

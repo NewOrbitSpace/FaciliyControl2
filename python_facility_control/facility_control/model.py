@@ -148,6 +148,16 @@ def normalize_contacts(raw: Dict[str, bool], motor_cmd: bool) -> Dict[str, bool]
       rotating     = any of at_speed / accelerating / braking   (drives "still spinning")
     """
     out = {k: bool(raw.get(k, False)) for k in CONTACT_NAMES}
+    if "rotating" in raw and "accelerating" not in raw and "braking" not in raw and "accel_decel" not in raw:
+        # VC100 TMP4 (HD15 remote, corrected 2026-10-28 with the test engineer): only 'running at any
+        # speed' (DI19) and 'speed above 80 %' (DI18).  Above 80 % = full speed.  The direction
+        # comes from the motor command: running with the motor off = braking (spinning down).
+        rot = bool(raw["rotating"])
+        out["braking"] = rot and not motor_cmd
+        out["accelerating"] = False                    # no such output - never reported
+        out["above_pct"] = bool(raw.get("at_speed", False))   # raw '>80 %' for the panel
+        out["at_speed"] = out["above_pct"] and not out["braking"]
+        return out
     if "accel_decel" in raw:
         ad = bool(raw["accel_decel"])
         if "accelerating" not in raw:
@@ -159,6 +169,55 @@ def normalize_contacts(raw: Dict[str, bool], motor_cmd: bool) -> Dict[str, bool]
     if "rotating" not in raw:
         out["rotating"] = bool(raw.get("at_speed", False)) or out["accelerating"] or out["braking"]
     return out
+
+
+def contact_summary(contacts: Dict[str, bool], motor_cmd: bool, at_speed_pct: Optional[float] = None,
+                    standby_cmd: bool = False) -> str:
+    """What a Shimadzu contact interface (no speed signal) is reporting, in a few words for the panel.
+
+    'ALARM', 'Warning', 'Accel', 'Decel' when active, then the speed:
+      TMP4 (speed-above contact, `at_speed_pct` given): ALWAYS '>80%' or '<80%' while the motor is
+          commanded or the pump is still turning - that DI is the only speed measurement it has;
+      TMP1 (rated-speed contact): 'At speed', or 'Rotating' if only turning.
+    A stopped pump with its motor off and no contact active reads 'Off' (TMP1: 'On' if commanded)."""
+    c = contacts or {}
+    parts = []
+    if c.get("alarm"):
+        parts.append("ALARM")
+    if c.get("warning"):
+        parts.append("Warning")
+    if c.get("accelerating"):
+        parts.append("Accel")
+    if c.get("braking"):
+        parts.append("Decel")
+    if at_speed_pct is not None and "above_pct" in c:  # TMP4: 'running' DI19 + '>80 %' DI18
+        above, rot = bool(c.get("above_pct")), bool(c.get("rotating"))
+        parts = [x for x in parts if x in ("ALARM", "Warning")]   # direction worked out below
+        if not rot and not above:
+            if not parts:
+                parts.append("On" if motor_cmd else "Off")
+        else:
+            if not motor_cmd:
+                parts.append("Decel")
+            elif standby_cmd:
+                parts.append("Standby")
+            elif not above:
+                parts.append("Accel")
+            parts.append(f">{at_speed_pct:.0f}%" if above else f"<{at_speed_pct:.0f}%")
+        return " · ".join(parts)
+    if at_speed_pct is not None:                       # speed band from a '>N %' contact
+        if c.get("at_speed"):
+            parts.append(f">{at_speed_pct:.0f}%")
+        elif motor_cmd or c.get("rotating") or parts:
+            parts.append(f"<{at_speed_pct:.0f}%")
+    else:
+        if c.get("at_speed"):
+            parts.append("At speed")
+        if c.get("rotating") and not (c.get("accelerating") or c.get("braking") or c.get("at_speed")):
+            parts.append("Rotating")
+    if not parts:
+        parts.append("On" if motor_cmd else "Off")
+    return " · ".join(parts)
 
 
 @dataclass
@@ -176,6 +235,9 @@ class TurboInputs:
     # link health and diagnostics for the panel / CSV.
     warning: bool = False
     comm_ok: Optional[bool] = None          # None = not a serial turbo
+    comm_silent_s: float = 0.0              # RS-485: seconds since the pump last answered ...
+    comm_warning: bool = False              # ... and it is past `comm_warn_s` (shown, not yet an error)
+    standby_set_pct: Optional[float] = None # HiPace RS-485: the pump's own standby speed [P:717], if read
     rs485: Dict[str, object] = field(default_factory=dict)
 
     @property
@@ -299,6 +361,10 @@ class TurboView:
     contacts: Dict[str, bool] = field(default_factory=dict)
     speed_set_pct: Optional[float] = None    # HiPace RS-485: commanded reduced speed (None = full)
     speed_settable: bool = False             # this turbo accepts a speed set value (HiPace RS-485)
+    not_full_speed: bool = False             # Auto 'Pumping to High Vac' and not at full speed in time
+    isolated: str = ""                       # taken out by the controller (e.g. its gate stuck) - why
+    comm_silent_s: float = 0.0               # RS-485: silent this long and past the warning time (0 = fine)
+    comm_lost: bool = False                  # RS-485: silent past the error time
 
 
 @dataclass
