@@ -182,7 +182,8 @@ class SimBackend(HardwareBackend):
                 continue
             if not air_ok and not (vc.fail_closed and target == 0.0):
                 continue  # needs air to move (fail-closed valves still spring shut)
-            rate = dt / max(sim.valve_actuation_s, 1e-3)
+            travel = 20.0 if st.faults.get(f"slow_{vid}") else sim.valve_actuation_s   # slow gate (VC100 gate 4)
+            rate = dt / max(travel, 1e-3)
             v.position += max(-rate, min(rate, target - v.position))
             v.position = min(1.0, max(0.0, v.position))
         # pumps.  A two-relay pump needs BOTH relays: closing the run relay with no power does

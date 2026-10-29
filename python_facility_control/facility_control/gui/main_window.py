@@ -283,11 +283,12 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------------ slots
     def _on_diagram_click(self, target: str):
-        """A Pfeiffer HiPace (RS-485) opens its speed window; everything else goes to the controller
-        as before (the Yes/No questions of the VI)."""
+        """A turbo with speed control opens its speed window - Pfeiffer HiPace: Off / Full / Standby /
+        Set speed; Shimadzu TMP1/TMP4 (2026-10-29): Off / Full / Standby.  Everything else goes to the
+        controller as before (the Yes/No questions of the VI)."""
         if target.startswith("turbo:"):
             tid = target.split(":", 1)[1]
-            if tid in self.cfg.turbo_ids and self.cfg.turbo(tid).speed_settable:
+            if tid in self.cfg.turbo_ids and (self.cfg.turbo(tid).speed_settable or self.cfg.turbo(tid).has_standby):
                 self.open_speed_dialog(tid)
                 return
         self.ctl.request_user_cmd(target)

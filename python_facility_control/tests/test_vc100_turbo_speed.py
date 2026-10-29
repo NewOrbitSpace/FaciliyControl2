@@ -159,7 +159,7 @@ def test_start_answered_no_changes_nothing():
     assert not s.commands.turbo_motor["turbo3"] and s.commands.speed_set("turbo3") is None
 
 
-def test_shimadzu_turbo_has_no_speed_control():
+def _old_test_shimadzu_turbo_has_no_speed_control():
     h = Harness(_vc100(), mode=Mode.ADMIN)
     h.step(2)
     h.ctl.request_turbo_speed("turbo1", "set", 50)
@@ -264,10 +264,10 @@ def test_clicking_a_pfeiffer_turbo_opens_its_speed_window():
     dlg.apply_btn.click()
     h.step(1)
     assert not h.ctl.snapshot().commands.turbo_motor["turbo2"]
-    # a Shimadzu turbo keeps the old Yes/No question
+    # a Shimadzu turbo (2026-10-29) gets the same window, without 'Set speed'
     win._on_diagram_click("turbo:turbo1")
     h.step(1)
-    assert "turbo1" not in win.speed_dialogs and len(h.dialogs.log) > n
+    assert "turbo1" in win.speed_dialogs and win.speed_dialogs["turbo1"].buttons["set"].isHidden()
     # Auto mode: window controls disabled
     h.ctl.mode = Mode.AUTO
     h.step(1)
@@ -593,3 +593,163 @@ def test_tmp4_reaches_speed_reached_in_the_simulator():
     h.ctl.request_user_cmd("turbo:turbo4")
     s = h.step(2)
     assert not s.commands.turbo_motor["turbo4"] and s.turbos["turbo4"].status == TurboStatus.SPINNING_DOWN
+
+
+# ---------------------------------------------------------------------------- turbo valve needs backing (2026-10-28)
+def _coasting_then_auto(cfg):
+    """Admin: TMP2/5 run up on a pumped foreline, stop, Turbo 2 valve shut, primary off, foreline
+    vented - then Auto (the event of 2026-10-28)."""
+    h = Harness(cfg, mode=Mode.ADMIN)
+    h.step(2)
+    for cmd in ("chiller", "primary", "valve:turbo2_valve"):
+        h.ctl.request_user_cmd(cmd)
+        h.step(3)
+    h.advance_plant(600)
+    h.step(2)
+    for tid in ("turbo2", "turbo5"):
+        h.ctl.request_turbo_speed(tid, "full", confirmed=True)
+        h.step(1)
+    h.advance_plant(600)
+    h.step(1)
+    for tid in ("turbo2", "turbo5"):
+        h.ctl.request_turbo_speed(tid, "off", confirmed=True)
+        h.step(1)
+    h.ctl.request_user_cmd("valve:turbo2_valve")
+    h.step(3)
+    h.ctl.request_user_cmd("primary")
+    h.step(3)
+    h.backend.state.p_foreline = 760.0
+    s = h.step(1)
+    assert s.turbos["turbo2"].speed_pct > 60 and not s.commands.valves["turbo2_valve"] and not s.commands.primary
+    h.ctl.request_change_to_auto()
+    return h
+
+
+def test_admin_to_auto_never_opens_a_turbo_valve_onto_an_unpumped_foreline():
+    c = _vc100()
+    h = _coasting_then_auto(c)
+    ok = c.thresholds.turbo_valve_foreline_ok_torr
+    opened = None
+    for i in range(60):
+        s = h.step(1)
+        pf = s.inputs.pressure(c.foreline_gauge.id)
+        pt = s.inputs.pressure("turbo2_gauge")
+        if s.commands.valves["turbo2_valve"] and opened is None:
+            opened = (h.ctl.primary_running(s.inputs), pf, pt, s.turbos["turbo2"].speed_pct)
+            break
+        assert not s.commands.valves["turbo2_valve"]
+    assert opened is not None, "turbo 2 valve never opened"
+    running, pf, pt, speed = opened
+    assert running and (pf < pt or pf < ok)               # primary on, foreline pumped down
+    assert speed > 60                                      # no collapse from ~70 % to 15 %
+    log = "\n".join(s.event_log)
+    assert "Turbo 2 Valve held closed – the primary pump is not running yet" in log
+    assert log.count("Kept the turbo 2 valve open") == 1     # no log spam while held
+
+
+def test_strict_rule_keeps_the_valve_closed_while_the_foreline_is_above_the_turbo_gauge():
+    c = _vc100()
+    c.thresholds.turbo_valve_foreline_ok_torr = None
+    h = _coasting_then_auto(c)
+    s = h.step(40)
+    assert not s.commands.valves["turbo2_valve"] and s.commands.primary
+    assert any("is not below Turbo 2 Gauge" in l for l in s.event_log)
+    assert sum("is not below Turbo 2 Gauge" in l for l in s.event_log) == 1
+
+
+def test_manual_refuses_and_admin_warns_on_an_unbacked_turbo_valve():
+    m = Harness(_vc100(), mode=Mode.MANUAL)
+    m.step(2)
+    m.ctl.request_user_cmd("valve:turbo2_valve")
+    s = m.step(2)
+    assert not s.commands.valves["turbo2_valve"]
+    assert any(k == "info" and "primary pump is not running" in msg for k, msg in m.dialogs.log)
+    a = Harness(_vc100(), mode=Mode.ADMIN)
+    a.step(2)
+    a.ctl.request_user_cmd("valve:turbo2_valve")
+    s = a.step(2)
+    q = [msg for k, msg in a.dialogs.log if msg.startswith("Open Turbo 2 Valve?")]
+    assert q and "WARNING" in q[-1] and s.commands.valves["turbo2_valve"]        # Admin: asked, then allowed
+
+
+# ---------------------------------------------------------------------------- Shimadzu standby window (2026-10-29)
+def test_shimadzu_turbos_get_off_full_standby_in_admin_and_manual():
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+    app = QApplication.instance() or QApplication([])
+    from facility_control.gui.main_window import MainWindow
+    c = _vc100()
+    assert c.turbo("turbo1").has_standby and c.turbo("turbo4").has_standby
+    h = Harness(c, mode=Mode.ADMIN)
+    win = MainWindow(h.cfg, h.ctl, sim_backend=h.backend)
+    win.show()
+    h.step(2)
+    win._poll(); app.processEvents()
+    n = len(h.dialogs.log)
+    win._on_diagram_click("turbo:turbo4")                    # window, not the old Yes/No
+    h.step(1)
+    dlg = win.speed_dialogs["turbo4"]
+    assert len(h.dialogs.log) == n and dlg.isVisible()
+    assert dlg.buttons["set"].isHidden() and dlg.slider.isHidden() and not dlg.buttons["standby"].isHidden()
+    dlg.buttons["standby"].click()
+    assert dlg.apply_btn.text() == "Start in standby"
+    dlg.apply_btn.click()
+    s = h.step(2)
+    assert s.commands.turbo_motor["turbo4"] and s.commands.turbo_standby["turbo4"]
+    win._poll(); app.processEvents()
+    assert dlg.buttons["standby"].isChecked() and "Standby" in s.turbos["turbo4"].status.label
+    dlg.buttons["full"].click()
+    assert dlg.apply_btn.text() == "Change to full speed"
+    dlg.apply_btn.click()
+    s = h.step(1)
+    assert s.commands.turbo_motor["turbo4"] and not s.commands.turbo_standby["turbo4"]
+    win._poll(); app.processEvents()
+    dlg.buttons["standby"].click()
+    dlg.apply_btn.click()                                    # running -> standby
+    s = h.step(1)
+    assert s.commands.turbo_standby["turbo4"]
+    win._poll(); app.processEvents()
+    dlg.buttons["off"].click()
+    dlg.apply_btn.click()
+    s = h.step(1)
+    assert not s.commands.turbo_motor["turbo4"] and not s.commands.turbo_standby["turbo4"]
+    # 'set' is refused for a Shimadzu even if asked directly
+    h.ctl.request_turbo_speed("turbo1", "set", 50, confirmed=True)
+    s = h.step(2)
+    assert not s.commands.turbo_motor["turbo1"]
+    win.close()
+    # Manual: same window, interlocks apply (primary off -> start refused)
+    m = Harness(_vc100(), mode=Mode.MANUAL)
+    m.step(2)
+    m.ctl.request_turbo_speed("turbo1", "standby", confirmed=True)
+    s = m.step(2)
+    assert not s.commands.turbo_motor["turbo1"] and any(k == "info" for k, _ in m.dialogs.log)
+
+
+# ---------------------------------------------------------------------------- slow TMP4 gate (2026-10-29)
+def test_slow_tmp4_gate_gets_its_30_s_before_it_counts_as_stuck():
+    from facility_control.model import FacilityState as S
+    c = _vc100()
+    assert c.turbo("turbo4").gate_open_timeout_s == 30.0
+    h = Harness(c)
+    h.backend.set_fault("slow_gate4", True)                  # 20 s travel: slower than the 9 s settle
+    h.step(2)
+    h.ctl.request_auto_button("pump_to_high_vac")
+    for _ in range(40000):
+        s = h.step()
+        assert not s.turbos["turbo4"].isolated, "a slow gate was treated as stuck"
+        assert s.mode == Mode.AUTO and not s.error.status
+        if s.current == S.PUMPING_TO_HIGH_VAC and s.inputs.valve_reads.get("gate4"):
+            break
+    assert s.commands.valves["gate4"] and not [m for k, m in h.dialogs.log if "Thor" in m]
+    log = "\n".join(s.event_log)
+    assert "Gate 4 Valve not open yet after" in log and "giving it up to 30 s" in log
+    assert "Gate 4 Valve open after" in log
+
+
+def test_really_stuck_tmp4_gate_is_still_taken_out_after_30_s():
+    h, s = _to_high_vac_with_stuck_gate4()
+    assert s.turbos["turbo4"].isolated
+    log = "\n".join(s.event_log)
+    assert log.index("giving it up to 30 s") < log.index("Thor's hammer")

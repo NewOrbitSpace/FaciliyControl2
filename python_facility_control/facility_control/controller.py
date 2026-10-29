@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import math
 import queue
+import re
 import threading
 import time
 from dataclasses import dataclass, field, replace
@@ -105,6 +106,11 @@ class AutoAnswerDialogs:
     # backwards-compatible helpers used by older tests
     def two_button(self, message: str, yes: str = "Yes", no: str = "No") -> bool:
         return self.ask("two", message, [yes, no]).result == 0
+
+
+def _reason_kind(message: str) -> str:
+    """A hold message without its numbers - to log a held turbo valve once per reason."""
+    return re.sub(r"[-+]?\d[\d.]*(?:[eE][-+]?\d+)?", "#", message)
 
 
 # ---------------------------------------------------------------------------- requests
@@ -189,6 +195,9 @@ class Controller:
         self._high_vac_since: Optional[float] = None     # Auto entered Pumping to High Vac (full-speed check)
         self._force_command = False                      # write commands this iteration even while held
         self._comm_lost: Set[str] = set()                # RS-485 turbos currently past comm_timeout_s
+        self._gate_open_cmd_at: Dict[str, float] = {}    # gate -> when it was commanded open
+        self._gate_slow: Set[str] = set()                # gates given extra time to open (logged)
+        self._tv_held: Dict[str, str] = {}               # turbo valve -> why it is held closed (no backing yet)
         for tc in cfg.turbos:                            # runtime take-outs never survive a restart
             tc.disabled_reason = ""
         self._not_full: Set[str] = set()                 # turbos already reported 'not at full speed'
@@ -388,6 +397,7 @@ class Controller:
         self._force_command = False
         # ---- frame 4: command (only when a decision was made)
         if new is not None:
+            new = self._guard_turbo_valve_openings(prev, new, inp)
             new = self._stagger_gate_openings(prev, new, now)
             self.cmds = new                          # indicators show the new command during the wait
             self._command(prev, new, now)
@@ -398,6 +408,43 @@ class Controller:
         self._accumulate_run_hours(inp, now)
         self._csv_row()
         self._publish()
+
+    def _guard_turbo_valve_openings(self, prev: Commands, new: Commands, inp: Inputs) -> Commands:
+        """Never open a turbo valve onto a foreline that is not pumped (auto_mode.turbo_valve_needs_backing).
+
+        Auto and Manual mode: a turbo valve that is to OPEN stays closed until the primary pump is
+        running and the foreline gauge reads below that valve's turbo gauge.  While it is held, the
+        turbos behind it do not start and their gates do not open (a turbo already running keeps
+        running).  The primary pump is commanded on so the condition can come true.  Auto simply
+        asks again every cycle, so the valve opens the moment it is safe.  Closing is never held."""
+        cfg = self.cfg
+        if not cfg.auto_mode.turbo_valve_needs_backing or self.mode not in (Mode.AUTO, Mode.MANUAL):
+            self._tv_held = {}
+            return new
+        held_now: Dict[str, str] = {}
+        for v in cfg.valves_of_kind("turbo"):
+            if not new.valves.get(v.id, False) or prev.valves.get(v.id, False):
+                continue                                 # not an opening
+            verdict = self.interlocks.backing_ready(v.id, new, inp)
+            if verdict.allowed:
+                if v.id in self._tv_held:
+                    self._log(f"{v.label}: primary pump running and the foreline pumped down – opening "
+                              f"({time.strftime('%H:%M:%S')})")
+                continue
+            held_now[v.id] = verdict.message
+            new.valves[v.id] = False
+            new.primary = True                           # so the backing can come up
+            for t in cfg.turbos_on_valve(v.id):
+                if not prev.turbo_motor.get(t.id, False):
+                    new.turbo_motor[t.id] = False        # no start without backing
+                    new.turbo_standby[t.id] = False
+                if not prev.valves.get(t.gate_valve, False):
+                    new.valves[t.gate_valve] = False
+            # log once per reason (the pressures in the text change every cycle, the reason does not)
+            if _reason_kind(self._tv_held.get(v.id, "")) != _reason_kind(verdict.message):
+                self._log(f"{verdict.message} ({time.strftime('%H:%M:%S')})")
+        self._tv_held = held_now
+        return new
 
     def _stagger_gate_openings(self, prev: Commands, new: Commands, now: float) -> Commands:
         """Shared compressed-air line: never open two gate valves within `gate_open_stagger_s`.
@@ -545,8 +592,13 @@ class Controller:
         for vid, v in cfg.valves.items():
             conflict = (bool(self.cmds.valves.get(vid, False)) != bool(inp.valve_reads.get(vid, False))
                         and not self._suppressed(f"valve:{vid}", now))
-            if conflict and v.kind == "gate" and self._gate_failed_to_open(vid, inp):
-                conflict = False                     # handled: that turbo is taken out, Auto carries on
+            if conflict and v.kind == "gate" and self._gate_failed_to_open(vid, inp, now):
+                conflict = False                     # handled: still allowed to open, or that turbo taken out
+            if vid in self._gate_slow and (inp.valve_reads.get(vid, False) or not self.cmds.valves.get(vid, False)):
+                self._gate_slow.discard(vid)
+                if inp.valve_reads.get(vid, False):
+                    took = now - self._gate_open_cmd_at.get(vid, now)
+                    self._log(f"{v.label} open after {took:.0f} s ({time.strftime('%H:%M:%S')})")
             self._valve_errors[vid] = conflict
             if conflict:
                 code = VALVE_ERROR_CODES.get(v.kind, ERR_GATE_CONFLICT)
@@ -622,7 +674,7 @@ class Controller:
         self.last_error_seen = key
         return err
 
-    def _gate_failed_to_open(self, vid: str, inp: Inputs) -> bool:
+    def _gate_failed_to_open(self, vid: str, inp: Inputs, now: Optional[float] = None) -> bool:
         """Auto mode, a gate commanded OPEN still reads closed after its settle time, and its turbo
         has `isolate_on_gate_failure` (VC100 TMP4): close that gate, switch that turbo off, take it out
         of Auto's set and tell the operator - instead of a gate conflict that stops Auto (and with it
@@ -634,6 +686,17 @@ class Controller:
         tcs = [t for t in self.cfg.turbos if t.gate_valve == vid and t.in_use and t.isolate_on_gate_failure]
         if not tcs:
             return False
+        # a slow gate (VC100 gate 4) gets `gate_open_timeout_s` from its open command before it is stuck
+        now = self.clock() if now is None else now
+        allowed = max((t.gate_open_timeout_s or 0.0) for t in tcs)
+        since = self._gate_open_cmd_at.get(vid)
+        if allowed and since is not None and now - since < allowed and not any(t.disabled_reason for t in tcs):
+            if vid not in self._gate_slow:
+                self._gate_slow.add(vid)
+                self._log(f"{self.cfg.valves[vid].label} not open yet after {now - since:.0f} s – giving it up to "
+                          f"{allowed:.0f} s ({time.strftime('%H:%M:%S')})")
+            return True                              # still opening: no conflict, no take-out yet
+        self._gate_slow.discard(vid)
         for tc in tcs:
             if tc.disabled_reason:
                 continue                             # already taken out; the close is on its way
@@ -911,7 +974,13 @@ class Controller:
             def apply(result, cmds, vid=vid, want=want):
                 if result == 0:
                     cmds.valves[vid] = want
-            self._open_dialog("two", f"{'Close' if is_open else 'Open'} {v.label}?", ["Yes", "No"], apply)
+            question = f"{'Close' if is_open else 'Open'} {v.label}?"
+            if want and v.kind == "turbo" and not manual:      # Admin: no interlock, but say it
+                verdict = self.interlocks.backing_ready(vid, new, inp)
+                if not verdict.allowed:
+                    question += (f"\n\nWARNING: {verdict.message.split(' – ', 1)[-1]}.\n"
+                                 "Opening it now can let foreline gas into a spinning turbo.")
+            self._open_dialog("two", question, ["Yes", "No"], apply)
         elif target == "primary":
             want = not new.primary
             if manual:
@@ -983,8 +1052,14 @@ class Controller:
         if tid not in cfg.turbo_ids:
             return
         tc = cfg.turbo(tid)
-        if not tc.speed_settable:
-            self._info(f"{tc.label}: speed control is only available for the Pfeiffer HiPace pumps on RS-485")
+        if mode == "set" and not tc.speed_settable:
+            self._info(f"{tc.label}: a speed set value is only available for the Pfeiffer HiPace pumps on RS-485")
+            return
+        if mode == "standby" and not tc.has_standby:
+            self._info(f"{tc.label} has no standby line")
+            return
+        if not (tc.speed_settable or tc.has_standby):
+            self._info(f"{tc.label}: no speed control (no standby line)")
             return
         if not tc.in_use:
             self._info(f"{tc.label} is not in use")
@@ -1217,6 +1292,11 @@ class Controller:
         # else 1 s) + chiller + primary (VC100: 10 s when switched on, none when switched off)
         waits: List[Tuple[float, str]] = []
         changed_valves = [v for v in cfg.valve_ids if prev.valves.get(v) != new.valves.get(v)]
+        for v in changed_valves:                 # when each gate was told to open (slow-gate allowance)
+            if new.valves.get(v):
+                self._gate_open_cmd_at[v] = now
+            else:
+                self._gate_open_cmd_at.pop(v, None)
         gate_changed = any(cfg.valves[v].kind == "gate" for v in changed_valves)
         bypass_changed = any(cfg.valves[v].kind == "bypass" for v in changed_valves)
         if changed_valves:

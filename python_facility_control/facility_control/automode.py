@@ -75,6 +75,7 @@ class AutoMemory:
     last_gate_open: Optional[float] = None       # time of the last gate OPEN command (gate_open_stagger_s)
     standby_wait_start: Optional[float] = None   # Engage, turbos-first: when the turbos were started
     hv_request_wrg: Optional[float] = None       # chamber pressure when high vac was asked for (Torr)
+    kept_tv_logged: Set[str] = field(default_factory=set)   # 'kept the valve open' logged once per episode
 
 
 @dataclass
@@ -759,8 +760,13 @@ class AutoStateMachine:
             if not cmds.valves.get(t.turbo_valve, False):
                 cmds.valves[t.turbo_valve] = True
                 who = "turbo" if len(cfg.turbos) == 1 else t.label.lower()
-                if not prev.valves.get(t.turbo_valve, False):
+                if not prev.valves.get(t.turbo_valve, False) and t.id not in self.mem.kept_tv_logged:
+                    self.mem.kept_tv_logged.add(t.id)
                     log.append(f"Kept the {who} valve open - the {who} is still spinning at {_ts()}")
+        for t in cfg.turbos:                         # re-arm the message once the turbo has stopped
+            if t.id in self.mem.kept_tv_logged and not self._spinning(inp, t, slow_pct) \
+                    and not cmds.turbo_motor.get(t.id, False):
+                self.mem.kept_tv_logged.discard(t.id)
         if needs_backing and not cmds.primary:
             cmds.primary = True
             if not prev.primary:

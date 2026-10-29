@@ -333,7 +333,9 @@ class SchematicWidget(QWidget):
         p.drawEllipse(QPointF(cx, cy), r * 0.26, r * 0.26)
         tcfg = self.cfg.turbo(tid)
         tip = ("Pfeiffer turbo: click for speed control (Off / Full speed / Standby / Set speed)"
-               if tcfg.speed_settable else "Turbo pump: click to start/stop/standby")
+               if tcfg.speed_settable else
+               "Turbo pump: click for Off / Full speed / Standby" if tcfg.has_standby
+               else "Turbo pump: click to start/stop")
         self.hits.append(Hit(QRectF(cx - r, cy - r, 2 * r, 2 * r), f"turbo:{tid}", tip))
 
     def _gauge_bubble(self, p: QPainter, cx: float, cy: float, tag: str = "PT"):

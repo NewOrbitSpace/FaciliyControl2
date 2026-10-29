@@ -1,4 +1,5 @@
-"""Speed window for one Pfeiffer HiPace turbo on RS-485 (VC100: Turbo 2, 3, 5, 6).
+"""Speed window for one turbo (VC100: Pfeiffer HiPace Turbo 2, 3, 5, 6 on RS-485; since 2026-10-29
+also the Shimadzu TMP1 / TMP4 - Off / Full speed / Standby only, via their motor + standby lines).
 
 Opens when the operator clicks that turbo on the diagram (Manual / Admin mode):
 
@@ -21,6 +22,8 @@ full speed / its own standby).
 """
 from __future__ import annotations
 
+import html
+
 from typing import Dict, Optional
 
 from PySide6.QtCore import Qt
@@ -28,7 +31,7 @@ from PySide6.QtWidgets import (QButtonGroup, QDialog, QFrame, QHBoxLayout, QLabe
                                QSpinBox, QVBoxLayout, QWidget)
 
 from ..config import FacilityConfig
-from ..model import Mode, Snapshot
+from ..model import Mode, Snapshot, contact_summary
 
 MODES = ("off", "full", "standby", "set")
 LABELS = {"off": "Off", "full": "Full speed", "standby": "Standby", "set": "Set speed"}
@@ -64,6 +67,7 @@ class TurboSpeedDialog(QDialog):
         self.cfg, self.ctl, self.tid = cfg, controller, tid
         self.tc = cfg.turbo(tid)
         self.lo, self.hi = self.tc.speed_set_range
+        self.settable = self.tc.speed_settable      # HiPace: + 'Set speed'; Shimadzu: Off/Full/Standby
         self.setWindowTitle(f"{self.tc.label} – speed")
         self.setModal(False)
         self.setAttribute(Qt.WA_DeleteOnClose, False)
@@ -75,7 +79,8 @@ class TurboSpeedDialog(QDialog):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(16, 14, 16, 12)
         lay.setSpacing(10)
-        title = QLabel(f"{self.tc.label}  –  Pfeiffer HiPace (RS-485)")
+        kind = "Pfeiffer HiPace (RS-485)" if self.settable else "Shimadzu"
+        title = QLabel(f"{self.tc.label}  –  {kind}")
         title.setStyleSheet("QLabel { font-size: 16px; font-weight: bold; }")
         lay.addWidget(title)
         self.now = QLabel("")
@@ -99,6 +104,10 @@ class TurboSpeedDialog(QDialog):
             self.group.addButton(b)
             self.buttons[m] = b
             row.addWidget(b)
+            if m == "set" and not self.settable:
+                b.hide()                          # no speed set value on this pump
+            if m == "standby" and not self.settable:
+                b.setToolTip("Run in standby (standby output line on)")
         lay.addLayout(row)
 
         srow = QHBoxLayout()
@@ -123,6 +132,9 @@ class TurboSpeedDialog(QDialog):
         self.spin.setValue(start)
         self.slider.valueChanged.connect(self._on_slider)
         self.spin.valueChanged.connect(self._on_spin)
+        if not self.settable:
+            for w in (self.slider_label, self.slider, self.spin):
+                w.hide()
 
         self.note = QLabel("")
         self.note.setWordWrap(True)
@@ -240,7 +252,12 @@ class TurboSpeedDialog(QDialog):
                 "set": f"set to {sp:.0f} %" if sp is not None else "set speed"}[mode]
         if tv is not None:
             status = tv.status.label.replace("Turbo ", "")
-            self.now.setText(f"Now: <b>{what}</b>   ·   actual <b>{tv.speed_pct:.0f} %</b>   ·   {status}")
+            if tv.has_speed:
+                actual = f"actual <b>{tv.speed_pct:.0f} %</b>"
+            else:                                 # Shimadzu: what its status contacts say
+                sig = contact_summary(tv.contacts, tv.motor_read, self.tc.params.get("at_speed_pct"), tv.standby)
+                actual = "signals <b>" + html.escape(sig) + "</b>"      # '<80%' is not a tag
+            self.now.setText(f"Now: <b>{what}</b>   ·   {actual}   ·   {status}")
         else:
             self.now.setText(f"Now: <b>{what}</b>")
         self._refresh_controls()

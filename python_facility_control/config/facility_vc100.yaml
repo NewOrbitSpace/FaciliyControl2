@@ -223,6 +223,9 @@ turbos:
     # (instead of a gate conflict that stops Auto).  'Clear Error' lets Auto try TMP4 again.
     isolate_on_gate_failure: true
     gate_failure_message: "Unable to open TMP4 gate valve, might need Thor's hammer!"
+    gate_open_timeout_s: 30            # gate 4 is slow: it gets 30 s from the open command to read OPEN before
+                                       # it counts as stuck (2026-10-29: was the 9 s gate settle time - it was
+                                       # closed again half way open)
     control_mode: shimadzu_contacts
     gate_valve: gate4
     turbo_valve: turbo1_valve
@@ -313,6 +316,8 @@ thresholds:
   manual_foreline_pressure_max_mbar: 2.13
   compressor_min_bar: 5.0              # 'Air Compressor Pressure Calc (Bar) < 5.0'
   compressor_low_time_s: 5.0           # ... for 5 s ('Elapsed Time5') -> "Compressor Pressure Below 5 Bar!" (stops Auto mode)
+  turbo_valve_foreline_ok_mbar: 1.0e-1  # turbo valve may open (primary running) when the foreline is below the turbo
+                                       # gauge OR below this - the turbos' normal backing pressure (2026-10-28)
   turbo_start_before_gates_below_mbar: 1.0e-2   # Engage below this: turbos start with the gates CLOSED, run up to
                                        # standby, THEN the gates open (2026-10-28).  At/above it: the VI's order
                                        # (gates first, then turbos).  null = always the VI's order.
@@ -348,6 +353,8 @@ timings:
 # ---------------------------------------------------------------- Auto-mode rules that differ from Main_V4.4
 auto_mode:
   ask_manual_vent_valve: false             # 2026-10-26: VC100 has no hand vent valve - no 'Is the manual vent valve closed?'
+  turbo_valve_needs_backing: true          # 2026-10-28: a turbo valve opens only once the primary pump runs AND the
+                                           # foreline gauge is below that valve's turbo gauge (Auto + Manual; Admin warns)
   overnight_backing_while_spinning: true   # Overnight: primary + chiller keep running and each spinning turbo's
                                            # valve stays open until that turbo is below the slowing threshold
   turbo_valve_gauge_rule: true             # turbo valves compared with the turbo gauges (see docs/VC100_REFERENCE.md)

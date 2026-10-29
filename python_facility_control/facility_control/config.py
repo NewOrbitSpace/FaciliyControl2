@@ -117,6 +117,9 @@ class TurboConfig:
     # with a gate conflict.  VC100 TMP4 (new gate that sticks, 2026-10-28).
     isolate_on_gate_failure: bool = False
     gate_failure_message: str = ""
+    # ... and how long the gate gets to read OPEN after the open command before it counts as stuck
+    # (None = the normal gate settle time).  VC100 TMP4: its new gate is slow (2026-10-29).
+    gate_open_timeout_s: Optional[float] = None
     # RUNTIME, not from the profile: why the controller has taken this turbo out of Auto's set
     # ("" = not taken out).  Cleared by Clear Error, a change to Manual/Admin, or Facility Off.
     disabled_reason: str = ""
@@ -135,6 +138,11 @@ class TurboConfig:
     @property
     def has_error_ack(self) -> bool:
         return bool(self.params.get("error_ack_do")) or self.control_mode == "hipace_rs485"
+
+    @property
+    def has_standby(self) -> bool:
+        """Can be put in standby: a standby output line (Shimadzu TMP1/TMP4, D-SUB HiPace) or RS-485."""
+        return bool(self.params.get("standby_do")) or self.control_mode == "hipace_rs485"
 
     @property
     def speed_settable(self) -> bool:
@@ -183,6 +191,10 @@ class Thresholds:
     # standby, no reduced set value) within this time, else '<Turbo> not at full speed' is logged and
     # shown on its card.  None = no supervision.
     turbo_full_speed_timeout_s: Optional[float] = None
+    # turbo_valve_needs_backing: with the primary running, a foreline below this is good enough to
+    # open a turbo valve even if the turbo gauge reads lower still (the turbos' normal running
+    # backing pressure; user choice 2026-10-28, VC100 1e-1 mBar).  None = strictly foreline < gauge.
+    turbo_valve_foreline_ok_torr: Optional[float] = None
     # Engage Turbo below this chamber pressure (2026-10-28, VC100 1e-2 mBar): start the turbos with
     # their gates still CLOSED, wait until every turbo is at its standby speed, then open the gates
     # (one by one on a shared air line).  At or above it - or None - the VI's order: gates first,
@@ -220,7 +232,7 @@ class Thresholds:
 _TORR_KEYS = ("turbo_on_threshold", "gauge_error_threshold", "wrg_error_threshold", "turbo_high_pressure_shutoff",
               "manual_main_pressure_max", "manual_foreline_pressure_max", "bypass_first_above",
               "overnight_skip_below", "engage_check_threshold", "vent_confirm_above",
-              "turbo_start_before_gates_below")
+              "turbo_start_before_gates_below", "turbo_valve_foreline_ok")
 
 
 @dataclass
@@ -274,6 +286,12 @@ class AutoBehaviour:
     # Pump to Rough / High Vac / Overnight first ask "Is the manual vent valve closed?".  Only for a
     # facility that has a hand vent valve (small chamber); VC100 has none -> false in its profile.
     ask_manual_vent_valve: bool = True
+    # A turbo valve may only OPEN when the primary pump is running AND the foreline is below that
+    # valve's turbo gauge (2026-10-28, VC100: Admin -> Auto with TMP2/5 coasting at ~70 % opened the
+    # Turbo 2 valve onto a foreline at atmosphere before the primary had started).  Held valves also
+    # hold their turbos' gates and motor starts.  Auto + Manual mode; Admin gets a warning in the
+    # Yes/No question.  Closing is never held.
+    turbo_valve_needs_backing: bool = False
     overnight_backing_while_spinning: bool = False
     # Turbo valves compared against the turbo gauges (VC100):
     #   Pumping to Rough: a turbo valve may also open when the bypass is open and the chamber is
@@ -554,7 +572,9 @@ def build_config(raw: Dict[str, Any], source_path: str = "") -> FacilityConfig:
                                   turbo_valve=t["turbo_valve"], gauge=t.get("gauge"), in_use=bool(t.get("in_use", True)),
                                   params=modes[mode], all_modes=modes,
                                   isolate_on_gate_failure=bool(t.get("isolate_on_gate_failure", False)),
-                                  gate_failure_message=str(t.get("gate_failure_message") or "")))
+                                  gate_failure_message=str(t.get("gate_failure_message") or ""),
+                                  gate_open_timeout_s=(None if t.get("gate_open_timeout_s") is None
+                                                       else float(t["gate_open_timeout_s"]))))
 
     def dc(cls, block):
         block = dict(block or {})

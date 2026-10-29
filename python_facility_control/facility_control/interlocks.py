@@ -10,8 +10,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
+import math
+
 from .config import FacilityConfig
 from .model import Commands, Inputs, primary_is_running
+from .units import torr_to
 
 
 @dataclass
@@ -57,6 +60,40 @@ class Interlocks:
                 return True
         return False
 
+    def backing_ready(self, valve_id: str, cmds: Commands, inp: Inputs) -> Verdict:
+        """May this turbo valve open?  Primary pump running AND foreline gauge below the valve's turbo
+        gauge (an unreadable gauge = no).  Always allowed when `auto_mode.turbo_valve_needs_backing`
+        is off."""
+        cfg = self.cfg
+        if not cfg.auto_mode.turbo_valve_needs_backing:
+            return Verdict(True)
+        label = cfg.valves[valve_id].label
+        if not self._primary_running(cmds, inp):
+            return Verdict(False, f"{label} held closed – the primary pump is not running yet")
+        fg = cfg.foreline_gauge
+        if fg is None:
+            return Verdict(True)
+        bad = self.th.gauge_error_threshold_torr
+        pf = inp.pressure(fg.id)
+        if math.isnan(pf) or pf <= bad:
+            return Verdict(False, f"{label} held closed – {fg.label} reading not valid")
+        ok_below = self.th.turbo_valve_foreline_ok_torr
+        if ok_below is not None and pf < ok_below:
+            return Verdict(True)                         # normal running backing pressure
+        seen = set()
+        for t in cfg.turbos_on_valve(valve_id):
+            g = cfg.turbo_gauge(t.id)
+            if g is None or g.id in seen:
+                continue
+            seen.add(g.id)
+            pt = inp.pressure(g.id)
+            if math.isnan(pt) or pt <= bad:
+                return Verdict(False, f"{label} held closed – {g.label} reading not valid")
+            if not pf < pt:
+                return Verdict(False, f"{label} held closed – {fg.label} {torr_to('mbar', pf):.1e} mBar is not "
+                                      f"below {g.label} {torr_to('mbar', pt):.1e} mBar")
+        return Verdict(True)
+
     def _turbo_stopped(self, cmds: Commands, inp: Inputs, tid: Optional[str] = None) -> Verdict:
         if self._motor(cmds, tid):
             return Verdict(False, "Please Turn Turbo Off First")
@@ -71,7 +108,7 @@ class Interlocks:
             if want_open:
                 if self._valve(cmds, inp, "vent"):
                     return Verdict(False, "Please Close Vent Valve first")
-                return Verdict(True)
+                return self.backing_ready(valve_id, cmds, inp)
             # closing while a turbo runs would trap it - every turbo backed through this valve
             # (VC100: TMP4/5/6 share Turbo 1/2/3's valve)
             for t in (self.cfg.turbos_on_valve(valve_id) or [None]):
