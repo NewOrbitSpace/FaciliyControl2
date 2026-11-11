@@ -146,6 +146,11 @@ thresholds:
   overnight_chiller_speed_pct: 10.0
   manual_main_pressure_max_torr: 0.01 # Manual mode: turbo may start if Turbo Convectron < this
   manual_foreline_pressure_max_torr: 1.6
+  # Exposure limit (2026-11-11): the highest chamber pressure a TURNING turbo may be joined to - at its
+  # exhaust (bypass open + turbo valve open) or its inlet (gate).  Above it Auto shuts the turbo valve
+  # BEFORE the bypass may open and the turbo coasts isolated until the chamber is roughed.
+  # null = wiggle room x turbo-on threshold = 1 mBar (what the VI's Engage Turbo check accepts).
+  turbo_exposure_max_mbar: null
   # Pumping-to-Rough start order (test engineer, 2026-09-08):
   #   chamber above this -> open the bypass valve FIRST, then start the primary pump
   #   chamber below this -> start the primary pump first, bypass follows after primary_to_bypass_gap_s

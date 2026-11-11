@@ -195,6 +195,14 @@ class Thresholds:
     # open a turbo valve even if the turbo gauge reads lower still (the turbos' normal running
     # backing pressure; user choice 2026-10-28, VC100 1e-1 mBar).  None = strictly foreline < gauge.
     turbo_valve_foreline_ok_torr: Optional[float] = None
+    # Exposure limit (2026-11-11): the highest chamber pressure a TURNING turbo may be joined to -
+    # at its exhaust (bypass open + its turbo valve open) or at its inlet (its gate opening).
+    # Above it (or with the chamber gauge unreadable) Auto shuts the turbo valve of every turning
+    # turbo BEFORE the bypass may open and lets the turbo coast isolated until the chamber is
+    # roughed; Manual mode refuses the corresponding actions.  None = wiggle room x turbo-on
+    # threshold, i.e. the pressure both VIs accept in Engage Turbo with the bypass and the turbo
+    # valves open (small chamber 1 mBar, VC100 1.25 mBar).
+    turbo_exposure_max_torr: Optional[float] = None
     # Engage Turbo below this chamber pressure (2026-10-28, VC100 1e-2 mBar): start the turbos with
     # their gates still CLOSED, wait until every turbo is at its standby speed, then open the gates
     # (one by one on a shared air line).  At or above it - or None - the VI's order: gates first,
@@ -232,7 +240,7 @@ class Thresholds:
 _TORR_KEYS = ("turbo_on_threshold", "gauge_error_threshold", "wrg_error_threshold", "turbo_high_pressure_shutoff",
               "manual_main_pressure_max", "manual_foreline_pressure_max", "bypass_first_above",
               "overnight_skip_below", "engage_check_threshold", "vent_confirm_above",
-              "turbo_start_before_gates_below", "turbo_valve_foreline_ok")
+              "turbo_start_before_gates_below", "turbo_valve_foreline_ok", "turbo_exposure_max")
 
 
 @dataclass

@@ -237,7 +237,9 @@ out of *Venting* and on the VC100 profile.  Three rules now prevent it.  Two are
 at the end of `AutoStateMachine.step()`, next to the existing high-pressure turbo shut-off, rather
 than per button, because the hazard is a property of the plant and not of any one state:
 
-* **A spinning turbo keeps its valve open *and* the primary running.**  If a turbo is turning (above
+* *(amended 2026-11-11 – see "A turning turbo never sees an un-roughed chamber" below: this rule
+  now yields whenever keeping the valve open would put the chamber on the turbo's exhaust.)*
+  **A spinning turbo keeps its valve open *and* the primary running.**  If a turbo is turning (above
   `turbo_slowing_threshold_pct`, the same test the state machine uses) or is commanded to run, its
   valve is held open and the primary pump is held on, whatever the state logic asked for.  Manual
   mode always refused to close the valve (`interlocks.py`, "closing while turbo runs would trap it");
@@ -254,6 +256,52 @@ than per button, because the hazard is a property of the plant and not of any on
 
 `tests/test_spinning_turbo_safety.py` replays the incident end to end and sweeps the whole spin-down
 asserting the valve is never shut on a turning rotor, on both chamber profiles.
+
+## A turning turbo never sees an un-roughed chamber (2026-11-11)
+
+Reported from the VC100 and the small chamber: with the turbos spinning down (or still running after
+**Vent**), the chamber at atmosphere, gates closed, turbo valves open and the primary backing them,
+pressing **Pump to High Vac** or **Pump to Rough** opened the **bypass with the turbo valves still
+open** — the exhaust of a turning turbo joined to a chamber at atmosphere.
+
+*Cause.*  Not the VIs: both close the turbo valves first.  VC100 VI, turbo-valve tunnel of the Auto
+case structure (`chambers/medium/analysis/auto_frames.txt`): frame 8 *Venting* and frame 7 *Turbo
+slowing* output `[F,F,F]` whenever the next state is a different one; the command frame then waits
+its settle time, and *Pumping to Rough* opens the bypass afterwards and keeps the valves shut until
+rough vacuum.  Main_V4.4 has the same shape (`TV := speed > 15 %` "only while cur stays 8";
+`TV := (tgt ≠ 1) ∧ (TV_prev ∨ done)`).  The port reproduced that until commit **a8f8052
+(2026-09-22)**, whose global rule "a spinning turbo keeps its valve open" has no pressure condition
+and re-opened the valves in the very iteration the state logic closed them.  Its bypass guard only
+covers the opposite case (chamber *below* the foreline).
+
+*Rule.*  **Never expose comes before never strand.**  Enforced at the end of
+`AutoStateMachine.step()` for every state:
+
+1. While the bypass is open, about to open, or not yet read shut, and the chamber is above the
+   **exposure limit** (or its gauge is unreadable): every turbo valve with a *turning* turbo behind
+   it is shut and that turbo's motor is switched off — it coasts isolated for the time the roughing
+   takes — and the **bypass is held shut** until each of those valves was commanded shut in an
+   earlier iteration (so it had its settle wait) *and* its reed contact reads shut.
+2. The bypass never opens into a chamber below the foreline (unchanged).
+3. Otherwise a turning turbo keeps its backing (the 2026-09-22 / 09-23 rule): a valve that is open
+   stays open, the primary keeps running, and a valve that is *shut* is opened again only onto a
+   foreline that is really pumped — primary running and the foreline below
+   `turbo_valve_foreline_ok` (else the turbo-on threshold) or below the turbo gauge.
+
+| | |
+|---|---|
+| *turning* | above `turbo_slow_speed_pct` (5 %), or the Rotating contact, or the motor commanded — deliberately lower than the 15 % / 50 % "still spinning" thresholds the states use |
+| *exposure limit* | `thresholds.turbo_exposure_max_mbar`; default = wiggle room × turbo-on threshold, the pressure both VIs accept in Engage Turbo with bypass and turbo valves open (small chamber 1 mBar, VC100 1.25 mBar) |
+
+Also, on the inlet side: in **Engage Turbo**, with a turbo already turning, the chamber pressure is
+checked again immediately before a gate opens (the VIs check once, a few iterations earlier — or,
+on the VC100's turbos-first path, a whole run-up to standby earlier); if it came up, the gates stay
+shut and the chamber is roughed again.  **Manual** mode refuses to open the bypass, a turbo valve or
+a gate when that would join a turning turbo to an un-roughed chamber; **Admin** has no interlocks by
+design but the confirmation question carries a WARNING.
+
+`tests/test_turbo_exposure.py` replays the report on both profiles (both buttons, coasting and at
+speed) against the simulated plant — valve positions and pressures, not just commands.
 
 ## Overnight Pump keeps backing the turbo (2026-09-23)
 

@@ -168,6 +168,14 @@ Turbo slowing – a 100 ms glitch, not reproduced.)
 **Standby (all states):** `Standby_i := Motor_i ∧ ¬Gate_i` – a turbo commanded on while its gate is
 closed runs in standby (e.g. Turbo slowing → Pump to High Vac).
 
+**Turbo valves on leaving a state (raw decode, `chambers/medium/analysis/auto_frames.txt`, turbo-valve
+tunnel):** frame 8 `Or(SUBSTATE == 0, next_state != 8) ? [F,F,F] : …`, frame 7 `Or(SUBSTATE == 0,
+next_state != 7) ? [F,F,F] : …` – Pump to Hi vac / Pump to Rough / Vent / Shutdown Now all close every
+turbo valve in the iteration the button is pressed, **before** Pumping to Rough (20 s timer) opens the
+bypass.  The port keeps this as a global rule: a turning turbo is isolated before the bypass may open
+onto a chamber above the exposure limit (2026-11-11, README "A turning turbo never sees an un-roughed
+chamber").
+
 **Hot-start protection:** motor_i forced off while `turbo gauge_i ≥ 5 mBar`, log "High pressure turbo N
 shuttoff triggered at …".
 

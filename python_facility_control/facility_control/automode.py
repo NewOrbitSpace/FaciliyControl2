@@ -18,6 +18,14 @@ Pumping to Rough can depend on the chamber pressure, and Overnight Pump can skip
     `timings.primary_to_bypass_gap_s` – 20 s in the VC100 VI, 60 s but disabled in Main_V4.4);
   * Overnight Pump pressed below `thresholds.overnight_skip_below_torr` goes straight to the
     overnight hold without starting the primary pump or opening the bypass (null = never).
+
+Plant-safety rules enforced for EVERY Auto state (end of `step`, highest priority first):
+  1. a turbo that is turning never sees an un-roughed chamber - not at its exhaust (bypass + turbo
+     valve) and not at its inlet (gate).  Isolating a turning turbo for the time it takes to rough
+     the chamber is acceptable; exposing it is not (2026-11-11);
+  2. the bypass is never opened into a chamber that is below the foreline (2026-09-22);
+  3. otherwise a turning turbo keeps its backing: turbo valve open and primary pump running
+     (2026-09-22 / 2026-09-23).
 """
 from __future__ import annotations
 
@@ -27,7 +35,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set
 
 from .config import FacilityConfig, TurboConfig
-from .model import Commands, FacilityState as S, Inputs, TabPage, TurboInputs
+from .model import Commands, FacilityState as S, Inputs, TabPage, TurboInputs, primary_is_running
 from .units import torr_to
 
 
@@ -76,6 +84,7 @@ class AutoMemory:
     standby_wait_start: Optional[float] = None   # Engage, turbos-first: when the turbos were started
     hv_request_wrg: Optional[float] = None       # chamber pressure when high vac was asked for (Torr)
     kept_tv_logged: Set[str] = field(default_factory=set)   # 'kept the valve open' logged once per episode
+    isolated_tv: Set[str] = field(default_factory=set)      # turbo valves shut by the exhaust protection
 
 
 @dataclass
@@ -233,6 +242,86 @@ class AutoStateMachine:
         if math.isnan(wrg):
             return False
         return self.th.gauge_error_threshold_torr < wrg < turbo_on_threshold_torr
+
+    # ---- exhaust / inlet protection (2026-11-11) ----------------------------------------------
+    def _turning(self, inp: Inputs, cmds: Commands, tc: TurboConfig) -> bool:
+        """Is this rotor moving at all (or told to)?  Deliberately the LOWEST evidence of rotation the
+        facility has - `turbo_slow_speed_pct` (5 %, what Manual mode calls 'slowed down'), the
+        Rotating contact, or the motor command - not the 15 % / 50 % 'still spinning' thresholds the
+        states use to decide when to stop backing: a rotor at 40 % must not see atmosphere either."""
+        if cmds.turbo_motor.get(tc.id, False):
+            return True
+        ti = inp.turbos.get(tc.id)
+        if ti is None:
+            return False
+        if ti.has_contacts:
+            return bool(ti.contact("rotating"))
+        return ti.speed_pct > self.th.turbo_slow_speed_pct
+
+    def _exposure_limit(self, turbo_on_threshold_torr: float) -> float:
+        """Highest chamber pressure a turning turbo may be joined to (Torr).
+
+        `thresholds.turbo_exposure_max_torr/_mbar` if the profile gives one; else the pressure both
+        VIs accept in Engage Turbo with the bypass AND the turbo valves open: wiggle room x the
+        turbo-on threshold (small chamber 5 x 2e-1 = 1 mBar, VC100 5 x 0.25 = 1.25 mBar)."""
+        if self.th.turbo_exposure_max_torr is not None:
+            return self.th.turbo_exposure_max_torr
+        return self.th.turbo_on_wiggle_room_multiplier * self.th.engage_threshold(turbo_on_threshold_torr)
+
+    def _chamber_roughed(self, inp: Inputs, turbo_on_threshold_torr: float) -> bool:
+        """Chamber gauge readable AND at or below the exposure limit.  An unreadable gauge counts as
+        NOT roughed: with no reading the only safe assumption is atmosphere."""
+        wrg = self._wrg(inp)
+        if math.isnan(wrg) or wrg <= self.th.wrg_error_threshold_torr:
+            return False
+        return wrg <= self._exposure_limit(turbo_on_threshold_torr)
+
+    def _backing_safe(self, inp: Inputs, cmds: Commands, valve_id: str, turbo_on_threshold_torr: float) -> bool:
+        """May a CLOSED turbo valve be opened again onto a turning turbo?  Only onto a foreline that
+        is really being pumped: primary pump running AND the foreline gauge readable AND either
+        below the turbos' normal backing pressure (`turbo_valve_foreline_ok_torr`, else the turbo-on
+        threshold) or below every turbo gauge behind that valve (gas then flows OUT of the turbo -
+        the VC100 VI's rule).  Same test as interlocks.backing_ready, but always on."""
+        if not primary_is_running(self.cfg.primary, inp, cmds):
+            return False
+        fg = self.cfg.foreline_gauge
+        if fg is None:
+            return True
+        bad = self.th.gauge_error_threshold_torr
+        pf = inp.pressure(fg.id)
+        if math.isnan(pf) or pf <= bad:
+            return False
+        ok_below = self.th.turbo_valve_foreline_ok_torr
+        if ok_below is None:
+            ok_below = turbo_on_threshold_torr
+        if pf < ok_below:
+            return True
+        gauges = {g.id for g in (self.cfg.turbo_gauge(t.id) for t in self.cfg.turbos_on_valve(valve_id)) if g}
+        if not gauges:
+            return False
+        for gid in gauges:
+            pt = inp.pressure(gid)
+            if math.isnan(pt) or pt <= bad or not pf < pt:
+                return False
+        return True
+
+    def _gates_must_wait(self, inp: Inputs, prev: Commands, turbo_on_threshold_torr: float,
+                         log: List[str]) -> bool:
+        """Engage Turbo, just before a gate opens: with a turbo already turning, is the chamber
+        (still) low enough?  The VIs check the pressure once, a few iterations - or, turbos-first, a
+        whole run-up to standby - before the gates move; a chamber that came up in between (hand
+        vent valve, leak) would otherwise be opened straight onto a turning rotor's inlet.  With
+        every turbo at rest nothing changes: the gates open as in the VIs."""
+        if not any(self._turning(inp, prev, t) for t in self._turbos()):
+            return False
+        if self._chamber_roughed(inp, turbo_on_threshold_torr):
+            return False
+        wrg = self._wrg(inp)
+        shown = "not readable" if math.isnan(wrg) else f"at {torr_to('mbar', wrg):.1e} mBar"
+        log.append(f"Pressure NOT low enough to open gate! Chamber {shown} with a turbo turning "
+                   f"(limit {torr_to('mbar', self._exposure_limit(turbo_on_threshold_torr)):.1e} mBar) – "
+                   f"gates stay closed, roughing again at {_ts()}")
+        return True
 
     def _any_turbo_valve_prev(self, prev: Commands) -> bool:
         return any(prev.valves.get(t.turbo_valve, False) for t in self._turbos())
@@ -495,7 +584,10 @@ class AutoStateMachine:
                 # (turbo bodies not yet evacuated) lifts the chamber well above it before this point
                 asked = self.mem.hv_request_wrg
                 p_dec = min(wrg, asked) if (asked is not None and not math.isnan(asked)) else wrg
-                if first is not None and th.wrg_error_threshold_torr < p_dec < first:
+                if self._gates_must_wait(inp, prev, a.turbo_on_threshold_torr, log):
+                    bp, gv, out_sub = False, False, 0    # a turning turbo's inlet never sees it
+                    new_cur = S.PUMPING_TO_ROUGH
+                elif first is not None and th.wrg_error_threshold_torr < p_dec < first:
                     wrg_shown = p_dec
                     # low pressure (2026-10-28): turbos first, gates closed -> they run up to standby
                     bp, gv, out_sub = False, False, 6
@@ -525,7 +617,11 @@ class AutoStateMachine:
                 bp, gv = False, None                     # gates handled here
                 self._set_motors(cmds, True)
                 out_sub = 7
-                if self._open_gates_staggered(cmds, prev, a.now, log):
+                if self._gates_must_wait(inp, prev, a.turbo_on_threshold_torr, log):
+                    gv, out_sub = False, 0               # close any gate already open, rough again
+                    self.mem.standby_wait_start = None
+                    new_cur = S.PUMPING_TO_ROUGH
+                elif self._open_gates_staggered(cmds, prev, a.now, log):
                     out_sub = 0
                     self.mem.standby_wait_start = None
                     self.mem.hv_request_wrg = None
@@ -732,47 +828,11 @@ class AutoStateMachine:
                 cmds.turbo_standby[t.id] = False
                 cmds.turbo_speed_pct[t.id] = None          # never a reduced speed in high vac
 
-        # --- global protection: never strand a spinning turbo (2026-09-22)
-        # A turbo that is turning must keep a path to the backing pump.  The VIs' own state logic can
-        # close a turbo valve on a spinning turbo - pressing 'Pump to High Vac' during Turbo slowing
-        # closes it AND restarts the motor (Main_V4.4 frame 7: TURBO_VALVE_CMD := NOT(button),
-        # TURBO_MOTOR_CMD := button), leaving the rotor compressing into a dead volume with the gate
-        # shut too.  Leaving Venting has the same shape.  Rather than patch each button, the rule is
-        # enforced here for every state: if the turbo is spinning or commanded to run, its valve
-        # stays open.  Manual mode has always refused this (interlocks.Interlocks.valve, "closing
-        # while turbo runs would trap it"); Auto now refuses it as well.
-        # NB this is *two* commands, not one.  Holding the turbo valve open only helps if there is a
-        # working backing pump behind it: with the primary OFF the open valve exposes the rotor to a
-        # foreline that is backfilling towards atmosphere, which is worse than isolating it.  That is
-        # exactly what happened on 2026-09-23 (Overnight Pump switches the primary off while the
-        # turbo is still at ~99 %; the turbo body reached ~27 mBar and the drive tripped, error 5007).
-        # So the rule is: while a turbo is turning, its valve stays open AND the primary keeps running.
-        needs_backing = False
-        # every turbo that is fitted - also one the controller has just taken out (stuck gate): it
-        # may still be coasting down and needs its backing as much as any other
-        for t in [t for t in cfg.turbos if t.in_use]:
-            # the same "still spinning" threshold the state machine itself uses (slowing_pct, 15 %),
-            # so Facility Off is never reached with a valve this rule is holding open
-            spinning = self._spinning(inp, t, slow_pct)
-            if not (spinning or cmds.turbo_motor.get(t.id, False)):
-                continue
-            needs_backing = True
-            if not cmds.valves.get(t.turbo_valve, False):
-                cmds.valves[t.turbo_valve] = True
-                who = "turbo" if len(cfg.turbos) == 1 else t.label.lower()
-                if not prev.valves.get(t.turbo_valve, False) and t.id not in self.mem.kept_tv_logged:
-                    self.mem.kept_tv_logged.add(t.id)
-                    log.append(f"Kept the {who} valve open - the {who} is still spinning at {_ts()}")
-        for t in cfg.turbos:                         # re-arm the message once the turbo has stopped
-            if t.id in self.mem.kept_tv_logged and not self._spinning(inp, t, slow_pct) \
-                    and not cmds.turbo_motor.get(t.id, False):
-                self.mem.kept_tv_logged.discard(t.id)
-        if needs_backing and not cmds.primary:
-            cmds.primary = True
-            if not prev.primary:
-                log.append(f"Kept the primary pump running - a turbo is still spinning at {_ts()}")
+        # ================================================================= global protections
+        fitted = [t for t in cfg.turbos if t.in_use]     # also a turbo Auto has just taken out (stuck
+        bypass_ids = [v.id for v in cfg.valves_of_kind("bypass")]   # gate): it may still be coasting
 
-        # --- global protection: never backfill the chamber through the bypass (2026-09-22)
+        # --- 2. never backfill the chamber through the bypass (2026-09-22)
         # The bypass joins the chamber to the foreline.  Opening it when the chamber is already
         # BELOW the foreline pushes foreline gas back into the chamber instead of pumping it out -
         # seen at 1e-4 mBar after a 'Pump to High Vac' pressed during Turbo slowing, which routed
@@ -794,6 +854,109 @@ class AutoStateMachine:
                                f"the foreline {torr_to('mbar', fore):.1e} mBar at {_ts()}")
             else:
                 self.mem.last_bypass_block = None
+
+        # --- 1. a turning turbo's EXHAUST never sees an un-roughed chamber (2026-11-11)
+        # With the bypass open the foreline IS the chamber.  A turbo valve that is open at that
+        # moment puts whatever is in the chamber - atmosphere, after a vent - on the exhaust of its
+        # turbo.  Both VIs avoided this by state logic: leaving Venting / Turbo slowing / Overnight
+        # for Pumping to Rough closes the turbo valves (frames 7 and 8: TV := [F,F,F] when the next
+        # state is not the same one), the command frame waits its settle time, and only then does
+        # Pumping to Rough open the bypass; the valves stay shut until rough vacuum (`done`, or on
+        # the VC100 once the chamber is below the turbo gauge).  The 2026-09-22 rule "a spinning
+        # turbo always keeps its valve" overrode exactly that and held the valves open through the
+        # roughing of a vented chamber.  The priorities are now the right way round:
+        #     never expose  >  never strand.
+        # While the bypass is open (or about to open, or not yet confirmed shut) and the chamber is
+        # above the exposure limit (or its gauge unreadable):
+        #   * every turbo valve with a turning turbo behind it is SHUT, and that turbo's motor is
+        #     switched off - it coasts isolated for the time the roughing takes (accepted practice;
+        #     Engage Turbo restarts it afterwards);
+        #   * the bypass is HELD shut until each of those valves was commanded shut in an earlier
+        #     iteration (so it had its settle wait) AND its reed contact reads shut.
+        # Isolated valves re-open through rule 3 below once the foreline is pumped down again.
+        roughed = self._chamber_roughed(inp, a.turbo_on_threshold_torr)
+        bypass_open_or_opening = any(cmds.valves.get(b_, False) or prev.valves.get(b_, False)
+                                     or inp.valve_reads.get(b_, False) for b_ in bypass_ids)
+        isolate: Set[str] = set()
+        if bypass_open_or_opening and not roughed:
+            isolate = {t.turbo_valve for t in fitted
+                       if self._turning(inp, cmds, t) or self._turning(inp, prev, t)}
+        if isolate:
+            not_shut_yet = sorted(tv for tv in isolate
+                                  if prev.valves.get(tv, False) or inp.valve_reads.get(tv, False))
+            for tv in isolate:
+                cmds.valves[tv] = False
+            for t in fitted:
+                if t.turbo_valve in isolate:
+                    cmds.turbo_motor[t.id] = False
+                    cmds.turbo_standby[t.id] = False
+            if not_shut_yet:
+                for b_ in bypass_ids:
+                    if not prev.valves.get(b_, False):
+                        cmds.valves[b_] = False          # the bypass waits for the turbo valves
+            new_iso = isolate - self.mem.isolated_tv
+            if new_iso:
+                labels = ", ".join(cfg.valves[tv].label for tv in sorted(new_iso))
+                shown = "not readable" if math.isnan(wrg) else f"at {torr_to('mbar', wrg):.1e} mBar"
+                log.append(f"Closed {labels} BEFORE the bypass valve – turbo still turning and the chamber is "
+                           f"{shown} (limit {torr_to('mbar', self._exposure_limit(a.turbo_on_threshold_torr)):.1e} mBar): "
+                           f"a turning turbo's exhaust must never see it.  The turbo coasts isolated until the "
+                           f"chamber is roughed ({_ts()})")
+            self.mem.isolated_tv |= isolate
+
+        # --- 3. never strand a turning turbo - when that is safe (2026-09-22, 2026-09-23, 2026-11-11)
+        # A turbo that is turning should keep a path to a working backing pump.  The VIs' own state
+        # logic can close a turbo valve on a spinning turbo with no need for it - pressing 'Pump to
+        # High Vac' during Turbo slowing at 1e-5 mBar closes it AND restarts the motor (Main_V4.4
+        # frame 7), leaving the rotor compressing into a dead volume.  So, for every state:
+        #   * a valve that is OPEN on a turning turbo stays open, unless rule 1 above says isolate;
+        #   * a valve that is SHUT on a turning turbo (isolated by rule 1, or by the state) is opened
+        #     again only onto a foreline that is really pumped (`_backing_safe`) - never onto a
+        #     foreline at chamber pressure;
+        #   * while any turbo is turning the primary keeps running.  Holding a turbo valve open only
+        #     helps with a working pump behind it: with the primary OFF the open valve exposes the
+        #     rotor to a foreline that backfills towards atmosphere (2026-09-23: Overnight Pump
+        #     stopped the primary with the turbo at ~99 %, the turbo body reached ~27 mBar, 5007).
+        needs_backing = False
+        for t in fitted:
+            # the same "still spinning" threshold the state machine itself uses (slowing_pct, 15 %),
+            # so Facility Off is never reached with a valve this rule is holding open
+            spinning = self._spinning(inp, t, slow_pct)
+            if not (spinning or cmds.turbo_motor.get(t.id, False)):
+                continue
+            needs_backing = True
+            tv = t.turbo_valve
+            if tv in isolate or cmds.valves.get(tv, False):
+                continue
+            was_open = prev.valves.get(tv, False)
+            safe = was_open or self._backing_safe(inp, cmds, tv, a.turbo_on_threshold_torr)
+            if not safe and not am.turbo_valve_needs_backing:
+                continue                                 # stays isolated until the foreline is pumped
+            # (with `turbo_valve_needs_backing` the controller applies the very same test to every
+            #  turbo-valve opening, holds it and tells the operator why - so just keep asking)
+            cmds.valves[tv] = True
+            who = "turbo" if len(cfg.turbos) == 1 else t.label.lower()
+            if tv in self.mem.isolated_tv:
+                if safe and not am.turbo_valve_needs_backing:
+                    log.append(f"Re-opened {cfg.valves[tv].label} – the foreline is pumped down again, "
+                               f"the {who} has its backing back at {_ts()}")
+            elif not was_open and t.id not in self.mem.kept_tv_logged:
+                self.mem.kept_tv_logged.add(t.id)
+                log.append(f"Kept the {who} valve open - the {who} is still spinning at {_ts()}")
+        for t in cfg.turbos:                         # re-arm the message once the turbo has stopped
+            if t.id in self.mem.kept_tv_logged and not self._spinning(inp, t, slow_pct) \
+                    and not cmds.turbo_motor.get(t.id, False):
+                self.mem.kept_tv_logged.discard(t.id)
+        # an isolation episode ends when the valve is open again or nothing behind it turns any more
+        for tv in list(self.mem.isolated_tv):
+            if tv in isolate:
+                continue
+            if prev.valves.get(tv, False) or not any(self._turning(inp, cmds, t) for t in cfg.turbos_on_valve(tv)):
+                self.mem.isolated_tv.discard(tv)         # really open again (not merely asked for)
+        if needs_backing and not cmds.primary:
+            cmds.primary = True
+            if not prev.primary:
+                log.append(f"Kept the primary pump running - a turbo is still spinning at {_ts()}")
 
         # --- global protection: high-pressure turbo shut-off (turbo gauge >= 5 Torr / 5 mBar)
         for t in self._turbos():

@@ -216,6 +216,12 @@ then 0 (Facility Off). Button Pump to High Vac 2 → TM on, TV off, VV off, cur 
 **Global turbo protection (all Auto states):** if TM would be on and "Turbo Convectron" ≥ 5 Torr → TM := off and
 log "High pressure turbo shuttoff triggered at hh:mm:ss".
 
+> **2026-11-11.**  What the VI gets RIGHT in frames 7 and 8 — closing the turbo valve before
+> Pumping to Rough opens the bypass onto a vented chamber — must be kept: the first global rule
+> below ("a turning turbo always keeps its valve") overrode that too and exposed the turbo exhaust
+> to atmosphere.  It now applies only while the chamber is roughed; above the exposure limit the
+> turbo is isolated first.  README: "A turning turbo never sees an un-roughed chamber".
+>
 > **Two VI behaviours the port deliberately overrides (2026-09-22).**  Frame 7 above sets
 > `TURBO_VALVE_CMD := NOT(Pump to High Vac 2)` and `TURBO_MOTOR_CMD := Pump to High Vac 2`, i.e.
 > pressing that button restarts the turbo **and closes its turbo valve**, with the gate already

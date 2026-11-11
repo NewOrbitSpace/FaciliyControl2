@@ -318,6 +318,10 @@ thresholds:
   compressor_low_time_s: 5.0           # ... for 5 s ('Elapsed Time5') -> "Compressor Pressure Below 5 Bar!" (stops Auto mode)
   turbo_valve_foreline_ok_mbar: 1.0e-1  # turbo valve may open (primary running) when the foreline is below the turbo
                                        # gauge OR below this - the turbos' normal backing pressure (2026-10-28)
+  turbo_exposure_max_mbar: null        # 2026-11-11: highest chamber pressure a TURNING turbo may be joined to (exhaust:
+                                       # bypass + its turbo valve; inlet: its gate).  Above it Auto shuts the turbo valves
+                                       # BEFORE the bypass may open and the turbos coast isolated until the chamber is
+                                       # roughed.  null = wiggle room x turbo-on threshold = 1.25 mBar (the VI's Engage check)
   turbo_start_before_gates_below_mbar: 1.0e-2   # Engage below this: turbos start with the gates CLOSED, run up to
                                        # standby, THEN the gates open (2026-10-28).  At/above it: the VI's order
                                        # (gates first, then turbos).  null = always the VI's order.

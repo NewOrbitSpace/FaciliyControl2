@@ -317,6 +317,7 @@ class Controller:
                 self._clear_requested = True
             elif r.kind == "set_threshold":
                 self.turbo_on_threshold_torr = float(r.arg)
+                self.interlocks.turbo_on_threshold_torr = self.turbo_on_threshold_torr
             elif r.kind == "set_engage_time":
                 self.turbo_engage_time = r.arg
             elif r.kind == "set_unit":
@@ -980,6 +981,10 @@ class Controller:
                 if not verdict.allowed:
                     question += (f"\n\nWARNING: {verdict.message.split(' – ', 1)[-1]}.\n"
                                  "Opening it now can let foreline gas into a spinning turbo.")
+            if want and not manual:                             # Admin: bypass / turbo valve / gate that
+                exposed = self.interlocks.exposure(vid, new, inp)   # would join a turning turbo to atmosphere
+                if not exposed.allowed:
+                    question += f"\n\nWARNING: {exposed.message}."
             self._open_dialog("two", question, ["Yes", "No"], apply)
         elif target == "primary":
             want = not new.primary

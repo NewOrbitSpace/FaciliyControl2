@@ -17,6 +17,12 @@ save the hardware.
 
 Three rules now prevent that, and they are enforced globally rather than per button, because the
 same shapes exist on other paths (leaving Venting, and on the VC100 profile).
+
+2026-11-11: rule 1 ("a spinning turbo never loses its turbo valve") had no pressure condition and so
+also held the valve open while a VENTED chamber was roughed through the bypass - the turbo exhaust
+saw atmosphere.  It now yields to "a turning turbo never sees an un-roughed chamber"; everything in
+this file still holds because here the chamber never left high vacuum.  tests/test_turbo_exposure.py
+covers the vented case.
 """
 import pytest
 
@@ -81,16 +87,28 @@ def test_a_spinning_turbo_never_loses_its_turbo_valve(cfg):
     assert not s.commands.valves["turbo_valve"], "once stopped, everything closes as before"
 
 
-def test_pressing_high_vac_out_of_venting_also_keeps_the_valve(cfg):
-    """The same shape exists on the Venting page - the global rule must cover it too."""
+def test_pressing_high_vac_out_of_venting_never_exposes_the_turbo(cfg):
+    """The same button on the Venting page.  2026-09-22 this test demanded that the turbo valve stay
+    OPEN here - which, with the vent valve already open, held it open while Pumping to Rough opened
+    the bypass onto a chamber on its way to atmosphere (reported 2026-11-11).  The valve is kept
+    only while the chamber is still roughed; above the exposure limit the turbo is isolated BEFORE
+    the bypass moves.  See tests/test_turbo_exposure.py for the full set."""
     h = Harness(cfg, mode=Mode.AUTO)
     _to_high_vac(h)
     h.ctl.request_auto_button("vent")
     s, _ = h.run_until(lambda s: s.current == S.VENTING, 40000)
     assert h.ctl._turbo_views["turbo1"].speed_pct > cfg.thresholds.slowing_pct
     h.ctl.request_auto_button("pump_to_high_vac")
-    s = h.step(2)
-    assert s.commands.valves["turbo_valve"], "a spinning turbo was isolated on the way out of Venting"
+    th = cfg.thresholds
+    limit = th.turbo_on_wiggle_room_multiplier * th.engage_threshold(th.turbo_on_threshold_torr)
+    st = h.backend.state
+    for _ in range(400):
+        s = h.step()
+        if st.valves["bypass"].position > 0.02 and st.p_chamber > 4 * limit \
+                and st.turbos["turbo1"].speed_pct > th.turbo_slow_speed_pct:
+            assert st.valves["turbo_valve"].position < 0.02, \
+                f"turbo exhaust joined to the chamber at {st.p_chamber:.0f} Torr"
+        assert not s.error.status, f"{s.error.code}: {s.error.source}"
 
 
 # --------------------------------------------------------------------------- rule 3
