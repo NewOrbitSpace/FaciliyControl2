@@ -39,10 +39,56 @@ def cfg_freq():
     return cfg
 
 
+_MEASURED = {}
+
+
+def _measured_sim(cfg):
+    """The profile's own simulation block, untouched (found by facility id; cached)."""
+    if cfg.id not in _MEASURED:
+        import glob
+        from facility_control.config import CONFIG_DIR
+        for path in sorted(glob.glob(str(CONFIG_DIR / "*.yaml"))):
+            try:
+                c = load_config(path)
+            except Exception:
+                continue
+            _MEASURED.setdefault(c.id, c.simulation)
+    return _MEASURED.get(cfg.id)
+
+
+def quick_plant(cfg):
+    """The profiles carry the plant as MEASURED from the facility logs (roughing 6-17 min, turbos that
+    coast for 45 min, turbo bodies that start at a few mBar).  The tests built on `Harness` check the
+    control LOGIC, with iteration counts written for a quick plant that starts at atmosphere - so
+    they keep the quick roughing, venting and spin times.  A test that scaled one of those numbers
+    itself (spin-down x 30, ...) keeps its factor.  The physics that matters for safety (foreline at
+    atmosphere seconds after the primary stops, air braking, the path through a turbo) stays as
+    measured.  The safety tests (tests/safety_rig.py) use the measured plant as it is."""
+    sim = cfg.simulation
+    if getattr(sim, "_quick", False):
+        return cfg
+    ref = _measured_sim(cfg)
+    small = len(cfg.turbos) == 1
+    quick = {"primary_pump_speed_l_s": 12.0 if small else 40.0, "bypass_conductance_l_s": 6.0,
+             "vent_conductance_l_s": 4.0, "turbo_spinup_s": 60.0 if small else 90.0,
+             "turbo_spindown_s": 120.0 if small else 300.0}
+    for name, value in quick.items():
+        factor = getattr(sim, name) / getattr(ref, name) if ref is not None and getattr(ref, name) else 1.0
+        setattr(sim, name, value * factor)
+    sim.primary_half_speed_torr = 0.0
+    sim.primary_ultimate_torr = 3e-3
+    sim.turbo_overrides = {}
+    sim.turbo_body_initial_torr = None
+    sim._quick = True
+    return cfg
+
+
 class Harness:
     """Controller + simulator with a simulated clock so tests run fast and deterministically."""
 
-    def __init__(self, cfg, mode=Mode.AUTO, run_hours=None):
+    def __init__(self, cfg, mode=Mode.AUTO, run_hours=None, quick=True):
+        if quick:
+            quick_plant(cfg)
         self.cfg = cfg
         self.backend = SimBackend(cfg)
         self.dialogs = AutoAnswerDialogs()

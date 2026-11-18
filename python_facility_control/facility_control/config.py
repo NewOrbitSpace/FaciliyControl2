@@ -25,6 +25,9 @@ class GaugeConfig:
     plot_label: str = ""
     turbo: Optional[str] = None
     unit_native: str = "torr"
+    # this gauge's own "dead below" voltage, where it differs from thresholds.gauge_dead_below_volts
+    # (a gauge type whose live signal can legitimately be near 0 V); 0 = never judged by its voltage
+    dead_below_volts: Optional[float] = None
 
 
 @dataclass
@@ -203,6 +206,36 @@ class Thresholds:
     # threshold, i.e. the pressure both VIs accept in Engage Turbo with the bypass and the turbo
     # valves open (small chamber 1 mBar, VC100 1.25 mBar).
     turbo_exposure_max_torr: Optional[float] = None
+    # Backing lost (2026-11-12): with a turbo turning, its turbo valve open and the bypass shut, a
+    # foreline above this means the backing has gone (primary pump stopped, foreline leak).  Auto
+    # shuts that turbo valve, stops the motor and raises error 5012.  None = the exposure limit.
+    turbo_foreline_max_torr: Optional[float] = None
+    # Pumping to High Vac: chamber above this for `pressure_trip_delay_s` -> gates closed, error 5013.
+    # Armed only once the chamber has pumped down below HALF of it after the gates opened (the gates
+    # open near the turbo-on threshold, which is above it); until then, and with None, the exposure
+    # limit is the trip level.
+    high_vac_pressure_trip_torr: Optional[float] = None
+    # A second, SLOWER trip in Pumping to High Vac (2026-11-17): chamber above this for
+    # `pressure_slow_trip_delay_s` (30 s) -> the same reaction (gates closed, error 5013).  It closes
+    # the gap below `high_vac_pressure_trip`: in normal work the chamber stays below 1e-2 mBar, so a
+    # pressure that SETTLES above it is a leak even though it never reaches the fast trip.  The long
+    # delay lets a gauge that misreads while it switches range, or a short burst, pass.  Armed the
+    # same way: only once the chamber has been below half of it.  None = off.
+    high_vac_pressure_slow_trip_torr: Optional[float] = None
+    # Turbo speed-drop trip (2026-11-17): a turbo that loses speed fast has gas on it - whatever the
+    # gauges say.  Auto shuts every gate and every turbo valve, stops the motors and raises error
+    # 5015.  Two rules, both in per cent of FULL speed (see Controller._check_turbo_speeds):
+    #   fast   `turbo_speed_drop_pct` within timings.turbo_speed_drop_window_s (5 % in 1 s, the test
+    #          engineer's figure) - suspended for a few seconds after anything expected to slow a
+    #          rotor down (motor off, standby, its gate opening onto it, chiller off);
+    #   crash  `turbo_speed_crash_pct` within timings.turbo_speed_crash_window_s (30 % in 5 s) - always.
+    # None = that rule off.
+    turbo_speed_drop_pct: Optional[float] = None
+    turbo_speed_crash_pct: Optional[float] = None
+    # A pressure gauge whose output is below this is DEAD (no supply, cable off): a dead gauge sends
+    # about 0 V, and in the facility logs no gauge on either chamber ever read below 2.7 V, at any
+    # pressure.  Held for timings.gauge_fault_delay_s -> error 5014, safe shutdown.  None = off.
+    gauge_dead_below_volts: Optional[float] = 1.0
     # Engage Turbo below this chamber pressure (2026-10-28, VC100 1e-2 mBar): start the turbos with
     # their gates still CLOSED, wait until every turbo is at its standby speed, then open the gates
     # (one by one on a shared air line).  At or above it - or None - the VI's order: gates first,
@@ -240,7 +273,8 @@ class Thresholds:
 _TORR_KEYS = ("turbo_on_threshold", "gauge_error_threshold", "wrg_error_threshold", "turbo_high_pressure_shutoff",
               "manual_main_pressure_max", "manual_foreline_pressure_max", "bypass_first_above",
               "overnight_skip_below", "engage_check_threshold", "vent_confirm_above",
-              "turbo_start_before_gates_below", "turbo_valve_foreline_ok", "turbo_exposure_max")
+              "turbo_start_before_gates_below", "turbo_valve_foreline_ok", "turbo_exposure_max",
+              "turbo_foreline_max", "high_vac_pressure_trip", "high_vac_pressure_slow_trip")
 
 
 @dataclass
@@ -282,6 +316,33 @@ class Timings:
     # mode; Auto opens the gates one by one and only starts the turbos once all of them are open.
     # Closing is never delayed.  0 = open together (the VIs' behaviour).
     gate_open_stagger_s: float = 0.0
+    # Protective reactions (2026-11-12).  How long a condition must last before Auto acts on it - long
+    # enough to ignore one bad sample, short against anything that matters to a turbo.
+    pressure_trip_delay_s: float = 2.0     # chamber above the exposure limit in Pumping to High Vac -> gates closed, 5013
+    pressure_slow_trip_delay_s: float = 30.0   # chamber above high_vac_pressure_slow_trip this long -> the same
+    # Turbo speed-drop trip (thresholds.turbo_speed_drop_pct / turbo_speed_crash_pct): the speed is
+    # compared with the highest reading of the last `window` seconds (where the loop stood still in a
+    # settle wait: with the last reading before it, if that is no older than 3 windows); the fall
+    # must still be there `confirm` seconds later (one bad reading does not trip).
+    # `expected`: the fast rule is suspended this long after the facility itself does something that
+    # slows a rotor down - motor switched, standby or speed set value changed, its gate commanded
+    # open, chiller switched off.  The crash rule goes on counting.
+    # `blank_after_switch`: NOTHING is judged this long after a turbo motor is switched on or off.
+    # 0 for a pump whose speed reading is known to follow the rotor through both (HiPace over RS-485:
+    # it coasts at 2 %/min after a stop).  The small chamber's speed signal does not: it reads 96 %
+    # at the moment of starting and falls to 17 % over a minute, and what it does at a stop has not
+    # been logged yet.
+    turbo_speed_drop_window_s: float = 1.0
+    turbo_speed_crash_window_s: float = 5.0
+    turbo_speed_drop_confirm_s: float = 1.0
+    turbo_speed_drop_expected_s: float = 15.0
+    turbo_speed_drop_blank_after_switch_s: float = 0.0
+    backing_lost_delay_s: float = 0.3      # primary not running / foreline above its limit -> turbo valves closed, 5012
+    gauge_fault_delay_s: float = 3.0       # a gauge below gauge_dead_below_volts this long -> error 5014
+    # A live gauge always has a little noise.  This many readings in a row EXACTLY equal (to the last
+    # digit of the measured voltage) -> the reading is frozen: error 5014.  Not judged at the ends of
+    # the input range, where a clipped signal repeats legitimately.  0 = off.
+    gauge_frozen_readings: int = 100
 
 
 @dataclass
@@ -312,6 +373,11 @@ class AutoBehaviour:
     # 'Shut Off' pressed while a turbo still spins -> Turbo slowing (primary keeps backing) instead of
     # Facility Off straight away (VC100)
     shut_off_spins_down_first: bool = False
+    # Engage Turbo, gates-first order: start each turbo as soon as ITS OWN gate is open, instead of
+    # waiting until every gate is open (2026-11-13).  Each turbo still starts from rest with its gate
+    # open - the same conditions as before - but the minute the gates take to open one by one is no
+    # longer dead time: the first turbos are already pumping while the last gates open.
+    start_turbo_with_its_gate: bool = False
     # 'Shutdown Now' in Venting closes the vent valve at once and the vent stays closed while the
     # turbos slow down (VC100).  Main_V4.4 leaves the vent command as it was.
     vent_closes_on_shutdown: bool = False
@@ -343,6 +409,36 @@ class SimulationConfig:
     leak_torr_l_s: float = 1e-4
     outgassing_torr_l_s: float = 2e-5
     compressor_bar: float = 6.3
+    # --- measured on the facilities (logs of 2026-10-23 .. 2026-11-11, docs/PLANT_FROM_LOGS.md) ---
+    bypass_conductance_l_s: float = 6.0      # chamber <-> foreline through the bypass (sets the roughing time)
+    vent_conductance_l_s: float = 4.0        # atmosphere -> chamber through the vent valve
+    primary_ultimate_torr: float = 3e-3      # what the foreline settles at with the primary running, nothing flowing
+    # The roughing line pumps slower as the gas thins out (the logged roughing slows from one decade
+    # per ~60 s to one per ~170 s near the turbo-on threshold): foreline pressure at which the
+    # effective speed is half of primary_pump_speed_l_s.  0 = constant speed.
+    primary_half_speed_torr: float = 0.0
+    # What is left in a turbo between its closed gate and closed turbo valve at start-up.  None =
+    # atmosphere (a turbo that was opened up); the logs show a few mBar on a facility that has run.
+    turbo_body_initial_torr: Optional[float] = None
+    # The lowest voltage a live gauge puts out: every gauge in the logs stays above 2.7 V from
+    # atmosphere to base pressure (a Pirani / Convectron bottoms out; the wide-range gauges are
+    # nowhere near the bottom of theirs).  0 = the formula's own value down to 0 V.
+    gauge_min_volts: float = 2.5
+    # When the primary pump stops the foreline goes to ATMOSPHERE within seconds (VC100: 3e-3 mBar ->
+    # 1020 mBar in under 6 s, every time): time constant of that back-fill.
+    foreline_backfill_s: float = 2.0
+    # Gas friction on a turning rotor: %/s lost at atmosphere, and the body pressure at which half of
+    # that is reached.  VC100 2026-11-05: four HiPace turbos went 78 % -> 5 % in under 10 s when their
+    # exhaust was put on a vented chamber; 2026-10-28: 98 % -> 18 % in under 5 s.
+    turbo_air_brake_pct_s: float = 15.0
+    turbo_air_brake_half_torr: float = 43.0
+    # Does a turbo controller raise an ERROR when the rotor is hit by gas at speed?  None = by type:
+    # HiPace RS-485 reported only a *warning* in both incidents (no error, so nothing stopped Auto);
+    # the other controller types are assumed to trip.  true / false forces it for every turbo.
+    turbo_trips_on_pressure: Optional[bool] = None
+    # per turbo id: {spinup_s: .., spindown_s: ..} where one pump differs from the rest (the VC100's
+    # Shimadzu pumps brake actively and stop in ~9 min; its HiPace pumps coast for ~45 min)
+    turbo_overrides: Dict[str, Dict[str, float]] = field(default_factory=dict)
     # VFD-driven primary pump (a facility whose primary_pump has a `frequency` block)
     primary_run_hz: Optional[float] = None   # frequency it settles at when running; None = frequency.max_hz
     primary_spinup_s: float = 8.0
@@ -552,7 +648,8 @@ def build_config(raw: Dict[str, Any], source_path: str = "") -> FacilityConfig:
 
     gauges = [GaugeConfig(id=g["id"], label=g["label"], channel=g["channel"], formula=g["formula"],
                           role=g.get("role", "other"), plot_label=g.get("plot_label", g["label"]),
-                          turbo=g.get("turbo"), unit_native=g.get("unit_native", "torr"))
+                          turbo=g.get("turbo"), unit_native=g.get("unit_native", "torr"),
+                          dead_below_volts=(None if g.get("dead_below_volts") is None else float(g["dead_below_volts"])))
               for g in raw.get("gauges", [])]
     for g in gauges:
         if g.formula not in FORMULAS:

@@ -299,6 +299,7 @@ def test_hipace_error_is_not_gated_on_the_chiller(vcfg_dsub):
 def test_hipace_standby_status_needs_40_percent(vh):
     """VC100: 'In Standby' is shown only when standby is commanded AND speed > 40 %."""
     h = Harness(vh.cfg, mode=Mode.ADMIN)
+    h.backend.set_fault("no_pressure_trip", True)  # status logic only: the rotor runs up in a vented simulator
     h.step(2)
     h.dialogs.answers.put(0)                       # Turn on Chiller? Yes
     h.ctl.request_user_cmd("chiller"); h.step()

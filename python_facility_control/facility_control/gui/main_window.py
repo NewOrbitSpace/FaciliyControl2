@@ -1,6 +1,7 @@
 """Main window – the LabVIEW front panel re-created in Qt."""
 from __future__ import annotations
 
+import html
 import time
 from datetime import datetime
 from typing import Dict, List, Optional
@@ -240,6 +241,7 @@ class MainWindow(QMainWindow):
         self._current_tab: Optional[TabPage] = None
         grid.addWidget(self.auto_group, 5, 0, 1, 3)
         self.elapsed_label = QLabel("")
+        self.elapsed_label.setWordWrap(True)             # Auto's "waiting for ..." line can be long
         grid.addWidget(self.elapsed_label, 6, 0, 1, 3)
         return panel
 
@@ -320,31 +322,91 @@ class MainWindow(QMainWindow):
     def _on_engage_time(self, qdt: QDateTime):
         self.ctl.request_set_engage_time(qdt.toSecsSinceEpoch())
 
-    def _on_stop(self):
-        if QMessageBox.question(self, "Stop", "Stop the facility control?\nAll valves close and all pumps switch off (safemode) before exit.",
-                                QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
+    # ------------------------------------------------------------------ closing the program
+    # STOP and the window's [x] are the same way out (2026-11-17): the facility is shut down safely
+    # FIRST - gates closed, turbo motors off, primary pump and chiller on until the turbos have slowed
+    # down - and the program closes by itself once everything is off.  Until then it cannot be
+    # closed, only the shutdown cancelled.  (The VI, and this port before, switched everything off
+    # in one step on exit - with the turbos at full speed.)
+    def _controller_running(self) -> bool:
+        thread = getattr(self.ctl, "_thread", None)
+        return thread is not None and thread.is_alive() and not self.ctl.finished.is_set()
+
+    def _something_on(self, snap: Snapshot) -> bool:
+        c = snap.commands
+        if (any(c.valves.values()) or c.primary or c.primary_power or c.primary_run or c.chiller
+                or any(c.turbo_motor.values())):
+            return True
+        slow = self.cfg.thresholds.turbo_slow_speed_pct
+        return any(tv.in_use and (tv.speed_pct > slow or tv.contacts.get("rotating", False))
+                   for tv in snap.turbos.values())
+
+    def _ask_close(self, snap: Snapshot) -> bool:
+        if self._something_on(snap):
+            text = ("Close the program?\n\n"
+                    "The facility is shut down first: the gate valves close and the turbo motors stop; the "
+                    "primary pump and the chiller stay on until the turbos have slowed down.  Then everything "
+                    "is switched off and the program closes by itself.\n\n"
+                    "With turbos at speed this takes as long as they need to slow down.  The program cannot "
+                    "be closed before that - only the shutdown cancelled.")
+        else:
+            text = "Close the program?\n\nEverything is off."
+        box = QMessageBox(QMessageBox.Question, "Close", text, QMessageBox.NoButton, self)
+        yes = box.addButton("Shut down and close" if self._something_on(snap) else "Close", QMessageBox.AcceptRole)
+        box.addButton("Cancel", QMessageBox.RejectRole)
+        box.exec()
+        return box.clickedButton() is yes
+
+    def _ask_cancel_close(self, snap: Snapshot) -> bool:
+        box = QMessageBox(QMessageBox.Information, "Closing",
+                          "The facility is being shut down; the program closes by itself when everything is off.\n\n"
+                          + (snap.exit_note or ""), QMessageBox.NoButton, self)
+        box.addButton("Keep waiting", QMessageBox.AcceptRole)
+        cancel = box.addButton("Cancel – keep the program open", QMessageBox.RejectRole)
+        box.exec()
+        return box.clickedButton() is cancel
+
+    def _request_close(self) -> None:
+        snap = self.ctl.snapshot()
+        if self._closing:
+            if self._ask_cancel_close(snap):
+                self._closing = False
+                self.stop_btn.setEnabled(True)
+                self.ctl.request_cancel_exit()
+            return
+        if not self._ask_close(snap):
             return
         self._closing = True
         self.stop_btn.setEnabled(False)
-        self.ctl.request_stop()
-        QTimer.singleShot(200, self._wait_stop)
+        close_all = getattr(self.ctl.dialogs, "close_all", None)
+        if close_all is not None:
+            close_all()                              # nobody answers an open question now
+        self.ctl.request_safe_exit()
 
-    def _wait_stop(self):
-        if self.ctl.finished.is_set():
-            self.close()
+    def _on_stop(self):
+        if self._controller_running():
+            self._request_close()
         else:
-            QTimer.singleShot(200, self._wait_stop)
+            self.close()
 
     def closeEvent(self, ev):
+        if self._controller_running():
+            ev.ignore()                              # not yet: the shutdown runs first (or is asked for now)
+            self._request_close()
+            return
         for dlg in self.speed_dialogs.values():
             dlg.close()
-        if not self.ctl.finished.is_set():
+        if not self.ctl.finished.is_set():           # no control loop running (tests): nothing to wait for
             self.ctl.request_stop()
             self.ctl.join(15.0)
         ev.accept()
 
     # ------------------------------------------------------------------ refresh
     def _poll(self):
+        if self._closing and self.ctl.finished.is_set():
+            self._closing = False
+            self.close()                             # the shutdown is done - now the window may go
+            return
         snap = self.ctl.snapshot()
         self.time_label.setText(datetime.now().strftime("%H:%M:%S       %d/%m/%Y"))
         new_iteration = snap.iteration != self._last_iteration
@@ -385,7 +447,13 @@ class MainWindow(QMainWindow):
         else:
             self.state_label.setText("Click a valve / pump / turbo on the diagram to command it." if snap.mode != Mode.INITIALIZE else "")
             self._show_auto_buttons(None)
-        if snap.elapsed_below_threshold_s > 0:
+        if snap.exiting:
+            self.elapsed_label.setText(f'<b style="color:#C00000">{html.escape(snap.exit_note)}</b>')
+        elif snap.mode == Mode.AUTO and snap.auto_note:
+            # e.g. "Waiting for turbos to reach standby speed (4 of 6, 03:12) ..." - bold, same colour as
+            # the settle-wait line: the sequence is alive and this is what it is waiting for
+            self.elapsed_label.setText(f'<b style="color:#8A4B00">{html.escape(snap.auto_note)}</b>')
+        elif snap.elapsed_below_threshold_s > 0:
             self.elapsed_label.setText(f"Elapsed Time below threshold: {snap.elapsed_below_threshold_s:.0f} s  "
                                        f"(needs {self.cfg.thresholds.min_time_below_threshold_s:.0f} s)")
         elif snap.mode == Mode.AUTO and snap.current.name == "OVERNIGHT_PUMP" and snap.turbo_engage_time:

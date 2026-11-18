@@ -23,9 +23,20 @@ Plant-safety rules enforced for EVERY Auto state (end of `step`, highest priorit
   1. a turbo that is turning never sees an un-roughed chamber - not at its exhaust (bypass + turbo
      valve) and not at its inlet (gate).  Isolating a turning turbo for the time it takes to rough
      the chamber is acceptable; exposing it is not (2026-11-11);
+  1b. a turning turbo whose backing has gone - primary pump not running, or the foreline above its
+     limit - is isolated at once and Auto stops with error 5012 (2026-11-12);
   2. the bypass is never opened into a chamber that is below the foreline (2026-09-22);
-  3. otherwise a turning turbo keeps its backing: turbo valve open and primary pump running
-     (2026-09-22 / 2026-09-23).
+  3. otherwise a turning turbo keeps its backing AND its cooling: turbo valve open, primary pump
+     and chiller running (2026-09-22 / 2026-09-23 / 2026-11-12);
+  3b. a turbo valve never OPENS onto a turning turbo unless the foreline is really pumped (2026-11-12).
+  0. after a turbo speed-drop trip (error 5015, detected by the controller) every turbo is isolated -
+     gates and turbo valves shut, motors off - until the operator clears the error (2026-11-17).
+And in Pumping to High Vac: if the chamber comes up above the exposure limit the gates close and
+Auto stops with error 5013 (2026-11-12); the same if it stays above `high_vac_pressure_slow_trip`
+for `pressure_slow_trip_delay_s` (2026-11-17).
+
+`AutoOutput.trip` is how the state machine stops itself: (error code, text).  The controller keeps
+it as an error until the operator clears it.
 """
 from __future__ import annotations
 
@@ -35,7 +46,8 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set
 
 from .config import FacilityConfig, TurboConfig
-from .model import Commands, FacilityState as S, Inputs, TabPage, TurboInputs, primary_is_running
+from .model import (Commands, ERR_BACKING_LOST, ERR_CHAMBER_PRESSURE, FacilityState as S, Inputs, TabPage,
+                    TurboInputs, primary_is_running)
 from .units import torr_to
 
 
@@ -45,6 +57,7 @@ SUB_ROUGH_ENTRY = 0          # decide the start order from the chamber pressure
 SUB_ROUGH_BYPASS_FIRST = 1   # high pressure: bypass already open, now start the primary pump
 SUB_ROUGH_PRIMARY_GAP = 2    # low pressure: primary running, waiting the gap before the bypass opens
 SUB_ROUGH_WAIT = 3           # primary + bypass on: wait for the chamber to sit below the threshold
+HV_TRIP_ARM_FRACTION = 0.5   # `high_vac_pressure_trip` counts once the chamber has been below this x the level
 
 
 # ---------------------------------------------------------------------------- timers
@@ -83,8 +96,21 @@ class AutoMemory:
     last_gate_open: Optional[float] = None       # time of the last gate OPEN command (gate_open_stagger_s)
     standby_wait_start: Optional[float] = None   # Engage, turbos-first: when the turbos were started
     hv_request_wrg: Optional[float] = None       # chamber pressure when high vac was asked for (Torr)
+    # Engage Turbo: 'gates_first' (the VIs' order) or 'turbos_first' - decided ONCE on entering the
+    # gate/turbo step and kept until Engage Turbo is left (2026-11-11).  None = not decided yet.
+    engage_order: Optional[str] = None
     kept_tv_logged: Set[str] = field(default_factory=set)   # 'kept the valve open' logged once per episode
     isolated_tv: Set[str] = field(default_factory=set)      # turbo valves shut by the exhaust protection
+    held_tv: Set[str] = field(default_factory=set)          # turbo valves whose OPENING is being held (no backing yet)
+    undriven: Set[str] = field(default_factory=set)         # turbos whose start is refused: turbo valve shut (rule 4)
+    hv_pressure_since: Optional[float] = None    # Pumping to High Vac: when the chamber went above the limit
+    hv_trip_armed: bool = False                  # ... the chamber has been below half of `high_vac_pressure_trip`
+    hv_slow_since: Optional[float] = None        # ... when it went above `high_vac_pressure_slow_trip`
+    hv_slow_armed: bool = False                  # ... it has been below half of `high_vac_pressure_slow_trip`
+    speed_iso_logged: bool = False               # 'all turbos isolated' logged once per speed-drop trip
+    primary_down_since: Optional[float] = None   # when the primary pump was first seen not running although commanded
+    foreline_high_since: Optional[float] = None  # when the foreline was first seen above its limit (bypass shut)
+    cooling_kept_logged: bool = False
 
 
 @dataclass
@@ -100,6 +126,7 @@ class AutoInput:
     turbo_on_threshold_torr: float
     turbo_engage_time: Optional[float]  # epoch seconds ('Turbo Engage time')
     skip_primary_warm: bool
+    isolate_turbos: bool = False       # speed-drop trip (5015) not cleared yet: every turbo stays isolated
 
 
 @dataclass
@@ -112,6 +139,13 @@ class AutoOutput:
     log: List[str] = field(default_factory=list)
     skip_primary_warm: bool = False
     elapsed_below_threshold_s: float = 0.0
+    note: str = ""                     # what Auto is waiting for right now - shown on the panel
+    trip: Optional[tuple] = None       # (error code, text): Auto has stopped itself - the controller raises it
+
+
+def _mmss(seconds: float) -> str:
+    seconds = max(0, int(seconds))
+    return f"{seconds // 60:02d}:{seconds % 60:02d}"
 
 
 def _ts() -> str:
@@ -375,6 +409,8 @@ class AutoStateMachine:
         tab = TabPage.FACILITY_OFF
         skip_warm = a.skip_primary_warm
         elapsed_below = 0.0
+        note = ""
+        trip: Optional[tuple] = None
 
         def all_off():
             for v in cmds.valves:
@@ -587,17 +623,25 @@ class AutoStateMachine:
                 if self._gates_must_wait(inp, prev, a.turbo_on_threshold_torr, log):
                     bp, gv, out_sub = False, False, 0    # a turning turbo's inlet never sees it
                     new_cur = S.PUMPING_TO_ROUGH
-                elif first is not None and th.wrg_error_threshold_torr < p_dec < first:
-                    wrg_shown = p_dec
-                    # low pressure (2026-10-28): turbos first, gates closed -> they run up to standby
-                    bp, gv, out_sub = False, False, 6
-                    self._set_motors(cmds, True)
-                    self.mem.standby_wait_start = a.now
-                    log.append(f"Chamber at {torr_to('mbar', wrg_shown):.1e} mBar (< {torr_to('mbar', first):.0e}): "
-                               f"starting the turbos with the gates closed – the gates open once every turbo "
-                               f"is at standby speed ({_ts()})")
                 else:
-                    bp, gv, out_sub = False, True, 5     # open gate(s) - one by one on a shared air line
+                    # The order is decided ONCE, the first time this step runs, and then kept.  With
+                    # the gates opening one by one this step runs for a minute or more while the
+                    # chamber keeps falling; re-deciding on every pass (as it did until 2026-11-11)
+                    # could flip to turbos-first part-way - closing the gates already open and
+                    # starting every turbo in standby behind shut gates.
+                    if self.mem.engage_order is None:
+                        low = first is not None and th.wrg_error_threshold_torr < p_dec < first
+                        self.mem.engage_order = "turbos_first" if low else "gates_first"
+                    if self.mem.engage_order == "turbos_first":
+                        # low pressure (2026-10-28): turbos first, gates closed -> they run up to standby
+                        bp, gv, out_sub = False, False, 6
+                        self._set_motors(cmds, True)
+                        self.mem.standby_wait_start = a.now
+                        log.append(f"Chamber at {torr_to('mbar', p_dec):.1e} mBar (< {torr_to('mbar', first):.0e}): "
+                                   f"starting the turbos with the gates closed – the gates open once every turbo "
+                                   f"is at standby speed ({_ts()})")
+                    else:
+                        bp, gv, out_sub = False, True, 5     # open gate(s) - one by one on a shared air line
             elif substate == 6:                          # turbos-first: wait for standby speed
                 bp, gv = False, False
                 self._set_motors(cmds, True)
@@ -606,6 +650,11 @@ class AutoStateMachine:
                 waited = a.now - start
                 waiting = [t.label for t in self._turbos() if not self._at_standby(inp, t, waited)]
                 out_sub = 6
+                n_all = len(self._turbos())
+                note = (f"Waiting for turbos to reach standby speed ({n_all - len(waiting)} of {n_all}, "
+                        f"{_mmss(waited)}) – gates stay closed until then, or until "
+                        f"{_mmss(self.tm.turbo_standby_timeout_s)}"
+                        + (f".  Still running up: {', '.join(waiting)}" if waiting else ""))
                 if not waiting:
                     out_sub = 7
                     log.append(f"Turbos at standby speed after {waited:.0f} s – opening the gate valves ({_ts()})")
@@ -628,18 +677,46 @@ class AutoStateMachine:
                     new_cur = S.PUMPING_TO_HIGH_VAC
             else:  # 5 – start the turbo(s)
                 bp, gv, out_sub = False, True, 0
-                self._set_motors(cmds, True)
-                self.mem.hv_request_wrg = None
-                new_cur = S.PUMPING_TO_HIGH_VAC
+                if am.start_turbo_with_its_gate and not all(
+                        prev.valves.get(t.gate_valve, False) and inp.valve_reads.get(t.gate_valve, True)
+                        for t in self._turbos()):
+                    # the last gate is still travelling (only seen without blocking settle waits):
+                    # its turbo waits for it like the others did - see below
+                    out_sub = 5
+                else:
+                    self._set_motors(cmds, True)
+                    self.mem.hv_request_wrg = None
+                    new_cur = S.PUMPING_TO_HIGH_VAC
             if bypass:
                 cmds.valves[bypass] = bp
             if gv is None:
                 pass
             elif gv:
                 if not self._open_gates_staggered(cmds, prev, a.now, log) and out_sub == 5:
-                    out_sub = 4                          # turbos start only when every gate is open
+                    out_sub = 4                          # ... until every gate is open
+                if am.start_turbo_with_its_gate:
+                    # A turbo starts when its OWN gate is open: commanded open in an earlier pass (so
+                    # it has had its settle wait) and reading open.  From rest, gate open - exactly
+                    # how every turbo starts when they all wait for the last gate; only the waiting
+                    # is gone.  (A gate that does not open leaves its turbo stopped.)
+                    for t in self._turbos():
+                        g = t.gate_valve
+                        if (cmds.valves.get(g, False) and prev.valves.get(g, False)
+                                and inp.valve_reads.get(g, True)):
+                            if not prev.turbo_motor.get(t.id, False) and not cmds.turbo_motor.get(t.id, False):
+                                who = "turbo" if len(cfg.turbos) == 1 else t.label
+                                log.append(f"{cfg.valves[g].label} is open – starting {who} ({_ts()})")
+                            cmds.turbo_motor[t.id] = True
             else:
                 self._set_gates(cmds, False)
+            if new_cur == S.ENGAGE_TURBO and not note and (gv is None or gv):
+                gates = sorted({t.gate_valve for t in self._turbos()})
+                n_open = sum(1 for g in gates if cmds.valves.get(g, False))
+                if n_open < len(gates):
+                    note = (f"Opening the gate valves one at a time ({n_open} of {len(gates)})"
+                            + ((" – each turbo starts when its gate is open" if am.start_turbo_with_its_gate
+                                else " – the turbos start once all are open") if gv else
+                               " – each turbo leaves standby when its gate opens"))
             cur, tgt = new_cur, new_tgt
 
         # =====================================================================
@@ -666,6 +743,58 @@ class AutoStateMachine:
                 new_cur, new_tgt = S.DISENGAGE_TURBO, S.VENT_AND_SHUTDOWN
             if "vent" in b:
                 new_cur, new_tgt = S.DISENGAGE_TURBO, S.VENTING   # turbo keeps running
+            # --- the chamber must stay evacuated while the gates are open (2026-11-12).  Neither VI
+            # reacts to a chamber that comes up in this state - a leak, the hand vent valve, a seal:
+            # the gates stay open until a turbo trips, and with the turbos still running up nothing
+            # trips at all.  Above the exposure limit (what Engage Turbo accepts before it opens the
+            # gates) for `pressure_trip_delay_s`: close the gates and stop.  The turbos stay backed
+            # and cooled while they slow (global rule 3).  A chamber gauge that cannot be read does
+            # not trip.
+            # `high_vac_pressure_trip` (2026-11-12: in normal work - firing, pulling
+            # vacuum on new lines - the chamber stays below 1e-2 mBar, so 1e-1 is a leak) is a lower
+            # trip level than the exposure limit.  The gates open near the turbo-on threshold, which
+            # is ABOVE it, so it only counts once the chamber has pumped down below half of it.
+            hv_limit = self._exposure_limit(a.turbo_on_threshold_torr)
+            hv_readable = not math.isnan(wrg) and wrg > th.wrg_error_threshold_torr
+            hv_trip = th.high_vac_pressure_trip_torr
+            if hv_trip is not None and hv_trip < hv_limit:
+                if hv_readable and wrg < HV_TRIP_ARM_FRACTION * hv_trip:
+                    self.mem.hv_trip_armed = True
+                if self.mem.hv_trip_armed:
+                    hv_limit = hv_trip
+            if hv_readable and wrg > hv_limit:
+                since = self.mem.hv_pressure_since if self.mem.hv_pressure_since is not None else a.now
+                self.mem.hv_pressure_since = since
+                if a.now - since >= self.tm.pressure_trip_delay_s:
+                    self._set_gates(cmds, False)
+                    trip = (ERR_CHAMBER_PRESSURE,
+                            f"Chamber pressure rose to {torr_to('mbar', wrg):.1e} mBar in Pumping to High Vac "
+                            f"(limit {torr_to('mbar', hv_limit):.1e} mBar) - gates closed")
+            else:
+                self.mem.hv_pressure_since = None
+            # --- ... and a second, slower trip (2026-11-17).  Between "normal" (the chamber stays
+            # below 1e-2 mBar in all normal work) and the trip above (1e-1 mBar) nothing reacted: a
+            # leak that SETTLES in between leaves the turbos at full speed in gas they are not meant
+            # to pump for long.  Above `high_vac_pressure_slow_trip` for `pressure_slow_trip_delay_s`
+            # (30 s - a gauge misreading while it changes range, or a short burst, passes): the same
+            # reaction.  Armed the same way, once the chamber has been below half of it.
+            hv_slow = th.high_vac_pressure_slow_trip_torr
+            if hv_slow is not None and hv_readable:
+                if wrg < HV_TRIP_ARM_FRACTION * hv_slow:
+                    self.mem.hv_slow_armed = True
+                if self.mem.hv_slow_armed and wrg > hv_slow:
+                    since = self.mem.hv_slow_since if self.mem.hv_slow_since is not None else a.now
+                    self.mem.hv_slow_since = since
+                    if trip is None and a.now - since >= self.tm.pressure_slow_trip_delay_s:
+                        self._set_gates(cmds, False)
+                        trip = (ERR_CHAMBER_PRESSURE,
+                                f"Chamber pressure stayed above {torr_to('mbar', hv_slow):.1e} mBar for "
+                                f"{a.now - since:.0f} s in Pumping to High Vac (now {torr_to('mbar', wrg):.1e} mBar) "
+                                f"- gates closed")
+                else:
+                    self.mem.hv_slow_since = None
+            else:
+                self.mem.hv_slow_since = None
             cur, tgt = new_cur, new_tgt
 
         # =====================================================================
@@ -813,6 +942,13 @@ class AutoStateMachine:
             all_off()
             cur = S.FACILITY_OFF
 
+        if cur != S.ENGAGE_TURBO or out_sub < 4:
+            self.mem.engage_order = None               # decided afresh the next time the step is entered
+        if cur != S.PUMPING_TO_HIGH_VAC:
+            self.mem.hv_pressure_since = None
+            self.mem.hv_trip_armed = False
+            self.mem.hv_slow_since = None
+            self.mem.hv_slow_armed = False
         if cur in (S.FACILITY_OFF, S.VENTING):
             self.mem.hv_request_wrg = None             # a stale request pressure never carries over
         # --- VC100: turbo standby line = motor commanded while its gate is closed - except in
@@ -881,8 +1017,89 @@ class AutoStateMachine:
         if bypass_open_or_opening and not roughed:
             isolate = {t.turbo_valve for t in fitted
                        if self._turning(inp, cmds, t) or self._turning(inp, prev, t)}
+        exposure_iso = set(isolate)
+
+        # --- 1b. a turning turbo whose BACKING HAS GONE is isolated at once (2026-11-12)
+        # Rule 3 below keeps the turbo valve of a turning turbo open - right while there is a
+        # working pump behind it, wrong the moment there is not: with the primary stopped the
+        # foreline backfills towards atmosphere straight into the turbo, until it trips (the VC100
+        # even raised error 5000 and still held the valves open).  Manufacturer guidance is the
+        # opposite: close the fore-vacuum valve before, or as soon as, the backing pump stops.
+        # Two signs, either is enough:
+        #   * the primary pump is commanded but not running (run read-back / drive frequency; with
+        #     no feedback fitted, the run relay) for `backing_lost_delay_s`;
+        #   * the foreline gauge reads above `turbo_foreline_max` with the bypass shut - the only
+        #     sign there is on a pump without feedback.
+        # Then: turbo valve shut, motor off, error 5012.  Shut valves re-open through rule 3 only
+        # onto a foreline that is pumped again.
+        # (No waiting once an error is already shutting the facility down: that shutdown closes the
+        #  gates, the loop then stands still for the gate settle time, and the turbo valves would
+        #  stay open onto the dead foreline for all of it.)
+        lost_why = ""
+        if prev.primary and not primary_is_running(cfg.primary, inp, prev):
+            since = self.mem.primary_down_since if self.mem.primary_down_since is not None else a.now
+            self.mem.primary_down_since = since
+            if a.error_active or a.now - since >= self.tm.backing_lost_delay_s:
+                lost_why = "the primary pump is not running"
+        else:
+            self.mem.primary_down_since = None
+        fore_now = self._foreline(inp)
+        fore_max = th.turbo_foreline_max_torr if th.turbo_foreline_max_torr is not None \
+            else self._exposure_limit(a.turbo_on_threshold_torr)
+        if (cfg.foreline_gauge is not None and not bypass_open_or_opening and not math.isnan(fore_now)
+                and fore_now > th.gauge_error_threshold_torr and fore_now > fore_max):
+            since = self.mem.foreline_high_since if self.mem.foreline_high_since is not None else a.now
+            self.mem.foreline_high_since = since
+            if (a.error_active or a.now - since >= self.tm.backing_lost_delay_s) and not lost_why:
+                lost_why = (f"the foreline is at {torr_to('mbar', fore_now):.1e} mBar "
+                            f"(limit {torr_to('mbar', fore_max):.1e} mBar)")
+        else:
+            self.mem.foreline_high_since = None
+        if lost_why:
+            unbacked = {t.turbo_valve for t in fitted
+                        if (self._turning(inp, cmds, t) or self._turning(inp, prev, t))
+                        and (prev.valves.get(t.turbo_valve, False) or cmds.valves.get(t.turbo_valve, False))}
+            was_open = sorted(tv for tv in unbacked if prev.valves.get(tv, False))
+            if was_open:
+                labels = ", ".join(cfg.valves[tv].label for tv in was_open)
+                text = f"Backing lost with a turbo turning - {lost_why}: {labels} closed"
+                log.append(f"!! {text} ({_ts()})")
+                trip = trip or (ERR_BACKING_LOST, text)
+            isolate |= unbacked
+            # ... and its GATE with it, in the same command frame (2026-11-12, from the measured
+            # plant).  A foreline that is too high has two causes and the gauge cannot tell them
+            # apart: the pump behind it has gone, or the turbo is pushing more gas into it than
+            # the pump takes (a leak in the chamber - on the small chamber's roughing line that
+            # reaches the limit before the chamber gauge does).  Shutting only the turbo valve is
+            # right for the first and wrong for the second: the rotor would keep taking gas through
+            # its open gate with nowhere to put it.  Shut both sides; it coasts isolated.
+            for t in fitted:
+                if t.turbo_valve in unbacked:
+                    cmds.valves[t.gate_valve] = False
+
+        # --- 0. speed-drop trip (2026-11-17): a turbo lost a large part of its speed within seconds
+        # (the controller watches the speed readings and raises error 5015).  That is what air on a
+        # rotor looks like, and it means something Auto relies on is wrong - a gauge, a valve, the
+        # logic itself: on 2026-11-05 four turbos went from 78 % to 5 % in ten seconds and nothing
+        # reacted.  So nothing is trusted: EVERY turbo is shut off from both sides (they share one
+        # foreline; both incidents hit more than one), motors off.  They coast isolated - the logs
+        # show the same coast-down backed or isolated - and keep their cooling (rule 3).  It stays
+        # like this until the operator clears the error; after that a valve re-opens through rule 3
+        # only onto a foreline that is pumped.
+        if a.isolate_turbos:
+            isolate |= {t.turbo_valve for t in fitted}
+            for t in fitted:
+                cmds.valves[t.gate_valve] = False
+            if not self.mem.speed_iso_logged:
+                self.mem.speed_iso_logged = True
+                log.append(f"Every turbo isolated – gates and turbo valves closed, motors off; the chiller "
+                           f"stays on while they slow down.  Stays like this until the error is "
+                           f"cleared ({_ts()})")
+        else:
+            self.mem.speed_iso_logged = False
+
         if isolate:
-            not_shut_yet = sorted(tv for tv in isolate
+            not_shut_yet = sorted(tv for tv in exposure_iso
                                   if prev.valves.get(tv, False) or inp.valve_reads.get(tv, False))
             for tv in isolate:
                 cmds.valves[tv] = False
@@ -894,7 +1111,7 @@ class AutoStateMachine:
                 for b_ in bypass_ids:
                     if not prev.valves.get(b_, False):
                         cmds.valves[b_] = False          # the bypass waits for the turbo valves
-            new_iso = isolate - self.mem.isolated_tv
+            new_iso = exposure_iso - self.mem.isolated_tv
             if new_iso:
                 labels = ", ".join(cfg.valves[tv].label for tv in sorted(new_iso))
                 shown = "not readable" if math.isnan(wrg) else f"at {torr_to('mbar', wrg):.1e} mBar"
@@ -957,6 +1174,74 @@ class AutoStateMachine:
             cmds.primary = True
             if not prev.primary:
                 log.append(f"Kept the primary pump running - a turbo is still spinning at {_ts()}")
+        # ... and its cooling (2026-11-12).  Facility Off switches everything off - on every error
+        # shutdown that meant the chiller stopped with the rotors at ~100 % (and where the chiller
+        # contactor feeds the turbo controllers, their supply with it).  While any turbo is above the
+        # lower of the two "still spinning" speeds, or driven, the chiller stays on.
+        cool_pct = min(slow_pct, th.turbo_spinning_pct)
+        needs_cooling = any(self._spinning(inp, t, cool_pct) or cmds.turbo_motor.get(t.id, False) for t in fitted)
+        if needs_cooling and not cmds.chiller:
+            cmds.chiller = True
+            if not self.mem.cooling_kept_logged:
+                self.mem.cooling_kept_logged = True
+                log.append(f"Kept the chiller running - a turbo is still spinning at {_ts()}")
+        elif not needs_cooling:
+            self.mem.cooling_kept_logged = False
+
+        # --- 3b. a turbo valve never OPENS onto a turning turbo without backing (2026-11-12)
+        # The states open turbo valves by their own rules (Venting / Overnight / Turbo slowing: "open
+        # while the turbo spins"; Engage: "open") without looking at the foreline.  One loop after the
+        # bypass closed that is a few Torr; after a program restart or an Admin hand-over with a
+        # turbo still coasting and the primary off it is ATMOSPHERE - the valve opens in a second,
+        # a two-relay pump needs 15 s before it even starts.  So an opening onto a turning turbo
+        # waits for `_backing_safe`.  While it waits that turbo is not started and its gate not
+        # opened.  (Profiles with `turbo_valve_needs_backing` have the controller apply the same
+        # test to every opening and explain it to the operator - nothing to add here.)
+        if not am.turbo_valve_needs_backing:
+            held_now: Set[str] = set()
+            for tv in sorted({t.turbo_valve for t in fitted}):
+                if tv in isolate or not cmds.valves.get(tv, False) or prev.valves.get(tv, False):
+                    continue                             # not an opening
+                on_valve = [t for t in fitted if t.turbo_valve == tv]
+                if not any(self._turning(inp, prev, t) for t in on_valve):
+                    continue                             # nothing turning behind it: the VIs' rules stand
+                if self._backing_safe(inp, cmds, tv, a.turbo_on_threshold_torr):
+                    if tv in self.mem.held_tv:
+                        log.append(f"{cfg.valves[tv].label}: foreline pumped down – opening ({_ts()})")
+                    continue
+                held_now.add(tv)
+                cmds.valves[tv] = False
+                for t in on_valve:
+                    if not prev.turbo_motor.get(t.id, False):
+                        cmds.turbo_motor[t.id] = False
+                        cmds.turbo_standby[t.id] = False
+                    if not prev.valves.get(t.gate_valve, False):
+                        cmds.valves[t.gate_valve] = False
+                if tv not in self.mem.held_tv:
+                    fl = self._foreline(inp)
+                    shown = "not readable" if math.isnan(fl) else f"at {torr_to('mbar', fl):.1e} mBar"
+                    log.append(f"{cfg.valves[tv].label} held closed – a turbo is still turning behind it and the "
+                               f"foreline is {shown}, not pumped down yet ({_ts()})")
+            self.mem.held_tv = held_now
+            if held_now and not cmds.primary:
+                cmds.primary = True                      # so the backing can come up
+
+        # --- 4. a turbo is never DRIVEN behind a shut turbo valve (2026-11-12)
+        # Whatever the rules above decided about the valve, the motor follows it: a rotor may coast
+        # isolated, it is never run up against a dead volume.  (Found by the random operator: 'Shut
+        # Off' while roughing with the turbo coasting isolated, then 'Pump to High Vac' on the Turbo
+        # slowing page - frame 7 restarts the motor, and rule 3 could not re-open the valve because
+        # the foreline was not pumped down.)  Engage Turbo starts it once the valve is open.
+        undriven: Set[str] = set()
+        for t in fitted:
+            if cmds.turbo_motor.get(t.id, False) and not cmds.valves.get(t.turbo_valve, False):
+                cmds.turbo_motor[t.id] = False
+                cmds.turbo_standby[t.id] = False
+                undriven.add(t.id)
+                if t.id not in self.mem.undriven:
+                    who = "Turbo" if len(cfg.turbos) == 1 else t.label
+                    log.append(f"{who} not started – its turbo valve is shut ({_ts()})")
+        self.mem.undriven = undriven
 
         # --- global protection: high-pressure turbo shut-off (turbo gauge >= 5 Torr / 5 mBar)
         for t in self._turbos():
@@ -967,4 +1252,4 @@ class AutoStateMachine:
                     who = "turbo" if len(cfg.turbos) == 1 else t.label.lower()
                     log.append(f"High pressure {who} shuttoff triggered at {_ts()}")
 
-        return AutoOutput(cmds, cur, tgt, out_sub, tab, log, skip_warm, elapsed_below)
+        return AutoOutput(cmds, cur, tgt, out_sub, tab, log, skip_warm, elapsed_below, note, trip)

@@ -165,12 +165,11 @@ Because the run relay does nothing on an unpowered pump, the controller **sequen
 * stop: run off → `timings.primary_run_to_power_off_gap_s` (**5 min**) → power off
 
 The pump therefore keeps its mains power for five minutes after it is told to stop, while it coasts
-down.  The STOP button and program exit are the exception: the safe state drops **both** relays at
-once, without sequencing.
+down.  (2026-11-17: STOP and closing the window now run the normal shutdown, so they wait this gap
+too.  Only a crash of the loop or `request_stop` still drops **both** relays at once.)
 
 The control loop keeps reading during those gaps – they sequence two relays, they are not
-cross-check settle windows – and the sequence also advances while a dialog is open.  Program exit
-and the STOP button are the exception: the safe state drops **both** relays at once.
+cross-check settle windows – and the sequence also advances while a dialog is open.
 
 Auto mode, Manual mode and the operator still deal with a single pump: the state machine only ever
 sets the *demand* (`Commands.primary`) and the controller expands it into the two lines, so
@@ -302,6 +301,268 @@ design but the confirmation question carries a WARNING.
 
 `tests/test_turbo_exposure.py` replays the report on both profiles (both buttons, coasting and at
 speed) against the simulated plant — valve positions and pressures, not just commands.
+
+## Safety tests for Auto mode (2026-11-11)
+
+`python -m pytest tests -k safety` drives both facility profiles through every Auto button in every
+situation, hours of random operator sequences, every fault the simulator can express and Admin -> Auto
+hand-overs, on a deterministic plant, with a monitor that watches valve positions, pressures and
+rotor speeds for 17 safety rules (a turning turbo never sees an un-roughed chamber at inlet or
+exhaust, never runs without backing or cooling, the vent never opens onto an open gate, ...).
+Run against the code from before the 2026-11-11 fix, the sweep fails in 9 cells and the random
+operator in 11 of 24 runs.  The rules, how to run them (`SAFETY_LEVEL=quick|normal|full`), how to
+replay a failure and what they found are in `docs/SAFETY_TESTS.md`.
+
+## Protections added after the safety tests (2026-11-12)
+
+The safety tests found eight unsafe behaviours, and a ninth while the fixes were being checked (table
+in `docs/SAFETY_TESTS.md`).  Six are fixed in the engine, one by a profile switch, the dead pressure
+gauge since 2026-11-16 (below), and one stays open by decision (small chamber: a stopped primary
+pump with no turbo turning):
+
+* **Cooling follows the turbos.**  While any turbo is above the "still spinning" speed the chiller
+  stays on, in every state - Facility Off after an error included (it used to stop at once).
+* **A turbo valve only opens onto a turning turbo when the foreline is pumped** (primary running and
+  foreline below `turbo_valve_foreline_ok` / the turbo-on threshold, or below the turbo gauge).  Covers
+  a program restart with turbos still coasting.
+* **Backing lost -> isolate, error 5012.**  Primary pump not running, or foreline above
+  `turbo_foreline_max_mbar` (3 mBar on both chambers) with the bypass shut, while a turbo turns
+  behind an open turbo valve: the valve and the gate shut, the motor stops, Auto stops.  This is also how the small chamber notices a dead
+  primary pump without the frequency reader.
+* **Pressure rise in Pumping to High Vac -> gates closed, error 5013.**  Chamber above
+  `high_vac_pressure_trip_mbar` (1e-1 mBar on both chambers; normal work stays below 1e-2 mBar) for `pressure_trip_delay_s`.  The level counts once the chamber has pumped down below
+  half of it after the gates opened; until then the exposure limit (1 / 1.25 mBar) is the trip level.
+  Auto stops; the turbos coast down with the primary pump and the chiller on.
+* Small chamber: `shut_off_spins_down_first: true` ("Shut Off" while roughing goes through Turbo
+  slowing).
+* **A turbo is never driven behind a shut turbo valve.**  Whatever the other rules decide about the
+  valve, the motor follows it (found by the random-operator test while checking the fixes above).
+* **A backing-lost trip shuts the gate with the turbo valve**, in one command frame (found on the
+  plant measured from the logs: a chamber leak can push the foreline over its limit first).
+
+New error codes: 5012 backing lost, 5013 chamber pressure rose in high vac, 5014 gauge dead or frozen (2026-11-16, below).
+**The thresholds were set on the simulator** - `docs/SAFETY_TESTS.md` lists what to check on each
+facility before relying on them.
+
+## What the facility logs showed (2026-11-12)
+
+The CSV logs of 23 Oct - 11 Nov were read row by row (`docs/PLANT_FROM_LOGS.md`).
+
+* They contain the three things that went wrong on the VC100 - 28 Oct (Turbo 2 and 5 from 98 % to
+  18 % in 5 s), 5 Nov (four HiPace turbos from 78 % to 5 % in 10 s) and 9 Nov (gates closed again,
+  turbos left in standby, three times).  All three are fixed; `tests/test_safety_incidents.py`
+  replays each one.
+* The simulator now uses the measured plant: roughing, venting, run-up and coast-down times, a
+  foreline that is at atmosphere within seconds of the primary stopping, a rotor that air stops in
+  seconds, turbo controllers that only warn.  Each profile's `simulation:` block marks those numbers
+  `[log]`.
+* The new trip levels are clear of everything logged: foreline at most 3.9e-1 mBar with the turbos
+  running (trip 3 mBar), chamber at most 1.2e-4 mBar once pumped down (trip 1e-1 mBar).
+
+`python tools/audit_logs.py logs/facility_vc100_*.csv` runs the safety rules over any log and lists
+what it finds (exit code 1 if a turbo was exposed or crash-braked).
+
+## Starting the facilities (test engineers)
+
+Double-click, in the repository root:
+
+* `Run_Small_Chamber.bat` - small chamber on its real hardware (cDAQ1)
+* `Run_Medium_Chamber_VC100.bat` - VC100 on its real hardware (cDAQ3 + RS-485 turbos)
+
+Neither ever starts the simulator: without the NI-DAQmx driver they stop with a message.  They check
+that LabVIEW is closed and ask once before starting.
+
+## Speed-drop trip, slow chamber-pressure trip, safe program exit (2026-11-17)
+
+Three additions.  Neither VI had any of them.  All settings are in the profiles.
+
+### 1. Turbo speed-drop trip - error 5015
+
+**In plain words:** the program watches the speed of every turbo that reports one.  A turbo never
+slows down quickly by itself - a HiPace that is switched off loses 2 % a *minute*.  If a turbo
+loses **5 % of its full speed within one second**, and it is still down a second later, something
+has hit the rotor with gas, whatever the gauges say.  The program then closes **every gate valve and
+every turbo valve**, stops **every turbo motor**, keeps the chiller running, shows a message and
+raises **error 5015**.  It takes about two seconds from the start of the fall.  The turbos stay
+shut off from both sides until someone presses *Clear Error*.
+
+Why: on 28 Oct two turbos went from 98 % to 18 % in 5 s, on 5 Nov four went from 78 % to 5 % in
+under 10 s.  The pumps reported a warning, not an error, so nothing reacted.  The causes of both are
+fixed; this is for the next cause nobody has thought of.  It reacts to the fall itself, so it is
+too late for the first seconds - it stops the gas, stops the motors driving against it, and tells
+the operator.
+
+**It does not fire when a slow-down is expected.**  For 15 s after the program itself does one of
+these to a turbo, the 5 %-in-1-s rule is switched off for that turbo:
+
+| the program ... | what the logs show the rotor does then |
+|---|---|
+| switches its motor off (Shutdown, Vent and shutdown, any error) | a HiPace loses at most 0.6 % in the first 5 s and 2.1 % in 30 s - it coasts, it does not brake |
+| puts it in standby, or takes it out (VC100: "Vent" with the turbos running) | not in the logs from full speed - to be watched the first time it is done on the facility |
+| opens its gate onto it while it turns (Pump to High Vac with the turbos still coasting) | at most 2.8 % in 5 s, 7 % in 30 s, with 1.5e-1 mBar in the chamber |
+| switches the chiller off (end of a shutdown, turbos below 15 %) | where the chiller contactor feeds the turbo controller the speed reading goes with it |
+
+During those 15 s a second, coarse rule still counts: **30 % of full speed within 5 s**.  None of
+the above comes near it, and both incidents exceed it.  It is always on.
+
+Also:
+
+* The big Shimadzu turbos (VC100 Turbo 1 and 4), which brake actively when switched off (1 % in
+  5 s), report no speed - they cannot trip it.  Their own alarm contact already stops Auto.
+* Small chamber: its speed signal reads 96 % the moment the motor starts and falls to 17 % in a
+  minute, and what it does at a stop has not been logged.  Nothing at all is judged for 120 s after
+  its motor is switched on or off (`turbo_speed_drop_blank_after_switch_s`).
+* Below the "still spinning" speed (15 %) the 5 % rule does not apply.
+* One bad reading is not a trip: the fall must still be there 1 s later.  A speed signal that goes
+  to zero and STAYS there is (a broken signal wire on the small chamber therefore stops the run;
+  an RS-485 pump that stops answering keeps its last speed and is not judged).
+* All turbos are isolated, not only the one that fell: they share one foreline, and both incidents
+  hit more than one.  After *Clear Error* a turbo valve re-opens only onto a foreline that is pumped.
+* Manual and Admin mode: one line in the log ("... No automatic action in Admin mode").
+* While the loop stands still in a settle wait (up to 9 s after a gate moves, as in the VI) nothing
+  is read.  The 5 % rule does not compare across such a wait; the 30 % rule does.
+
+What it would have done on the logged days (rows are 5 s apart, so "5 % in 1 s" can only be
+bounded): nothing normal lost 5 % even within **10 s**.  The only falls that large are
+
+| what | speed lost | trips? |
+|---|---|---|
+| 28 Oct, Turbo 2 and 5 | about 80 % in 5 s (16 % a second) | yes |
+| 5 Nov, Turbo 2, 5, 6 | 45-65 % in 5 s (9-13 % a second) | yes |
+| 5 Nov, Turbo 3 | 26 % in 5 s (5.2 % a second), then 47 % | yes |
+| small chamber, speed signal after every motor start | 7.4 % in 5 s (1.5 % a second) | no (and blanked) |
+| VC100, gate opened BY HAND in Admin onto a turbo at full speed, 0.8 mBar in the chamber (28 Oct, twice) | 5.1 % and 5.6 % in 5-10 s | no (and Admin only logs) |
+
+Settings: `thresholds.turbo_speed_drop_pct` (5) within `timings.turbo_speed_drop_window_s` (1);
+`thresholds.turbo_speed_crash_pct` (30) within `timings.turbo_speed_crash_window_s` (5);
+`timings.turbo_speed_drop_confirm_s` (1), `turbo_speed_drop_expected_s` (15),
+`turbo_speed_drop_blank_after_switch_s` (small 120, VC100 0).  `null` switches a rule off.
+The first version of this trip (the same day) was the 30 % rule alone; 5 % in 1 s is the test
+engineer's figure.
+
+Tests: `tests/test_turbo_speed_drop.py`.
+
+### 2. A second, slower chamber-pressure trip in Pumping to High Vac - error 5013
+
+The trip of 2026-11-12 closes the gates when the chamber is above 1e-1 mBar for 2 s.  In normal
+work the chamber stays below 1e-2 mBar, and nothing reacted in between: a leak that *settles* at a
+few 1e-2 mBar left the turbos pumping it at full speed.
+
+Now: chamber above `thresholds.high_vac_pressure_slow_trip_mbar` (**1e-2 mBar**) for
+`timings.pressure_slow_trip_delay_s` (**30 s**) -> the same reaction: gates closed, error 5013, Auto
+stops, the turbos slow down with primary pump and chiller on.  30 s so that a gauge misreading while
+it changes range, or a short burst, passes.  Like the first trip it only counts once the chamber
+has been below half of it (the gates open at 1.1-2.4e-1 mBar; the small chamber needs minutes to get
+below 1e-2).  `null` = off.
+
+Against the logs: once below 1e-3 mBar the chamber never came back above 1e-3 mBar in any logged
+run, on either chamber - a factor of ten under the level, before the 30 s.
+Tests: `tests/test_high_vac_slow_trip.py`.
+
+### 3. Closing the program shuts the facility down first
+
+The VI ('Force stop on exit'), and this port until now, switched everything off in ONE step when
+the program closed - gates, turbo valves, primary pump, chiller, turbo motors - whatever the turbos
+were doing, and without asking when the window was closed with [x].  At full speed that drops the
+cooling with the rotors at 100 %.  (On the simulated plant the turbo valves do shut before the
+foreline has come up, so no gas reaches the turbos; the cooling is what is lost.)
+
+Now **STOP and the window's [x] are the same thing**:
+
+1. The program asks ("Shut down and close" / "Cancel").
+2. It goes to Auto mode, Facility Off - from whatever mode and state it was in.  This is exactly
+   what an error does: gates closed, turbo motors off, vent and bypass closed; a turbo that is still
+   turning keeps its turbo valve, the primary pump and the chiller until it has slowed down (the
+   profile's "still spinning" speeds: backing to 15 % / 50 %, cooling to 15 %).
+3. The panel shows what it is waiting for, in red: "Closing the program – waiting for the turbos to
+   slow down (Turbo 2 63 %, ...)".  Auto buttons and mode changes are ignored.
+4. When everything is off the program closes by itself.  From full speed that takes as long as the
+   turbos need: about 37 min on the VC100 (HiPace, on the plant model fitted to its logs); on the
+   small chamber the turbo's coast-down (not measured yet) plus the primary pump's 5 min power-down
+   gap.
+5. Closing again while it runs offers "Keep waiting" or "Cancel – keep the program open".  There is
+   no way to close the program before the shutdown has finished.
+
+Every other way out - the control loop crashing, `Controller.request_stop()` (tests, `--headless`) -
+cannot wait for the turbos.  It closes the valves and stops the motors first, waits the valve
+travel, stops the primary pump after that, and **leaves the chiller running if a turbo is still
+turning** (the log says so).  With nothing turning it switches everything off as before.
+
+Not covered: the PC losing power, Windows killing the process, the program started again while
+turbos still turn (start-up still writes everything off in one step, as the VI does).
+
+Tests: `tests/test_safe_exit.py` (closing from every Auto situation and from Admin / Manual
+line-ups under the safety monitor, the loop thread, the panel).
+
+## A dead or frozen pressure gauge stops the facility (2026-11-16)
+
+Until now a gauge that had died was simply believed - a dead foreline gauge reads as a good vacuum.
+Two rules, on the chamber gauge, the foreline gauge and the gauge of every turbo in use:
+
+* **dead** - its output is below `thresholds.gauge_dead_below_volts` (1 V) for
+  `timings.gauge_fault_delay_s` (3 s).  A dead or unplugged gauge sends about 0 V; in the logs no
+  gauge on either chamber ever read below 2.7 V, from atmosphere to base pressure.
+* **frozen** - `timings.gauge_frozen_readings` (100) readings in a row are exactly equal, to the
+  last digit of the measured voltage.  A live gauge always has noise (in the logs never more than 10
+  equal rows running).  Not judged within 0.1 V of the ends of the input range, where a clipped
+  signal repeats legitimately.
+
+Either one: a pop-up naming the gauge, **error 5014**, and Auto shuts down as for any error - valves
+closed, turbos stopped but kept backed and cooled while they slow.  The error clears by itself when
+the gauge reads properly again; nothing restarts by itself.  `null` / `0` switches a rule off; one
+gauge can have its own floor (`gauges[].dead_below_volts`).  `tools/audit_logs.py` reports a gauge
+below the floor as GAUGE.  Tests: `tests/test_gauge_health.py`, KI-7 in
+`tests/test_safety_known_issues.py`.
+
+## Engage Turbo on the VC100: each turbo starts with its own gate (2026-11-13)
+
+The gates open one at a time (shared air line, about 10 s each) and the turbos used to start only
+when the sixth was open.  Asked: would it be quicker to start the turbos first and open the gates
+afterwards?  Measured on the plant model fitted to the logs, from the first gate command:
+
+| order | chamber at 1e-3 mBar | at 1e-5 mBar | all six at full speed |
+|---|---|---|---|
+| gates, then turbos (until now) | 126 s | 181 s | 432 s |
+| turbos to standby, then gates (as asked) | 292 s | 302 s | 395 s |
+| **each turbo starts when its own gate is open (now)** | **102 s** | **152 s** | **412 s** |
+
+Turbos first is slower to vacuum - the chamber waits at 1.7e-1 mBar while the turbos run up behind
+closed gates - and it opens the gates onto rotors at about 70 % with 1e-1 mBar still in the chamber.
+The logs show what gas on a turbo at speed does: 28 Oct (Admin), a gate opened onto Turbo 2 at 100 %
+with 2.4e-1 mBar in the chamber put 11 mBar on its exhaust and cost it 8 % of its speed; 9 Nov,
+gates opened onto turbos coasting at 51-57 % at 1.5e-1 mBar cost them 5-7 %.  (Below 1e-2 mBar the
+turbos-first order of 2026-10-28 is still used, unchanged.)
+
+`auto_mode.start_turbo_with_its_gate: true` (VC100 profile) takes the waiting out instead: a turbo
+starts as soon as its own gate has been commanded open, had its settle time and reads open.  It
+still starts from rest with its gate open, as before; a gate that does not open leaves its turbo
+stopped.  `false` gives the old behaviour.  Tests: `tests/test_engage_start_with_gate.py`.
+
+## Engage Turbo: the order is decided once, and the wait is shown (2026-11-11)
+
+Reported from the VC100: now and then Pump to High Vac ended with **every gate shut and every turbo
+in standby**, no error, nothing on the panel; the operator went to Admin, opened the gates and set
+the turbos to full speed by hand.
+
+That state is the *turbos-first* order of 2026-10-28 (`thresholds.turbo_start_before_gates_below_mbar`,
+VC100 1e-2 mBar): below it Engage Turbo starts the turbos behind their closed gates — which on the
+VC100 means standby (`standby_when_gate_closed`) — waits until each is at standby speed (at most
+`timings.turbo_standby_timeout_s`, 10 min) and only then opens the gates one by one.  Two defects:
+
+* **The choice was re-made on every pass of the gate step.**  In the normal gates-first order the
+  gates open one at a time (`gate_open_stagger_s` + the 9 s gate settle each), so the step runs for a
+  minute or more while the chamber keeps falling through the stopped turbos.  If the reading crossed
+  the limit part-way, Auto switched order: it **closed the gates it had just opened** and started all
+  six turbos in standby behind them.  The order is now decided the first time the step runs and
+  kept until Engage Turbo is left (`AutoMemory.engage_order`); gates never close again part-way.
+* **Nothing showed the wait.**  The panel said "substate 6" for up to ten minutes.  It now shows
+  `Waiting for turbos to reach standby speed (4 of 6, 03:12) – gates stay closed until then, or until
+  10:00.  Still running up: Turbo 1, Turbo 4`, then `Opening the gate valves one at a time (3 of 6)`.
+
+Unchanged, and still open: *which* pressure decides.  It is the lower of the reading now and the
+reading when Pump to High Vac was pressed, so a request made at 6e-3 mBar goes turbos-first even if
+opening the turbo valves has lifted the chamber to 0.2 mBar by the time the turbos start.  Set the
+threshold to `null` for the VIs' order every time.  `tests/test_engage_order.py`.
 
 ## Overnight Pump keeps backing the turbo (2026-09-23)
 

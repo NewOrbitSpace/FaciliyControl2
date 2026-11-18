@@ -112,6 +112,12 @@ def test_admin_mode_button_always_works(harness):
 
 
 def test_manual_mode_interlocks(cfg):
+    # The VI's limit for starting the turbo in Manual mode is Turbo Convectron < 1e-2 Torr.  The
+    # simulated gauges bottom out where the logged ones do (2.5 V = 3e-2 Torr for a Convectron), so
+    # for this test of the interlock logic the gauge reads all the way down - and is not judged dead
+    # for doing so.
+    cfg.simulation.gauge_min_volts = 0.0
+    cfg.thresholds.gauge_dead_below_volts = None
     h = Harness(cfg, mode=Mode.MANUAL)
     h.step(2)
     # turbo cannot start: primary off

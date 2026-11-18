@@ -151,6 +151,39 @@ thresholds:
   # BEFORE the bypass may open and the turbo coasts isolated until the chamber is roughed.
   # null = wiggle room x turbo-on threshold = 1 mBar (what the VI's Engage Turbo check accepts).
   turbo_exposure_max_mbar: null
+  # Backing lost (2026-11-12): turbo turning, turbo valve open, bypass shut and the foreline above this
+  # -> the backing has gone (primary pump stopped - this facility has no pump feedback unless the
+  # frequency reader is on - or a foreline leak).  Auto shuts the turbo valve, stops the motor and
+  # raises error 5012 - gate and turbo valve shut together.  3 mBar (2026-11-12): the logs show at
+  # most 3.9e-1 mBar here during turbo run-up, and atmosphere within 6 s of the pump stopping.
+  # null = the exposure limit above (1 mBar).
+  turbo_foreline_max_mbar: 3.0
+  # Dead gauge (2026-11-16): a watched gauge (chamber, foreline, turbo) below this for gauge_fault_delay_s
+  # -> pop-up, error 5014, safe shutdown.  A dead or unplugged gauge sends about 0 V; in the log none
+  # read below 2.7 V.  null = off.  One gauge can have its own value: gauges[].dead_below_volts
+  gauge_dead_below_volts: 1.0
+  # Pressure rise in Pumping to High Vac (2026-11-12): chamber above this for pressure_trip_delay_s
+  # -> gates closed, error 5013, Auto stops (turbos coast down with primary and chiller on).
+  # Normal work stays below 1e-2 mBar, so 1e-1 is a leak.  It only counts once the
+  # chamber has pumped down below half of it after the gates opened; null = the exposure limit (1 mBar).
+  high_vac_pressure_trip_mbar: 1.0e-1
+  # ... and a second, SLOWER trip (2026-11-17): chamber above this for pressure_slow_trip_delay_s (30 s)
+  # -> the same reaction, error 5013.  Normal work stays below 1e-2 mBar; a pressure that SETTLES above
+  # it is a leak even though it never reaches 1e-1.  Counts once the chamber has been below half of
+  # it.  In the log the chamber never came back above 1e-3 mBar once it had been below that.  null = off.
+  high_vac_pressure_slow_trip_mbar: 1.0e-2
+  # Turbo speed-drop trip (2026-11-17): a turbo that loses speed fast has gas on it, whatever the
+  # gauges say -> gate and turbo valve shut, motor off, error 5015, until 'Clear Error'.  Per cent
+  # OF FULL SPEED.  Two rules (null = that rule off):
+  #   fast   turbo_speed_drop_pct within turbo_speed_drop_window_s: 5 % in 1 s (test engineer,
+  #          2026-11-17).  Suspended for turbo_speed_drop_expected_s after anything that is expected
+  #          to slow the rotor down: motor switched, standby, its gate opening onto it, chiller off.
+  #   crash  turbo_speed_crash_pct within turbo_speed_crash_window_s: 30 % in 5 s, always on.
+  # The two VC100 incidents fell at 5-16 % per second.  This chamber's speed signal falls 7.4 % in
+  # 5 s after every start (the signal, not the rotor); the two minutes after the motor is switched
+  # on or off are not judged at all (turbo_speed_drop_blank_after_switch_s).
+  turbo_speed_drop_pct: 5
+  turbo_speed_crash_pct: 30
   # Pumping-to-Rough start order (test engineer, 2026-09-08):
   #   chamber above this -> open the bypass valve FIRST, then start the primary pump
   #   chamber below this -> start the primary pump first, bypass follows after primary_to_bypass_gap_s
@@ -170,6 +203,21 @@ timings:
   primary_to_bypass_gap_s: 25.0 # primary pump -> bypass valve gap (low-pressure branch), 20-30 s
   valve_settle_ms: 1000
   gate_settle_ms: 9000
+  # Protective reactions (2026-11-12): how long a condition must last before Auto acts on it
+  pressure_trip_delay_s: 2.0    # chamber above high_vac_pressure_trip in Pumping to High Vac this long -> gates closed, error 5013
+  pressure_slow_trip_delay_s: 30.0   # chamber above high_vac_pressure_slow_trip this long -> the same
+  turbo_speed_drop_window_s: 1.0     # speed-drop trip, fast rule: the fall is measured over this long
+  turbo_speed_crash_window_s: 5.0    # ... crash rule: over this long
+  turbo_speed_drop_confirm_s: 1.0    # ... and must still be there this much later (one bad reading is not a trip)
+  turbo_speed_drop_expected_s: 15.0  # ... the fast rule is off this long after an expected slow-down (see thresholds)
+  turbo_speed_drop_blank_after_switch_s: 120.0  # ... and nothing is judged this long after the motor is switched
+                                #   ON OR OFF.  On: the speed signal reads 96 % at that moment and falls to 17 %
+                                #   over a minute.  Off: what the signal does then has not been logged yet - set
+                                #   this to 0 for the stop once a log shows it follows the rotor down
+  backing_lost_delay_s: 0.3     # primary not running / foreline above its limit -> turbo valve closed, error 5012
+  gauge_fault_delay_s: 3.0      # a gauge below gauge_dead_below_volts this long -> error 5014
+  gauge_frozen_readings: 100    # this many readings in a row EXACTLY equal -> the gauge is frozen, error 5014
+                                #   (not judged within 0.1 V of the ends of the input range; 0 = off)
   chiller_settle_ms: 10000
   primary_settle_ms: 500
   # Two-relay primary pump (hardware change 2026-09-14).  The loop keeps reading during these gaps
@@ -193,6 +241,10 @@ auto_mode:
   # then backfilled towards atmosphere and the turbo tripped on its own inlet pressure (error 5007).
   # The VC100 VI always did it this way; the small chamber now does too.
   overnight_backing_while_spinning: true
+  # 'Shut Off' on the Pumping to Rough page with the turbo still spinning: go through Turbo slowing
+  # (primary, chiller and turbo valve stay on until it has slowed) instead of straight to Facility
+  # Off (2026-11-12; Main_V4.4.vi went straight to Off, the VC100 VI always did it this way).
+  shut_off_spins_down_first: true
 
 logging:
   csv_enabled: true             # VC100 feature (Main_V4.4 has no file logging)
@@ -202,16 +254,25 @@ logging:
 
 # ---------------------------------------------------------------- simulation model (no DAQ)
 simulation:
+  # Plant model for --sim and the tests.  [log] = measured from this facility's CSV log of
+  # 2026-11-09, the one pump-down recorded so far (docs/PLANT_FROM_LOGS.md).
   time_scale: 1.0               # >1 speeds the plant up (not the control loop)
   chamber_volume_l: 200.0
   foreline_volume_l: 5.0
-  primary_pump_speed_l_s: 12.0
+  primary_pump_speed_l_s: 3.0   # [log] atmosphere -> 2e-1 mBar took 17 min
+  bypass_conductance_l_s: 6.0
+  vent_conductance_l_s: 1.3     # [log] vented in about 2.5 min
+  primary_ultimate_torr: 5.3e-2 # [log] foreline settles at 7e-2 mBar with the turbo at full speed
+  foreline_backfill_s: 2.0      # (VC100 figure; the foreline here also sits at atmosphere when the pump is off)
   turbo_pump_speed_l_s: 700.0
-  turbo_spinup_s: 60.0
-  turbo_spindown_s: 120.0
+  turbo_body_initial_torr: 4.0  # [log] Turbo Convectron reads 2.5-7 mBar with everything off
+  turbo_spinup_s: 360.0         # [log] 100 % six minutes after the motor started
+  turbo_spindown_s: 120.0       # !! NOT measured - the log ends with the turbo still running
+  turbo_air_brake_pct_s: 15.0   # (VC100 figure)
+  turbo_trips_on_pressure: null # not known for this controller: assumed to trip (the safety tests assume it does not)
   valve_actuation_s: 0.6
   atmosphere_torr: 760.0
   chamber_ultimate_torr: 2.0e-7
-  leak_torr_l_s: 1.0e-4
+  leak_torr_l_s: 1.5e-3         # [log] everything off: chamber rises ~1e-5 mBar/s; base 2.6e-6 mBar after 7 h
   outgassing_torr_l_s: 2.0e-5
   compressor_bar: 6.3           # plant air supply for the pneumatic valves (only *reported* when a compressor: block exists)

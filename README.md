@@ -20,6 +20,10 @@ own LabVIEW source and notes.
 - `tooling/` — LabVIEW→JSON export tooling (lvkit, `vi2json.py`) used to reverse-engineer the VIs.
 
 ## Running (lab PC)
-See `python_facility_control/README.md`. In PowerShell, from `python_facility_control/`:
+**Test engineers: double-click `Run_Small_Chamber.bat` or `Run_Medium_Chamber_VC100.bat` in this folder.**
+Both start the real hardware (never the simulator), check the NI driver and that LabVIEW is closed, and
+ask once before starting.
+
+For other options: see `python_facility_control/README.md`. In PowerShell, from `python_facility_control/`:
 `.\run.bat --daq` (small chamber, real cDAQ) · `.\run.bat --config config\facility_vc100.yaml --daq`
 (medium chamber) · add `--sim` for the simulator on any PC.

@@ -38,7 +38,8 @@ from .interlocks import Interlocks
 from .logging_csv import CsvLogger
 from .runhours import RunHours
 from .model import (AUTO_ERROR_CODE_MAX, AUTO_ERROR_CODE_MIN, ERR_BRT_DEVICE, ERR_BYPASS_CONFLICT,
-                    ERR_CHILLER_CONFLICT, ERR_COMPRESSOR_LOW, ERR_DAQ, ERR_GATE_CONFLICT, ERR_PRIMARY_CONFLICT,
+                    ERR_CHILLER_CONFLICT, ERR_COMPRESSOR_LOW, ERR_DAQ, ERR_GATE_CONFLICT, ERR_GAUGE_FAULT,
+                    ERR_PRIMARY_CONFLICT, ERR_TURBO_SPEED_DROP,
                     ERR_TURBO_DEVICE, ERR_TURBO_MOTOR_CONFLICT, ERR_TURBO_VALVE_CONFLICT, ERR_VENT_CONFLICT,
                     TURBO_COLORS, Commands, ErrorCluster, FacilityState, Inputs, Mode, OnOffError, Snapshot,
                     contact_summary, primary_is_running,
@@ -190,6 +191,7 @@ class Controller:
         self._ack_active: Dict[str, bool] = {t: False for t in cfg.turbo_ids}
         self._pending: Optional[PendingDialog] = None
         self._elapsed_below = 0.0
+        self._auto_note = ""                             # Auto's "waiting for ..." line for the panel
         self._valve_errors: Dict[str, bool] = {}
         self._turbo_views: Dict[str, TurboView] = {}
         self._high_vac_since: Optional[float] = None     # Auto entered Pumping to High Vac (full-speed check)
@@ -198,6 +200,25 @@ class Controller:
         self._gate_open_cmd_at: Dict[str, float] = {}    # gate -> when it was commanded open
         self._gate_slow: Set[str] = set()                # gates given extra time to open (logged)
         self._tv_held: Dict[str, str] = {}               # turbo valve -> why it is held closed (no backing yet)
+        self._auto_trip: Optional[ErrorCluster] = None   # Auto stopped itself (5012 / 5013); stays until 'Clear Error'
+        self._gauge_low_since: Dict[str, float] = {}     # gauge id -> when its voltage first fell below 'dead'
+        self._gauge_last_v: Dict[str, float] = {}        # gauge id -> the previous reading's voltage
+        self._gauge_same: Dict[str, int] = {}            # gauge id -> readings in a row exactly equal to it
+        self._gauge_fault: Dict[str, str] = {}           # gauge id -> what is wrong with it (error 5014)
+        # ---- turbo speed-drop trip (error 5015)
+        self._speed_hist: Dict[str, List[Tuple[float, float]]] = {}   # turbo id -> recent (time, speed %)
+        self._speed_low: Dict[str, Tuple[float, float, float]] = {}   # turbo id -> (when the fall was first seen,
+        #                                                                   speed before it, % that must stay lost)
+        self._speed_blank_until: Dict[str, float] = {}   # turbo id -> not judged before this time (motor just switched)
+        self._speed_expect_until: Dict[str, float] = {}  # turbo id -> a slow-down is expected until then (fast rule off)
+        self._speed_reported_until: Dict[str, float] = {}   # turbo id -> its fall is not reported again before this
+        self._speed_cmd_prev: Dict[str, tuple] = {}      # turbo id -> (motor, standby, speed set, gate) last time
+        self._speed_chiller_prev: bool = False
+        self._speed_trip: Optional[ErrorCluster] = None  # stays until 'Clear Error'; every turbo isolated meanwhile
+        # ---- program exit: the facility is shut down safely BEFORE the program stops
+        self._exiting: bool = False
+        self._exit_asked = threading.Event()             # lets a loop waiting for a dialog answer carry on
+        self._exit_note: str = ""
         for tc in cfg.turbos:                            # runtime take-outs never survive a restart
             tc.disabled_reason = ""
         self._not_full: Set[str] = set()                 # turbos already reported 'not at full speed'
@@ -221,8 +242,21 @@ class Controller:
         self._thread.start()
 
     def request_stop(self) -> None:
+        """Stop NOW (tests, headless runs, the end of the process).  Valves are closed before the
+        primary pump is stopped and the cooling is left on if a turbo is still turning - but nothing
+        waits for the turbos.  The front panel uses `request_safe_exit` instead."""
         self._stop_asked.set()                       # wakes a loop frozen in a settle wait / dialog
         self._requests.put(Request("stop"))
+
+    def request_safe_exit(self) -> None:
+        """Close the program the safe way: shut the facility down first (gates closed, motors off,
+        the turbos slow down with backing and cooling), stop only when everything is off."""
+        self._exit_asked.set()                       # a loop waiting for a dialog answer carries on
+        self._requests.put(Request("safe_exit"))
+
+    def request_cancel_exit(self) -> None:
+        """Keep the program open after all.  The facility stays where the shutdown has brought it."""
+        self._requests.put(Request("cancel_exit"))
 
     def join(self, timeout: float = 30.0) -> None:
         if self._thread:
@@ -282,12 +316,54 @@ class Controller:
             self._shutdown()
             self.finished.set()
 
+    def _turbos_turning(self) -> List[str]:
+        """Labels of the turbos that are still turning, by the last readings: speed above
+        `turbo_slow_speed_pct` (5 %), or the Rotating contact on a pump without a speed signal."""
+        out = []
+        for tc in self.cfg.turbos:
+            if tc.in_use and turbo_is_spinning(self.inputs.turbos.get(tc.id), self.cfg.thresholds.turbo_slow_speed_pct):
+                out.append(tc.label)
+        return out
+
     def _shutdown(self) -> None:
-        """Exit path of the VI ('Force stop on exit' = True): everything off, tasks cleared."""
+        """The last thing the program does, however it ends: everything off, tasks cleared.
+
+        The VI ('Force stop on exit' = True) wrote everything off in ONE step, and so did this port
+        until 2026-11-17.  With a turbo turning that drops the cooling, and it stops the primary pump
+        in the same instant as the turbo valves start to close (on the simulated plant the valves
+        win that race - the foreline needs a few seconds to come up - but it is nothing to rely
+        on).  The front panel now shuts the facility down first (`request_safe_exit`)
+        and only then comes here - with nothing left on.  This is what remains for every other way
+        out (a crash in the loop, `request_stop`): valves closed and motors off FIRST, the valve
+        travel waited, the primary pump stopped after that, and the chiller left as it is while a
+        turbo is still turning."""
+        cfg = self.cfg
         try:
-            self.cmds = Commands.all_off(self.cfg.valve_ids, self.cfg.turbo_ids)
-            self.backend.safe_state()
-            self._log("Program stopped – safe state commanded")
+            last = self.cmds
+            turning = self._turbos_turning()
+            if turning and (last.primary or last.primary_run) and any(last.valves.values()):
+                first = last.copy()
+                for vid in first.valves:
+                    first.valves[vid] = False
+                for tid in cfg.turbo_ids:
+                    first.turbo_motor[tid] = False
+                    first.turbo_standby[tid] = False
+                self.backend.write(first)
+                self.cmds = first
+                self._log("Program stopping with " + ", ".join(turning) + " still turning – valves closed and "
+                          "motors off first, the primary pump stops after the valve travel")
+                self._publish()
+                self.sleep(cfg.timings.valve_settle_ms / 1000.0)
+            final = Commands.all_off(cfg.valve_ids, cfg.turbo_ids)
+            if turning and last.chiller:
+                final.chiller = True
+            self.cmds = final
+            self.backend.write(final)
+            if final.chiller:
+                self._log("Program stopped – everything off EXCEPT the chiller: " + ", ".join(turning)
+                          + " still turning, the cooling is left running")
+            else:
+                self._log("Program stopped – safe state commanded")
         except Exception as exc:  # pragma: no cover
             self._log(f"Safe-state write failed: {exc}")
         try:
@@ -313,6 +389,10 @@ class Controller:
             if r.kind == "stop":
                 self._stop.set()
                 return
+            elif r.kind == "safe_exit":
+                self._begin_exit()
+            elif r.kind == "cancel_exit":
+                self._cancel_exit()
             elif r.kind == "clear_error":
                 self._clear_requested = True
             elif r.kind == "set_threshold":
@@ -332,12 +412,16 @@ class Controller:
             self._log(line)
         self.inputs = inp
         # ---- frame 1: status / errors (always; settling devices are not cross-checked)
+        self._check_gauges(inp, now)
+        self._check_turbo_speeds(inp, now)
         self.error = self._evaluate_errors(inp, now)
         self._supervise_full_speed(now)
         # ---- frame 2: clear error
         if getattr(self, "_clear_requested", False):
             self._clear_requested = False
             self.error = ErrorCluster()
+            self._auto_trip = None
+            self._speed_trip = None
             self._log("Error cleared by user")
             self._restore_taken_out("Clear Error")
         self.sleep(cfg.status_wait_ms / 1000.0)
@@ -353,7 +437,16 @@ class Controller:
         # ---- frame 3: decide (held while a device settles or a dialog is open)
         prev = self.cmds
         new: Optional[Commands] = None
-        if self._pending is not None:
+        if self._exiting and self._pending is not None:
+            self._pending = None                     # nobody is going to answer a question now
+        if self._exiting:
+            self._deferred = []                      # ... or press anything
+            if now >= self._hold_until:
+                self._hold_reason = ""
+                new = prev.copy()
+                new.turbo_error_ack = {t: False for t in cfg.turbo_ids}
+                new = self._decide_exit(new, inp)
+        elif self._pending is not None:
             if self._pending.handle.done:
                 new = prev.copy()
                 new.turbo_error_ack = {t: False for t in cfg.turbo_ids}
@@ -408,6 +501,8 @@ class Controller:
         # ---- frame 5: run-hour meters, csv, publish (always)
         self._accumulate_run_hours(inp, now)
         self._csv_row()
+        if self._exiting:
+            self._exit_progress()
         self._publish()
 
     def _guard_turbo_valve_openings(self, prev: Commands, new: Commands, inp: Inputs) -> Commands:
@@ -669,11 +764,235 @@ class Controller:
             if low and now - self._compressor_low_since >= th.compressor_low_time_s:
                 err = err.merge(ErrorCluster.make(ERR_COMPRESSOR_LOW,
                                                   f"Compressor Pressure Below {th.compressor_min_bar:g} Bar! ({inp.compressor_bar:.1f} bar)"))
+        # a pressure gauge that is dead or frozen: Auto would be protecting the turbos blind -> stop
+        for what in self._gauge_fault.values():
+            err = err.merge(ErrorCluster.make(ERR_GAUGE_FAULT, what))
+        # Auto stopped itself (backing lost, chamber pressure rise): an error until the operator clears it
+        if self._auto_trip is not None:
+            err = err.merge(self._auto_trip)
+        # a turbo lost a large part of its speed within seconds: the same
+        if self._speed_trip is not None:
+            err = err.merge(self._speed_trip)
         key = f"{err.code}:{err.source}" if err.status else ""
         if key and key != self.last_error_seen:
             self._log(f"ERROR {err.code}: {err.source}")
         self.last_error_seen = key
         return err
+
+    def _watched_gauges(self):
+        """The gauges Auto decides on: chamber, foreline, and the gauge of every turbo in use."""
+        cfg = self.cfg
+        seen, out = set(), []
+        for g in [cfg.main_gauge, cfg.foreline_gauge] + [cfg.turbo_gauge(t.id) for t in cfg.turbos if t.in_use]:
+            if g is not None and g.id not in seen:
+                seen.add(g.id)
+                out.append(g)
+        return out
+
+    def _check_gauges(self, inp: Inputs, now: float) -> None:
+        """A pressure gauge that is DEAD or FROZEN raises error 5014 - warning pop-up, safe shutdown
+        (2026-11-16; until then its number was simply believed).
+
+          dead    its output is below `gauge_dead_below_volts` (1 V) for `gauge_fault_delay_s`.  A
+                  dead or unplugged gauge sends about 0 V; in the facility logs no gauge on either
+                  chamber ever read below 2.7 V, from atmosphere to base pressure.
+          frozen  `gauge_frozen_readings` readings in a row are EXACTLY equal.  A live gauge always
+                  has a little noise.  Not judged within 0.1 V of the ends of the input range: a
+                  signal clipped there repeats legitimately (the VC100's foreline and turbo gauges
+                  read exactly 10.0000 V at atmosphere for half an hour on 2026-10-26).
+
+        While a gauge is in fault its pressure is NaN, which every rule already treats as "not
+        readable" (a chamber that cannot be read counts as not roughed, a turbo gauge that cannot be
+        read stops its motor, ...), and the error stays.  A gauge that reads properly again is
+        believed again and the error goes with it."""
+        cfg = self.cfg
+        dead_default = cfg.thresholds.gauge_dead_below_volts
+        delay = float(cfg.timings.gauge_fault_delay_s)
+        n_frozen = int(cfg.timings.gauge_frozen_readings or 0)
+        ts = time.strftime("%H:%M:%S")
+        for g in self._watched_gauges():
+            if g.id not in inp.gauge_volts:
+                continue                                  # a backend with no raw voltage for it
+            v = inp.gauge_volts[g.id]
+            readable = v is not None and v == v
+            # ---- dead: below the floor, for a few seconds
+            floor = g.dead_below_volts if g.dead_below_volts is not None else dead_default
+            low = floor is not None and floor > 0 and (not readable or v < floor)
+            if low:
+                since = self._gauge_low_since.setdefault(g.id, now)
+                dead = now - since >= delay
+            else:
+                self._gauge_low_since.pop(g.id, None)
+                dead = False
+            # ---- frozen: the same voltage, to the last digit, reading after reading
+            if readable and self._gauge_last_v.get(g.id) == v:
+                self._gauge_same[g.id] = self._gauge_same.get(g.id, 1) + 1
+            else:
+                self._gauge_same[g.id] = 1
+            self._gauge_last_v[g.id] = v if readable else float("nan")
+            at_rail = readable and (v >= cfg.ai_max_v - 0.1 or v <= cfg.ai_min_v + 0.1)
+            frozen = n_frozen > 0 and not at_rail and self._gauge_same[g.id] >= n_frozen
+            if not (dead or frozen):
+                if g.id in self._gauge_fault and not low:
+                    del self._gauge_fault[g.id]
+                    self._log(f"{g.label}: reading valid again ({ts})")
+                elif g.id in self._gauge_fault:
+                    inp.pressures_torr[g.id] = float("nan")     # still low, not yet long enough to re-raise
+                continue
+            inp.pressures_torr[g.id] = float("nan")
+            if g.id in self._gauge_fault:
+                continue
+            if dead:
+                shown = "no reading" if not readable else f"{v:.2f} V"
+                what = (f"{g.label}: no signal ({shown}; a live gauge reads above {floor:g} V) - "
+                        f"gauge dead, unpowered or its cable off")
+            else:
+                what = (f"{g.label}: reading frozen at {v:.4f} V for {self._gauge_same[g.id]} readings - "
+                        f"gauge, cable or data acquisition fault")
+            self._gauge_fault[g.id] = what
+            self._log(f"!! {what} ({ts})")
+            self.dialogs.ask("info", f"{what}.\n\nThe pressure from this gauge cannot be trusted, so the "
+                                     f"facility is being shut down safely (error {ERR_GAUGE_FAULT}).\n\n"
+                                     f"Check the gauge, its supply and its cable.  The error clears by itself "
+                                     f"once the gauge reads properly again.", ["OK"])
+
+    def _check_turbo_speeds(self, inp: Inputs, now: float) -> None:
+        """Speed-drop trip (2026-11-17): a turbo that loses speed FAST has gas on it, whatever the
+        gauges say -> error 5015, every turbo isolated (automode rule 0).
+
+        It watches the symptom, not a cause.  Both real incidents on the VC100 looked like this in
+        the log and nothing reacted: 2026-10-28 two turbos 98 % -> 18 % in 5 s, 2026-11-05 four
+        turbos 78 % -> 5 % in under 10 s (the pumps reported a warning, not an error).  Their causes
+        are fixed; this is for the next cause nobody has thought of.
+
+        Two rules, each in PER CENT OF FULL SPEED, each needing the fall to still be there
+        `turbo_speed_drop_confirm_s` (1 s) later - one bad reading is not a trip:
+
+          fast    `turbo_speed_drop_pct` (5) within `turbo_speed_drop_window_s` (1 s) - the test
+                  engineer's figure, so that it reacts in about two seconds.  The incidents fell at
+                  5-16 % per second.
+          crash   `turbo_speed_crash_pct` (30) within `turbo_speed_crash_window_s` (5 s) - always on.
+
+        The fast rule is SUSPENDED for `turbo_speed_drop_expected_s` (15 s) after anything that is
+        expected to slow a rotor down, so that it never fires on the facility's own actions:
+          * its motor is switched off (or on)                 logs: a HiPace loses at most 0.6 % in the
+                                                              first 5 s after a stop, 2.1 % in 30 s
+          * its standby is switched, or its speed set value changed
+          * its gate is commanded open onto the turning rotor  logs: at most 2.8 % in 5 s, 7 % in 30 s
+                                                              (chamber at 1.5e-1 mBar)
+          * the chiller is switched off (where its contactor feeds the turbo controller the speed
+            reading goes with it)
+        During that time only the crash rule counts - none of those comes anywhere near 30 % in 5 s.
+        The fast rule also needs the speed before the fall to be above `turbo_spinning_pct` (15 %).
+
+        Not judged at all: for `turbo_speed_drop_blank_after_switch_s` after a motor is switched on
+        or off (small chamber 120 s: its speed signal falls from 96 % to 17 % after every start, and
+        what it does at a stop has not been logged; VC100 0); without a fresh reading (an RS-485
+        pump that is not answering keeps its last speed); a pump with no speed signal at all
+        (Shimadzu contacts - the VC100's big turbos, which brake actively when switched off).
+
+        The speed is compared with the highest reading of the last window.  Where the loop stood
+        still (a settle wait) it is compared with the last reading before that, if that is no older
+        than three windows - the fast rule then needs 5 % per second of the gap, and after the 9 s
+        wait of a gate movement only the crash rule can fire.
+
+        Auto mode: error 5015 until 'Clear Error', pop-up.  Manual / Admin: a line in the log only -
+        those modes never act by themselves."""
+        cfg = self.cfg
+        th, tm = cfg.thresholds, cfg.timings
+        fast, crash = th.turbo_speed_drop_pct, th.turbo_speed_crash_pct
+        if not fast and not crash:
+            return
+        now = self.clock()                    # the time of THESE readings, not of the start of the iteration
+        w_fast = max(0.1, float(tm.turbo_speed_drop_window_s))
+        w_crash = max(0.1, float(tm.turbo_speed_crash_window_s))
+        keep = 3.0 * max(w_fast if fast else 0.0, w_crash if crash else 0.0)
+        confirm = max(0.0, float(tm.turbo_speed_drop_confirm_s))
+        blank = max(0.0, float(tm.turbo_speed_drop_blank_after_switch_s))
+        expected = max(0.0, float(tm.turbo_speed_drop_expected_s))
+        c = self.cmds
+        chiller_off = self._speed_chiller_prev and not c.chiller
+        self._speed_chiller_prev = bool(c.chiller)
+
+        def before(hist, window):
+            """(speed, windows): the highest reading of the last `window` seconds, 1.0; after a
+            standstill of the loop the last reading before it, if no older than three windows, and
+            how many windows old it is; else (None, 1.0)."""
+            recent = [v for (t, v) in hist if now - t <= window]
+            if recent:
+                return max(recent), 1.0
+            if hist and now - hist[-1][0] <= 3.0 * window:
+                return hist[-1][1], max(1.0, (now - hist[-1][0]) / window)
+            return None, 1.0
+
+        for tc in cfg.turbos:
+            if not tc.in_use or not tc.has_speed:
+                continue
+            ti = inp.turbos.get(tc.id)
+            # ---- what the facility itself has just done to this turbo
+            state = (bool(c.turbo_motor.get(tc.id, False)), bool(c.turbo_standby.get(tc.id, False)),
+                     c.speed_set(tc.id), bool(c.valves.get(tc.gate_valve, False)))
+            prev = self._speed_cmd_prev.get(tc.id, state)
+            self._speed_cmd_prev[tc.id] = state
+            if state[0] != prev[0] and blank > 0:
+                self._speed_blank_until[tc.id] = now + blank          # motor just switched on or off
+            if expected > 0 and (state[:3] != prev[:3] or (state[3] and not prev[3]) or chiller_off):
+                self._speed_expect_until[tc.id] = now + expected      # a slow-down is expected now
+            hist = self._speed_hist.setdefault(tc.id, [])
+            fresh = (ti is not None and not ti.has_contacts and ti.comm_ok is not False and not ti.comm_warning
+                     and ti.speed_pct == ti.speed_pct)
+            if not fresh or now < self._speed_blank_until.get(tc.id, 0.0):
+                hist.clear()
+                self._speed_low.pop(tc.id, None)
+                continue
+            sp = float(ti.speed_pct)
+            # the fast rule is a RATE: across a gap in the readings it needs the same per cent per
+            # second (5 % per window), not just 5 % since whenever the last reading was
+            was_fast, gap = before(hist, w_fast) if fast else (None, 1.0)
+            was_crash, _ = before(hist, w_crash) if crash else (None, 1.0)
+            hist.append((now, sp))
+            while hist and now - hist[0][0] > keep:
+                hist.pop(0)
+            low = self._speed_low.get(tc.id)
+            if low is None:
+                expecting = now < self._speed_expect_until.get(tc.id, 0.0)
+                if crash and was_crash is not None and was_crash - sp >= crash:
+                    low = (now, was_crash, float(crash))
+                elif (fast and not expecting and was_fast is not None and was_fast > th.turbo_spinning_pct
+                      and was_fast - sp >= fast * gap):
+                    low = (now, was_fast, float(fast) * gap)
+                else:
+                    continue
+                self._speed_low[tc.id] = low
+            since, was, need = low
+            if was - sp < need:
+                del self._speed_low[tc.id]            # back up again: a bad reading, not a rotor
+                continue
+            if now - since < confirm:
+                continue
+            # ---- confirmed
+            del self._speed_low[tc.id]
+            hist.clear()                              # the next report needs a new fall
+            if now < self._speed_reported_until.get(tc.id, 0.0):
+                continue                              # this fall has been reported already
+            self._speed_reported_until[tc.id] = now + 60.0
+            ts = time.strftime("%H:%M:%S")
+            what = (f"{tc.label} is losing speed fast: {was:.0f} % -> {sp:.0f} % of full speed within seconds "
+                    f"- gas on the turbo?")
+            if self.mode != Mode.AUTO:
+                self._log(f"!! {what}  No automatic action in {self.mode.name.title()} mode ({ts})")
+                continue
+            if self._speed_trip is not None:
+                self._log(f"!! {what} ({ts})")
+                continue
+            self._speed_trip = ErrorCluster.make(ERR_TURBO_SPEED_DROP, what + "  Every turbo isolated")
+            self._hold_until = min(self._hold_until, now)        # do not sit out a settle wait first
+            self._log(f"!! {what}  Isolating every turbo ({ts})")
+            self.dialogs.ask("info", f"{what}\n\nEvery gate valve and every turbo valve is being closed and the "
+                                     f"turbo motors are stopped (error {ERR_TURBO_SPEED_DROP}).  The chiller stays "
+                                     f"on while the turbos slow down.\n\nFind out where the gas came from before "
+                                     f"pumping again: the gauges, the valves, a leak.  The turbos stay isolated "
+                                     f"until 'Clear Error' is pressed.", ["OK"])
 
     def _gate_failed_to_open(self, vid: str, inp: Inputs, now: Optional[float] = None) -> bool:
         """Auto mode, a gate commanded OPEN still reads closed after its settle time, and its turbo
@@ -895,7 +1214,7 @@ class Controller:
         self._blocked, self._waiting_label = True, label
         self._publish()
         while not handle.done:
-            if self._stop_asked.is_set():            # program closing: count as 'window closed'
+            if self._stop_asked.is_set() or self._exit_asked.is_set():   # program closing: count as 'window closed'
                 handle.resolve(None if kind == "info" else (3 if kind == "three" else 1))
                 break
             self.sleep(0.1)
@@ -1230,7 +1549,7 @@ class Controller:
         error_active = self.error.status or (AUTO_ERROR_CODE_MIN <= self.error.code <= AUTO_ERROR_CODE_MAX and self.error.code != 0)
         out = self.auto.step(AutoInput(inp, self.cmds, self.current, self.target, self.substate, buttons, getattr(self, "_iter_now", None) or self.clock(),
                                        error_active, self.turbo_on_threshold_torr, self.turbo_engage_time,
-                                       self.skip_primary_warm))
+                                       self.skip_primary_warm, isolate_turbos=self._speed_trip is not None))
         for line in out.log:
             self._log(line)
         self.current, self.target, self.substate, self.tab = out.current, out.target, out.substate, out.tab
@@ -1238,6 +1557,9 @@ class Controller:
             self._restore_taken_out("Facility Off – next pump-down tries it again")
         self.skip_primary_warm = out.skip_primary_warm
         self._elapsed_below = out.elapsed_below_threshold_s
+        self._auto_note = out.note
+        if out.trip is not None and self._auto_trip is None:
+            self._auto_trip = ErrorCluster.make(int(out.trip[0]), str(out.trip[1]))
         out.commands.turbo_error_ack = new.turbo_error_ack
         # Auto runs every turbo at full speed (or its own standby): a reduced set value from
         # Manual/Admin mode never carries over into the sequence
@@ -1246,6 +1568,62 @@ class Controller:
                 self._log(f"{self.cfg.turbo(tid).label}: speed set value cleared – Auto mode runs at full speed")
             out.commands.turbo_speed_pct[tid] = None
         return out.commands
+
+    # ------------------------------------------------------------------ program exit
+    def _begin_exit(self) -> None:
+        if self._exiting:
+            return
+        self._exiting = True
+        self._exit_note = "Closing the program – shutting the facility down first"
+        self._log("Program asked to close – the facility is shut down first: gates closed, turbo motors off; "
+                  "primary pump and chiller stay on until the turbos have slowed down.  The program closes "
+                  "by itself when everything is off")
+
+    def _cancel_exit(self) -> None:
+        if not self._exiting:
+            return
+        self._exiting = False
+        self._exit_asked.clear()
+        self._exit_note = ""
+        self._log("Closing cancelled – the program stays open (Auto mode, Facility Off)")
+
+    def _decide_exit(self, new: Commands, inp: Inputs) -> Commands:
+        """The program is closing: the safe shutdown, from whatever mode and state it was in.
+
+        This is exactly what an error does in Auto mode - Facility Off, with the plant-safety rules
+        of the state machine on top: gates shut, motors off, vent and bypass shut; a turning turbo
+        keeps its turbo valve, the primary pump and the chiller until it has slowed down; a turbo
+        valve that is shut opens only onto a pumped foreline.  From Manual / Admin the line-up is
+        simply taken over as it is - those rules look at the plant, not at how it got there."""
+        if self.mode != Mode.AUTO:
+            self._log(f"{self.mode.name.title()} mode left for the shutdown – Auto mode, Facility Off")
+            self.mode = Mode.AUTO
+        self.current = self.target = FacilityState.FACILITY_OFF
+        self.substate = 0
+        return self._decide_auto(new, inp, [])
+
+    def _exit_progress(self) -> None:
+        """Called every iteration while closing: stop the loop once everything is off, and until
+        then say what it is waiting for."""
+        cfg, c = self.cfg, self.cmds
+        anything_on = (any(c.valves.values()) or c.primary or c.primary_power or c.primary_run or c.chiller
+                       or any(c.turbo_motor.values()))
+        if not anything_on and self.clock() >= self._hold_until and self._pending is None:
+            self._log("Facility shut down – closing the program")
+            self._stop.set()
+            return
+        spinning = []
+        for tc in cfg.turbos:
+            ti = self.inputs.turbos.get(tc.id)
+            if tc.in_use and turbo_is_spinning(ti, cfg.thresholds.turbo_slow_speed_pct):
+                spinning.append(f"{tc.label} {ti.speed_pct:.0f} %" if tc.has_speed else f"{tc.label} turning")
+        kept = [name for name, on in ((cfg.primary.label.lower(), c.primary), ("chiller", c.chiller)) if on]
+        if spinning:
+            self._exit_note = ("Closing the program – waiting for the turbos to slow down (" + ", ".join(spinning) + ")"
+                               + (f"; {' and '.join(kept)} stay{'s' if len(kept) == 1 else ''} on until then" if kept else "")
+                               + ".  The program closes by itself")
+        else:
+            self._exit_note = "Closing the program – switching the facility off"
 
     # ------------------------------------------------------------------ frame 4
     def _command(self, prev: Commands, new: Commands, now: float) -> None:
@@ -1429,6 +1807,7 @@ class Controller:
             primary_status=ps, primary_text=f"{self.cfg.primary.label} {ptxt}", chiller_status=cs, chiller_text=ctxt,
             turbos=dict(self._turbo_views), error=replace(self.error), event_log=list(self.event_log),
             elapsed_below_threshold_s=self._elapsed_below, turbo_on_threshold_torr=self.turbo_on_threshold_torr,
+            auto_note=self._auto_note if self.mode == Mode.AUTO else "",
             turbo_engage_time=self.turbo_engage_time, turbo_error_ack_active=dict(self._ack_active),
             dialog_pending=bool(dialog_label), dialog_message=dialog_label,
             hardware=self.backend.describe(), skip_primary_warm=self.skip_primary_warm,
@@ -1439,6 +1818,7 @@ class Controller:
             primary_phase=self._primary_phase, primary_phase_remaining_s=phase_left,
             hold_remaining_s=max(0.0, self._hold_until - now), hold_reason=self._hold_reason if now < self._hold_until else "",
             loop_blocked=self._blocked, primary_run_hours=self.run_hours.hours("primary"),
+            exiting=self._exiting, exit_note=self._exit_note if self._exiting else "",
         )
 
     def _publish(self) -> None:

@@ -103,7 +103,12 @@ ERR_BRT_DEVICE = 5007
 ERR_GATE_CONFLICT = 5010
 ERR_COMPRESSOR_LOW = 5011          # compressor air low (the VC100 VI reports it as 5010 = gate code; 5011 keeps it apart)
 ERR_DAQ = 5020                      # port addition: hardware/DAQ read-write failure
-AUTO_ERROR_CODE_MIN, AUTO_ERROR_CODE_MAX = 5000, 5011   # Auto mode: these force Facility Off (the VIs use 5000-5010)
+# port additions 2026-11-12 (found by the safety tests, docs/SAFETY_TESTS.md):
+ERR_BACKING_LOST = 5012             # turbos turning and their backing gone (primary stopped / foreline pressure up)
+ERR_CHAMBER_PRESSURE = 5013         # chamber pressure rose in Pumping to High Vac - gates closed
+ERR_GAUGE_FAULT = 5014              # a pressure gauge is dead (no signal) or its reading is frozen
+ERR_TURBO_SPEED_DROP = 5015         # a turbo lost a large part of its speed within seconds - air on the rotor
+AUTO_ERROR_CODE_MIN, AUTO_ERROR_CODE_MAX = 5000, 5015   # Auto mode: these force Facility Off (the VIs use 5000-5010)
 
 
 @dataclass
@@ -389,6 +394,7 @@ class Snapshot:
     error: ErrorCluster = field(default_factory=ErrorCluster)
     event_log: List[str] = field(default_factory=list)
     elapsed_below_threshold_s: float = 0.0
+    auto_note: str = ""                # Auto: what the sequence is waiting for right now (panel status line)
     turbo_on_threshold_torr: float = 0.25
     turbo_engage_time: Optional[float] = None
     turbo_error_ack_active: Dict[str, bool] = field(default_factory=dict)
@@ -407,3 +413,5 @@ class Snapshot:
     hold_reason: str = ""
     loop_blocked: bool = False         # True while the loop is frozen in a settle wait / dialog (VI behaviour)
     primary_run_hours: float = 0.0     # persistent 'Primary pump total operating hours' meter
+    exiting: bool = False              # the program was asked to close and is shutting the facility down first
+    exit_note: str = ""                # ... and what it is still waiting for

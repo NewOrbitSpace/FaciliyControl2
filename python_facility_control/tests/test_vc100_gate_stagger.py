@@ -69,8 +69,11 @@ def _gate_open_times(h, until, max_iter=40000):
 
 
 @pytest.mark.parametrize("blocking", [True, False])
-def test_auto_engage_opens_gates_one_by_one_then_starts_turbos(vcfg, blocking):
+@pytest.mark.parametrize("with_its_gate", [True, False])
+def test_auto_engage_opens_gates_one_by_one_then_starts_turbos(vcfg, blocking, with_its_gate):
     vcfg.timings.blocking_waits = blocking
+    assert vcfg.auto_mode.start_turbo_with_its_gate is True          # the profile, since 2026-11-13
+    vcfg.auto_mode.start_turbo_with_its_gate = with_its_gate
     h = Harness(vcfg)
     h.step(2)
     h.ctl.request_auto_button("pump_to_high_vac")
@@ -80,8 +83,19 @@ def test_auto_engage_opens_gates_one_by_one_then_starts_turbos(vcfg, blocking):
     gaps = [b - a for a, b in zip(times, times[1:])]
     assert min(gaps) >= 5.0 - 1e-6, gaps
     assert all(s.commands.valves[g] for g in GATES)
-    # every turbo is started only after the last gate has been commanded open
-    assert motors and min(motors.values()) >= max(times)
+    assert motors and set(motors) == {t.id for t in vcfg.turbos}
+    if with_its_gate:
+        # each turbo is started after its OWN gate has been commanded open (a step ends after that
+        # command's settle time; that the gate really IS open then is checked on the deterministic
+        # rig in test_engage_start_with_gate.py) ...
+        for t in vcfg.turbos:
+            assert motors[t.id] > opened[t.gate_valve], (t.id, motors[t.id] - opened[t.gate_valve])
+        # ... in gate order, the first ones while later gates are still to come
+        assert [tid for tid, _ in sorted(motors.items(), key=lambda kv: kv[1])] == [t.id for t in vcfg.turbos]
+        assert motors[vcfg.turbos[0].id] < times[-1]
+    else:
+        # every turbo is started only after the last gate has been commanded open
+        assert min(motors.values()) >= max(times)
     assert any("Opening Gate 6 Valve (6/6)" in line for line in s.event_log)
 
 

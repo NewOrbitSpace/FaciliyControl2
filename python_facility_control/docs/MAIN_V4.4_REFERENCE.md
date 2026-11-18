@@ -35,6 +35,11 @@ Pressures are computed and compared in **Torr**.
    └── [Exit]  "Force stop on exit" = True: write False to every DO (valves, primary,
                chiller, turbo motor/standby/ack), stop+clear tasks, close DMM / RS485.
 ```
+*(Port deviation 2026-11-17: the front panel's STOP and [x] run the safe shutdown first - Auto,
+Facility Off, turning turbos kept backed and cooled until they have slowed - and the program closes
+by itself when everything is off.  Other exits close the valves before the primary pump stops and
+leave the chiller on while a turbo turns.  See the README.)*
+
 There is **no CSV file logging** in Main_V4.4 (the VC100 VI adds it; the Python port
 implements it as an option so the documented VC100 behaviour is available).
 

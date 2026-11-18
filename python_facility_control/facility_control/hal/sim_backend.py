@@ -41,6 +41,7 @@ class _Turbo:
     speed_set: Optional[float] = None   # HiPace RS-485 reduced-speed set value (None = full)
     speed_pct: float = 0.0
     error: bool = False
+    warning: bool = False          # hit by gas at speed without tripping (HiPace: 'Turbo Warning')
     p_body_torr: float = 760.0     # gas node between gate and turbo valve
 
 
@@ -97,10 +98,12 @@ class SimBackend(HardwareBackend):
         self._last_t: Optional[float] = None
         self._sim_time = 0.0
         self._last_motor: Dict[str, bool] = {}       # last motor command per turbo (RS-485 link-lost fault)
+        self._gauge_held: Dict[str, float] = {}      # last healthy voltage per gauge (frozen-gauge fault)
         for vid in config.valve_ids:
             self.state.valves[vid] = _Valve()
         for tid in config.turbo_ids:
-            self.state.turbos[tid] = _Turbo(p_body_torr=self.sim.atmosphere_torr)
+            body = self.sim.turbo_body_initial_torr
+            self.state.turbos[tid] = _Turbo(p_body_torr=self.sim.atmosphere_torr if body is None else float(body))
         self.state.p_chamber = self.sim.atmosphere_torr
         self.state.p_foreline = self.sim.atmosphere_torr
         self.state.compressor_bar = self.sim.compressor_bar
@@ -213,6 +216,14 @@ class SimBackend(HardwareBackend):
             if fault:
                 t.error = True
             powered = st.chiller_on > 0.5  # chiller contactor also powers the turbo controllers
+            ov = sim.turbo_overrides.get(tid, {})
+            spinup_s = float(ov.get("spinup_s", sim.turbo_spinup_s))
+            spindown_s = float(ov.get("spindown_s", sim.turbo_spindown_s))
+            # gas friction (measured, see SimulationConfig): the same whether the motor drives or not -
+            # a driven rotor in gas does not hold its speed either
+            brake = sim.turbo_air_brake_pct_s * t.p_body_torr / (t.p_body_torr + sim.turbo_air_brake_half_torr)
+            if st.faults.get("no_pressure_trip"):      # test switch: a rotor that ignores the gas around it
+                brake = 0.0
             if t.motor and powered and not t.error:
                 if t.standby:
                     target = float(tcfg.params.get("standby_speed_pct", 66.0))
@@ -221,16 +232,23 @@ class SimBackend(HardwareBackend):
                 else:
                     target = 100.0
                 if t.speed_pct < target:
-                    t.speed_pct = min(target, t.speed_pct + 100.0 * dt / sim.turbo_spinup_s)
+                    t.speed_pct = min(target, t.speed_pct + 100.0 * dt / spinup_s)
                 else:
-                    t.speed_pct = max(target, t.speed_pct - 100.0 * dt / sim.turbo_spindown_s)
+                    t.speed_pct = max(target, t.speed_pct - 100.0 * dt / spindown_s)
+                t.speed_pct = max(0.0, t.speed_pct - brake * dt)
             else:
-                # spin-down: faster at high pressure (gas friction)
-                extra = 1.0 + min(20.0, t.p_body_torr / 5.0)
-                t.speed_pct = max(0.0, t.speed_pct - 100.0 * dt * extra / sim.turbo_spindown_s)
-            # overspeed at high pressure -> the real turbo would trip; emulate an error above 20 Torr at >50 %
+                t.speed_pct = max(0.0, t.speed_pct - 100.0 * dt / spindown_s - brake * dt)
+            # hit by gas at speed: the controller trips (error) or only warns, by type
             if t.speed_pct > 50 and t.p_body_torr > 20.0 and not st.faults.get("no_pressure_trip"):
-                t.error = True
+                trips = sim.turbo_trips_on_pressure
+                if trips is None:
+                    trips = tcfg.control_mode != "hipace_rs485"
+                if trips:
+                    t.error = True
+                else:
+                    t.warning = True
+            elif t.speed_pct < 1.0:
+                t.warning = False
 
         # gas flows (Torr*l/s) – backward-Euler on the node vector [P_c, P_t(1..n), P_f] -----
         # V dP/dt = -A P + b   ->   (V/dt + A) P_new = (V/dt) P + b     (unconditionally stable)
@@ -248,33 +266,53 @@ class SimBackend(HardwareBackend):
             return c_open * pos.get(vid, 0.0)
 
         # conductances (l/s) – order-of-magnitude values tuned for a sensible demo
-        C_bypass = cond("bypass", 6.0)
-        C_vent = cond("vent", 4.0)
+        C_bypass = cond("bypass", sim.bypass_conductance_l_s)
+        C_vent = cond("vent", sim.vent_conductance_l_s)
         S_prim = sim.primary_pump_speed_l_s * st.primary_on
-        P_ult_prim = 3e-3
+        if sim.primary_half_speed_torr > 0:
+            S_prim *= st.p_foreline / (st.p_foreline + sim.primary_half_speed_torr)
+        P_ult_prim = sim.primary_ultimate_torr
         Q_leak = sim.leak_torr_l_s
         Q_outgas = sim.outgassing_torr_l_s * (1.0 if st.p_chamber < 1.0 else 0.0)
-        # chamber
-        A[iC][iC] += C_bypass + C_vent
+        # chamber.  Air through the vent valve is choked (constant inflow) until the chamber is
+        # nearly up - the logged vents rise almost linearly - then it tails off.
+        A[iC][iC] += C_bypass
         A[iC][iF] -= C_bypass
-        bvec[iC] += C_vent * P_atm + Q_leak + Q_outgas
+        if st.p_chamber <= 0.9 * P_atm:
+            bvec[iC] += C_vent * P_atm
+        else:
+            A[iC][iC] += 10.0 * C_vent
+            bvec[iC] += 10.0 * C_vent * P_atm
+        bvec[iC] += Q_leak + Q_outgas
         # foreline
         A[iF][iF] += C_bypass + S_prim
         A[iF][iC] -= C_bypass
         bvec[iF] += S_prim * P_ult_prim
-        if st.primary_on < 0.05:               # primary off: foreline back-fills slowly
-            A[iF][iF] += 0.02
-            bvec[iF] += 0.02 * P_atm
+        if st.primary_on < 0.05:               # primary stopped: the foreline goes to atmosphere in seconds
+            c_back = V_f / max(sim.foreline_backfill_s, 1e-3)
+            A[iF][iF] += c_back
+            bvec[iF] += c_back * P_atm
         for k, tid in enumerate(tids):
             t = st.turbos[tid]
             tcfg = cfg.turbo(tid)
             i = 1 + k
             C_gate = cond(tcfg.gate_valve, 60.0)
-            C_tv = cond(tcfg.turbo_valve, 8.0)
+            # The path through the pump itself (rotor + turbo valve), both ways:
+            #   * a STOPPED rotor is a poor conductance at low pressure (logged Engage Turbo: gates
+            #     and turbo valves open on stopped turbos pump the chamber at only ~1 l/s each) and a
+            #     good one once the gas is viscous;
+            #   * a TURNING rotor blocks the way back from the exhaust (compression) - until the
+            #     exhaust pressure is far above what it can hold, when it lets everything through.
+            p_mean = 0.5 * (t.p_body_torr + st.p_foreline)
+            c_path = 1.2 + (8.0 - 1.2) * min(1.0, p_mean / 5.0)
+            block = min(1.0, t.speed_pct / 50.0) / (1.0 + (st.p_foreline / 5.0) ** 2)
+            C_tv = cond(tcfg.turbo_valve, c_path * (1.0 - block * (1.0 - 1e-4)))
             S_turbo = sim.turbo_pump_speed_l_s * (t.speed_pct / 100.0) ** 2 * (1.0 if pos.get(tcfg.turbo_valve, 0) > 0.5 else 0.0)
             S_turbo *= 1.0 / (1.0 + (t.p_body_torr / 0.05) ** 2)      # compression collapses at high inlet pressure
             if t.p_body_torr > 1e-9:
-                S_turbo = min(S_turbo, 2.0 / t.p_body_torr)            # max throughput ~2 Torr*l/s
+                # max throughput ~3 Torr*l/s (logged: two HiPace pumps coasting at 55 % take the VC100
+                # from 1e-1 to 4e-2 mBar in 10 s; six running up put 0.3-0.4 mBar on the foreline)
+                S_turbo = min(S_turbo, 3.0 / t.p_body_torr)
             A[iC][iC] += C_gate
             A[iC][i] -= C_gate
             A[i][iC] -= C_gate
@@ -335,12 +373,19 @@ class SimBackend(HardwareBackend):
             else:
                 p = st.p_chamber
             if st.faults.get(f"gauge_fault_{g.id}") or not power:
-                v = 0.0 if g.formula == "convectron" else -1.0
+                # dead / unplugged / unpowered: about 0 V, and the formula still makes a "pressure" of it
+                v = abs(self.rng.gauss(0.0, self.noise))
                 inp.gauge_volts[g.id] = v
                 inp.pressures_torr[g.id] = float("nan") if not power else v_to_torr(g.formula, v)
                 continue
-            v = torr_to_v(g.formula, p) + self.rng.gauss(0.0, self.noise)
-            v = min(10.0, max(0.0, v))
+            if st.faults.get(f"gauge_frozen_{g.id}") and g.id in self._gauge_held:
+                v = self._gauge_held[g.id]                # stuck: the last value, to the last digit
+            else:
+                # a live gauge bottoms out well above 0 V (logs: none ever below 2.7 V) - with its
+                # noise on top, as on the real thing - and the input clips at 10 V
+                v = max(self.sim.gauge_min_volts, torr_to_v(g.formula, p)) + self.rng.gauss(0.0, self.noise)
+                v = min(10.0, max(0.0, v))
+                self._gauge_held[g.id] = v
             inp.gauge_volts[g.id] = v
             inp.pressures_torr[g.id] = v_to_torr(g.formula, v)
         for ea in cfg.extra_analog:
@@ -352,7 +397,7 @@ class SimBackend(HardwareBackend):
                 # (already de-inverted: True = condition present)
                 spd = t.speed_pct if power else 0.0
                 th = cfg.thresholds
-                warn = bool(st.faults.get("turbo_warning") or st.faults.get(f"turbo_warning_{tid}")) if power else False
+                warn = bool(st.faults.get("turbo_warning") or st.faults.get(f"turbo_warning_{tid}") or t.warning) if power else False
                 p = tcfg.params
                 # accelerating until the speed it is running up to: full speed, or standby speed
                 run_to = (float(p.get("standby_speed_pct", 66.0)) if t.standby
@@ -387,7 +432,8 @@ class SimBackend(HardwareBackend):
                                  motor_read=bool(t.motor and power), still_spinning=bool(t.speed_pct > 5.0))
                 if tcfg.control_mode == "hipace_rs485":
                     # what the serial link would report: [P:303] text, link health
-                    ti.error_text = "Err001" if ti.error else "no Err"
+                    ti.error_text = "Err001" if ti.error else ("Wrn001" if t.warning else "no Err")
+                    ti.warning = bool(t.warning and power and not ti.error)
                     ti.comm_ok = True
                     ti.rs485 = {"port": "SIM", "address": tcfg.params.get("address", 1), "stats": "sim"}
                     ti.standby_set_pct = float(tcfg.params.get("standby_speed_pct", 66.0))

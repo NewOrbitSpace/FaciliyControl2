@@ -322,9 +322,42 @@ thresholds:
                                        # bypass + its turbo valve; inlet: its gate).  Above it Auto shuts the turbo valves
                                        # BEFORE the bypass may open and the turbos coast isolated until the chamber is
                                        # roughed.  null = wiggle room x turbo-on threshold = 1.25 mBar (the VI's Engage check)
+  turbo_foreline_max_mbar: 3.0         # 2026-11-12 backing lost: turbo turning, turbo valve open, bypass shut and the
+                                       # foreline above this -> gate and turbo valve shut, motor off, error 5012.  (The
+                                       # primary pump's run read-back not following its command does the same.)
+                                       # 3 mBar: the logs show at most 3.9e-1 mBar during turbo run-up, and atmosphere
+                                       # within 6 s of the pump stopping.  null = the exposure limit, 1.25 mBar
+  gauge_dead_below_volts: 1.0          # 2026-11-16 a watched gauge (chamber, foreline, turbo gauges) below this for
+                                       # gauge_fault_delay_s is DEAD -> pop-up, error 5014, safe shutdown.  A dead or
+                                       # unplugged gauge sends about 0 V; in the logs none ever read below 2.7 V.
+                                       # null = off.  One gauge can have its own value: gauges[].dead_below_volts
+  high_vac_pressure_trip_mbar: 1.0e-1  # 2026-11-12 pressure rise in Pumping to High Vac: chamber above this for
+                                       # pressure_trip_delay_s -> gates closed, error 5013, Auto stops (turbos coast
+                                       # down with primary and chiller on).  Normal work stays below
+                                       # 1e-2 mBar, so 1e-1 is a leak.  Counts once the chamber has pumped down below
+                                       # half of it after the gates opened; null = the exposure limit (1.25 mBar).
+  high_vac_pressure_slow_trip_mbar: 1.0e-2   # 2026-11-17 a second, SLOWER trip: chamber above this for
+                                       # pressure_slow_trip_delay_s (30 s) -> the same reaction, error 5013.  A
+                                       # pressure that SETTLES between 1e-2 and 1e-1 mBar is a leak too.  Counts once
+                                       # the chamber has been below half of it.  Logs: once below 1e-3 mBar the
+                                       # chamber never came back above 1e-3 mBar in 18 days.  null = off
+  turbo_speed_drop_pct: 5              # 2026-11-17 speed-drop trip: a turbo that loses speed fast has gas on it,
+                                       # whatever the gauges say -> EVERY gate and turbo valve shut, motors off,
+                                       # error 5015, until 'Clear Error'.  Per cent OF FULL SPEED.
+                                       # FAST rule: this much within turbo_speed_drop_window_s - 5 % in 1 s (test
+                                       # engineer, 2026-11-17).  Suspended for turbo_speed_drop_expected_s after
+                                       # anything expected to slow a rotor down: its motor switched, standby, its
+                                       # gate opening onto it, the chiller switched off.  null = off
+  turbo_speed_crash_pct: 30            # CRASH rule: this much within turbo_speed_crash_window_s (30 % in 5 s) -
+                                       # always on.  The incidents of 28 Oct and 5 Nov fell at 5-16 % per second;
+                                       # logs: a HiPace loses at most 0.6 % in the 5 s after its motor is switched
+                                       # off and 2.8 % in the 5 s after its gate opens onto it.  Turbos 2, 3, 5, 6
+                                       # only: the Shimadzu pumps (which brake when switched off) give no speed.
   turbo_start_before_gates_below_mbar: 1.0e-2   # Engage below this: turbos start with the gates CLOSED, run up to
                                        # standby, THEN the gates open (2026-10-28).  At/above it: the VI's order
                                        # (gates first, then turbos).  null = always the VI's order.
+                                       # Decided ONCE per Engage (2026-11-11) on the lower of the reading now and the
+                                       # reading when Pump to High Vac was pressed; the panel shows the wait.
   turbo_full_speed_timeout_s: 900      # Auto 'Pumping to High Vac': a turbo not at full speed after 15 min is logged
                                        # ("!! Turbo N NOT at full speed ...") and its speed reading turns red (2026-10-27)
   # Pumping-to-Rough start order: the VC100 VI always starts the primary pump first and opens the bypass
@@ -341,6 +374,20 @@ timings:
   primary_to_bypass_gap_s: 20.0 # 'Elapsed Time3' 20 s: primary pump on, then the bypass valve opens
   disengage_wait_s: 1.0         # 'Elapsed Time2'
   vent_duration_s: 900.0        # 'Elapsed Time4' 60 x 15 = 15 min
+  pressure_trip_delay_s: 2.0    # 2026-11-12: chamber above high_vac_pressure_trip in Pumping to High Vac this long ->
+                                #   gates closed, error 5013
+  pressure_slow_trip_delay_s: 30.0   # chamber above high_vac_pressure_slow_trip this long -> the same
+  turbo_speed_drop_window_s: 1.0     # speed-drop trip, fast rule: the fall is measured over this long
+  turbo_speed_crash_window_s: 5.0    # ... crash rule: over this long
+  turbo_speed_drop_confirm_s: 1.0    # ... and must still be there this much later (one bad reading is not a trip)
+  turbo_speed_drop_expected_s: 15.0  # ... the fast rule is off this long after an expected slow-down (see thresholds)
+  turbo_speed_drop_blank_after_switch_s: 0.0  # ... nothing judged this long after a motor is switched on or off
+                                #   (0: a HiPace's speed reading follows the rotor; small chamber: 120)
+  backing_lost_delay_s: 0.3     # primary not running / foreline above its limit this long -> turbo valves closed, 5012
+  gauge_fault_delay_s: 3.0      # 2026-11-16: a gauge below gauge_dead_below_volts this long -> error 5014
+  gauge_frozen_readings: 100    # 2026-11-16: this many readings in a row EXACTLY equal -> the gauge is frozen, error
+                                #   5014 (a live gauge always has noise; in the logs never more than 10 equal rows
+                                #   running).  Not judged within 0.1 V of the ends of the input range.  0 = off
   valve_settle_ms: 1000         # Wait after a valve command changed ...
   bypass_settle_ms: 2000        # ... 2000 ms if the bypass changed ...
   gate_settle_ms: 9000          # ... 9000 ms if a gate changed
@@ -364,6 +411,9 @@ auto_mode:
   turbo_valve_gauge_rule: true             # turbo valves compared with the turbo gauges (see docs/VC100_REFERENCE.md)
   standby_when_gate_closed: true           # Standby line = motor commanded AND gate closed
   shut_off_spins_down_first: true          # 'Shut Off' with a spinning turbo -> Turbo slowing, not Facility Off
+  start_turbo_with_its_gate: true          # 2026-11-13 Engage Turbo: each turbo starts as soon as its OWN gate is open
+                                           # (from rest, gate open - as before) instead of waiting for all six gates.
+                                           # About half a minute sooner at vacuum.  false = start them all after the last gate.
   vent_closes_on_shutdown: true            # 'Shutdown Now' closes the vent valve at once
   venting_buttons_stop_turbos: true        # Shutdown Now / After Vent / Pump to Rough / Overnight in Venting stop the turbos
 
@@ -415,16 +465,30 @@ logging:
 
 # ---------------------------------------------------------------- simulation model (no DAQ)
 simulation:
+  # Plant model for --sim and the tests.  The numbers marked [log] were measured from this facility's
+  # own CSV logs of 2026-10-23 .. 2026-11-11 (docs/PLANT_FROM_LOGS.md); only ratios matter, so the
+  # chamber volume is a round figure and the pump speeds are fitted to it.
   time_scale: 1.0
-  chamber_volume_l: 1000.0      # medium chamber
+  chamber_volume_l: 1000.0
   foreline_volume_l: 8.0
-  primary_pump_speed_l_s: 40.0
+  primary_pump_speed_l_s: 45.0
+  primary_half_speed_torr: 0.4   # [log] roughing slows from a decade per ~60 s to a decade per ~170 s near 2e-1 mBar
+  bypass_conductance_l_s: 100.0  # [log] atmosphere -> 1.7e-1 mBar in 5 min 50 s once the bypass is open
+  vent_conductance_l_s: 8.2      # [log] vent: 500 mBar after 45-80 s, 990 mBar after 80-140 s (near-linear rise)
+  primary_ultimate_torr: 3.5e-3  # [log] foreline 4-6e-3 mBar with the turbos at full speed, no gas
+  foreline_backfill_s: 2.0       # [log] primary pump stopped -> foreline at 1020 mBar in under 6 s
   turbo_pump_speed_l_s: 1200.0
-  turbo_spinup_s: 90.0
-  turbo_spindown_s: 300.0
+  turbo_body_initial_torr: 1.0   # [log] turbo gauges read 0.3-5 mBar with everything off
+  turbo_spinup_s: 150.0          # [log] HiPace 0 -> 100 % in 130-160 s
+  turbo_spindown_s: 2600.0       # [log] HiPace motor off: 1.8-2.8 %/min, backed or isolated -> ~45 min to stop
+  turbo_overrides:               # [log] the Shimadzu pumps: at speed after ~370 s, brake to a stop in ~9.5 min
+    turbo1: {spinup_s: 370.0, spindown_s: 570.0}
+    turbo4: {spinup_s: 370.0, spindown_s: 570.0}
+  turbo_air_brake_pct_s: 15.0    # [log] exhaust on atmosphere: 78 % -> 5 % in under 10 s (2026-11-05)
+  turbo_trips_on_pressure: null  # [log] the HiPace pumps only WARNED in both incidents - no error
   valve_actuation_s: 0.8
   atmosphere_torr: 760.0
-  chamber_ultimate_torr: 1.0e-7
-  leak_torr_l_s: 3.0e-4
+  chamber_ultimate_torr: 4.0e-7  # [log] 5e-7 .. 1.6e-6 mBar after an hour
+  leak_torr_l_s: 4.0e-4          # [log] everything off: chamber rises ~9e-7 mBar/s; base 5e-7 .. 1.6e-6 mBar
   outgassing_torr_l_s: 5.0e-5
-  compressor_bar: 6.3
+  compressor_bar: 6.1            # [log] 5.8 .. 6.35 bar
