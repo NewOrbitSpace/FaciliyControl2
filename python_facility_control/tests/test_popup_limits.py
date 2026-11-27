@@ -12,7 +12,7 @@ What holds now, for this fault and for any other:
   2. one pop-up per serial port for a lost link, however many pumps hang on it;
   3. every pop-up that does not hold the loop goes through Controller._notify:
        - one box per subject - not again while its last box is open, nor within
-         `logging.popup_repeat_s` (30 s);
+         `logging.popup_repeat_s` (10 min);
        - at most `logging.popup_max_open` (5) boxes open at once; the rest is in the event log
          only, and ONE extra box says so;
   4. such boxes are never modal (gui/dialogs.py): STOP, Clear Error and the mode buttons work with
@@ -168,6 +168,68 @@ def test_a_gauge_that_keeps_dying_and_coming_back_does_not_pile_up_popups():
     pops = h.dialogs.notices("no signal")
     assert 1 <= len(pops) <= 1 + 0, "the first box was never closed, so no second one may appear"
     assert len(h.dialogs.open) == 1 and elapsed > 60
+
+
+
+# ------------------------------------------------- a box the operator closed does not keep coming back
+# (2026-11-27, Olgu: "if the error is ignored, e.g. closed down, it shouldn't then throw the error again
+# and again".)  A fault that LASTS raised one box and never another; a fault that comes and goes raised
+# its box again each time it came back, 30 s apart at the least - 90 an hour for a gauge on a loose cable.
+def _an_hour(which, fault, on_s, period_s, clear_every_s=None):
+    """One simulated hour in Auto at high vacuum with `fault` on for on_s of every period_s (always on
+    when period_s is None).  Every box is closed the moment it opens.  -> (first lines of the boxes, rig)"""
+    from safety_scenarios import make
+    r = make(which, "high_vac")
+    r.tick(3)
+    boxes = []
+    ask = r.dialogs.ask
+
+    def closing_ask(kind, message, buttons):
+        boxes.append(message.split("\n")[0])
+        return ask(kind, message, buttons)
+
+    r.dialogs.ask = closing_ask
+    t0 = r.t
+    while r.t - t0 < 3600.0:
+        t = r.t - t0
+        r.backend.set_fault(fault, True if period_s is None else (t % period_s) < on_s)
+        if clear_every_s and int(t) % clear_every_s == clear_every_s - 1:
+            r.ctl.request_clear_error()
+        r.tick()
+    return boxes, r
+
+
+@pytest.mark.parametrize("which", ["vc100", "small"])
+@pytest.mark.parametrize("clear", [None, 60])
+def test_a_gauge_that_comes_and_goes_all_hour_raises_its_box_at_most_every_ten_minutes(which, clear):
+    boxes, r = _an_hour(which, "gauge_fault_wrg", 20, 40, clear)
+    assert 1 <= len(boxes) <= 7, (len(boxes), boxes[:3])       # was 90
+    assert r.ctl.popups_hidden > 50                            # the others: event log and panel only
+    assert sum("no signal" in line for line in r.ctl.event_log) > 5, "every event is still in the log"
+
+
+@pytest.mark.parametrize("clear", [None, 60])
+def test_a_link_that_comes_and_goes_all_hour_raises_its_box_at_most_every_ten_minutes(clear):
+    boxes, r = _an_hour("vc100", "rs485_lost_turbo2", 40, 80, clear)
+    assert 1 <= len(boxes) <= 7, (len(boxes), boxes[:3])       # was 30 with Clear Error pressed every minute
+
+
+@pytest.mark.parametrize("which,fault", [("vc100", "rs485_lost_turbo2"), ("vc100", "gauge_fault_wrg"),
+                                         ("small", "gauge_fault_wrg"), ("vc100", "primary_fault"),
+                                         ("small", "primary_fault")])
+def test_a_fault_that_lasts_raises_one_box_and_never_another_however_often_clear_error_is_pressed(which, fault):
+    boxes, r = _an_hour(which, fault, 0, None, 60)
+    assert len(boxes) <= 1, boxes
+
+
+def test_the_mode_buttons_work_after_an_hour_of_a_fault_that_comes_and_goes():
+    boxes, r = _an_hour("vc100", "gauge_fault_wrg", 20, 40, 60)
+    r.ctl.request_manual_mode()
+    r.tick(2)
+    assert r.ctl.mode == Mode.MANUAL
+    r.ctl.request_change_to_auto()
+    r.tick(3)
+    assert r.ctl.mode == Mode.AUTO
 
 
 # ---------------------------------------------------------------------------- the panel stays usable

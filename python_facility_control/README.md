@@ -432,7 +432,7 @@ dead gauge, speed-drop trip, a gate that will not open - goes through one place
 
 | Rule | Setting (`logging:` in the profile) | Default |
 |---|---|---|
-| The same subject is not raised again while its last pop-up is still open, nor shortly after | `popup_repeat_s` | 30 s |
+| The same subject is not raised again while its last pop-up is still open, nor for this long after (10 min, 30 s at first: a fault that comes and goes no longer brings back a box the operator closed) | `popup_repeat_s` | 600 s |
 | No more than this many such pop-ups open at once.  What does not fit is in the event log only, and one extra box says so | `popup_max_open` | 5 (0 = no limit) |
 | The same event-log line (numbers apart) more than this many times within the window is counted, not repeated | `log_flood_lines`, `log_flood_window_s` | 20 in 10 s |
 

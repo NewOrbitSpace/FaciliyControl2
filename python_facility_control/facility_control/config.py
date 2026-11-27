@@ -395,8 +395,11 @@ class LoggingConfig:
     # Limits that hold whatever goes wrong underneath (2026-11-27):
     popup_max_open: int = 5            # pop-ups that do not hold the loop: at most this many open at once
     #                                    (0 = no limit); what does not fit is in the event log only
-    popup_repeat_s: float = 30.0       # ... and the same subject not again within this time, nor while its
-    #                                    last pop-up is still open
+    popup_repeat_s: float = 600.0      # ... and the same subject not again within this time, nor while its
+    #                                    last pop-up is still open.  10 min (30 s at first, changed 2026-11-27): a fault
+    #                                    that comes and goes - loose gauge cable, shaky RS-485 link - raised its
+    #                                    box again every time it came back once the operator had closed the last
+    #                                    one (90 an hour).  Every event is in the event log and on the panel anyway.
     log_flood_lines: int = 20          # the same event-log line (numbers apart) more than this many times ...
     log_flood_window_s: float = 10.0   # ... within this time is counted, not repeated (0 lines = no limit)
 
