@@ -1,0 +1,13 @@
+# Hardware commissioning proposal — NOT EXECUTED
+
+For review by the facility owner and competent equipment engineer. Do not perform fault injection on a running turbo. This document authorizes no hardware changes and establishes no safe valve positions or timing values.
+
+1. Identify every pump/drive firmware, gauge/controller, valve/actuator, backing pump, chiller and NI module by nameplate. Obtain applicable manufacturer manuals, wiring/P&ID revision and controller parameter export. Resolve R01–R13 values and approve a cause/effect table, including mechanical isolation versus continued backing/cooling.
+2. Review independent protective functions for PC crash, disconnected DAQ, loss of power/air/cooling/backing. Establish available stored energy/UPS, valve failure behavior, controller vent settings and output retention. Do not assume de-energized means safe or that a warning stops the motor.
+3. With pumps unable to rotate and actuators electrically isolated from equipment, use a test connector/dummy load to verify channel identity, polarity, command acknowledgement, both valve endpoint indications if available, and broken-wire diagnostics. Confirm no competing LabVIEW/manual/serial controller has authority.
+4. Calibrate each pressure/speed/temperature channel against a traceable source over its declared range. Verify units, transfer function, sensor fault voltages and disconnected/out-of-range behavior. Confirm rotating contact truth independently of analog speed. Resolve the small-chamber frequency-input interference before relying on that feedback.
+5. On the isolated test arrangement, time acquisition, command transmission, acknowledgement and simulated travel separately under worst communication delay and UI load. Compare total reaction against approved deadlines. Exercise each partial output failure; verify independent protection remains active with the PC removed. Do not conduct that test against spinning equipment.
+6. After the above review, write a separate equipment-specific normal-operation plan with manufacturer-permitted conditions, observation instrumentation, abort criteria, responsible operator and recovery steps. Only then witness normal startup/shutdown and authorized vent sequences. Log actual pressure, rotor speed, valve endpoints, flow and timing; command logs alone are insufficient.
+7. Record hardware serials, firmware/config hashes, calibrated instruments, expected/observed responses and signatures. Close each requirement only on its own evidence. Failed or unresolved tests return to design review; do not relax thresholds or defeat interlocks to obtain a pass.
+
+Hardware verification in this review: NONE. Installed controller protection and mechanical behavior remain unverified.

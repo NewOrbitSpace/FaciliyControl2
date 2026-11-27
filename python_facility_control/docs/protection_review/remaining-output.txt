@@ -1,0 +1,158 @@
+............F.F......................................................... [ 48%]
+.........FFF.FF.F.F..........FF..F.....F.F...........s.F.F........F..F.. [ 97%]
+sF.                                                                      [100%]
+================================== FAILURES ===================================
+_ test_primary_first_then_bypass_below_5e1_mbar_for_every_button[pump_to_rough] _
+tests\test_te_requests.py:173: in test_primary_first_then_bypass_below_5e1_mbar_for_every_button
+    assert 20.0 <= gap <= 30.0 * 1.25, f"{button}: bypass opened after {gap:.1f} s, wanted 20-30 s"
+E   AssertionError: pump_to_rough: bypass opened after 50.0 s, wanted 20-30 s
+E   assert 50.0 <= (30.0 * 1.25)
+_ test_primary_first_then_bypass_below_5e1_mbar_for_every_button[overnight_pump] _
+tests\test_te_requests.py:173: in test_primary_first_then_bypass_below_5e1_mbar_for_every_button
+    assert 20.0 <= gap <= 30.0 * 1.25, f"{button}: bypass opened after {gap:.1f} s, wanted 20-30 s"
+E   AssertionError: overnight_pump: bypass opened after 50.0 s, wanted 20-30 s
+E   assert 50.0 <= (30.0 * 1.25)
+________ test_turbo_slowing_ends_in_facility_off_at_slowing_threshold _________
+tests\test_vc100.py:207: in test_turbo_slowing_ends_in_facility_off_at_slowing_threshold
+    assert s.turbos["turbo2"].speed_pct <= 50.0 and not s.turbos["turbo1"].contacts["rotating"]
+E   AssertionError: assert (49.999997378442224 <= 50.0 and not True)
+E    +  where 49.999997378442224 = TurboView(status=<TurboStatus.SPINNING_DOWN: 3>, color='#A284AB', speed_pct=49.999997378442224, error=False, motor_rea...cts={}, speed_set_pct=None, speed_settable=True, not_full_speed=False, isolated='', comm_silent_s=0.0, comm_lost=False).speed_pct
+_______________ test_overnight_keeps_backing_while_turbos_spin ________________
+tests\test_vc100.py:223: in test_overnight_keeps_backing_while_turbos_spin
+    assert s.current == S.OVERNIGHT_PUMP and s.turbos["turbo2"].speed_pct <= 50.0
+E   AssertionError: assert (<FacilityState.FACILITY_OFF: 0> == <FacilityState.OVERNIGHT_PUMP: 2>)
+E    +  where <FacilityState.FACILITY_OFF: 0> = Snapshot(t=1795778101.043973, iteration=9060, running_led=False, mode=<Mode.AUTO: 3>, current=<FacilityState.FACILITY_...remaining_s=0.0, hold_reason='', loop_blocked=False, primary_run_hours=0.6102222222089767, exiting=False, exit_note='').current
+E    +  and   <FacilityState.OVERNIGHT_PUMP: 2> = S.OVERNIGHT_PUMP
+__________________ test_venting_shutdown_now_and_after_vent ___________________
+tests\test_vc100.py:228: in test_venting_shutdown_now_and_after_vent
+    s = _to_high_vac(vh)
+        ^^^^^^^^^^^^^^^^
+tests\test_vc100.py:57: in _to_high_vac
+    s, _ = h.run_until(lambda s: s.current == S.PUMPING_TO_HIGH_VAC, 20000)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests\conftest.py:124: in run_until
+    raise AssertionError("condition not reached; last state %s/%s" % (s.current.label, s.substate))
+E   AssertionError: condition not reached; last state Facility Off/0
+______________________ test_vent_from_turbo_slowing_page ______________________
+tests\test_vc100.py:257: in test_vent_from_turbo_slowing_page
+    s = _to_high_vac(vh)
+        ^^^^^^^^^^^^^^^^
+tests\test_vc100.py:57: in _to_high_vac
+    s, _ = h.run_until(lambda s: s.current == S.PUMPING_TO_HIGH_VAC, 20000)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests\conftest.py:124: in run_until
+    raise AssertionError("condition not reached; last state %s/%s" % (s.current.label, s.substate))
+E   AssertionError: condition not reached; last state Facility Off/0
+____________________ test_contact_turbo_alarm_and_warning _____________________
+tests\test_vc100.py:267: in test_contact_turbo_alarm_and_warning
+    s = _to_high_vac(vh)
+        ^^^^^^^^^^^^^^^^
+tests\test_vc100.py:57: in _to_high_vac
+    s, _ = h.run_until(lambda s: s.current == S.PUMPING_TO_HIGH_VAC, 20000)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests\conftest.py:124: in run_until
+    raise AssertionError("condition not reached; last state %s/%s" % (s.current.label, s.substate))
+E   AssertionError: condition not reached; last state Facility Off/0
+________________ test_hipace_error_is_not_gated_on_the_chiller ________________
+tests\test_vc100.py:295: in test_hipace_error_is_not_gated_on_the_chiller
+    assert s.turbos["turbo2"].status == TurboStatus.ERROR and s.turbos["turbo1"].status == TurboStatus.OFF
+E   AssertionError: assert (<TurboStatus.OFF: 0> == <TurboStatus.ERROR: 5>)
+E    +  where <TurboStatus.OFF: 0> = TurboView(status=<TurboStatus.OFF: 0>, color='#C0C0C0', speed_pct=0.0, error=False, motor_read=False, standby=False, i...ts={}, speed_set_pct=None, speed_settable=False, not_full_speed=False, isolated='', comm_silent_s=0.0, comm_lost=False).status
+E    +  and   <TurboStatus.ERROR: 5> = TurboStatus.ERROR
+____________________ test_compressor_low_for_5s_stops_auto ____________________
+tests\test_vc100.py:319: in test_compressor_low_for_5s_stops_auto
+    s = _to_high_vac(vh)
+        ^^^^^^^^^^^^^^^^
+tests\test_vc100.py:57: in _to_high_vac
+    s, _ = h.run_until(lambda s: s.current == S.PUMPING_TO_HIGH_VAC, 20000)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests\conftest.py:124: in run_until
+    raise AssertionError("condition not reached; last state %s/%s" % (s.current.label, s.substate))
+E   AssertionError: condition not reached; last state Facility Off/0
+____ test_auto_engage_opens_gates_one_by_one_then_starts_turbos[True-True] ____
+tests\test_vc100_gate_stagger.py:80: in test_auto_engage_opens_gates_one_by_one_then_starts_turbos
+    s, opened, motors = _gate_open_times(h, lambda s: s.current == S.PUMPING_TO_HIGH_VAC)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests\test_vc100_gate_stagger.py:68: in _gate_open_times
+    raise AssertionError("condition not reached")
+E   AssertionError: condition not reached
+___ test_auto_engage_opens_gates_one_by_one_then_starts_turbos[True-False] ____
+tests\test_vc100_gate_stagger.py:92: in test_auto_engage_opens_gates_one_by_one_then_starts_turbos
+    assert motors[t.id] > opened[t.gate_valve], (t.id, motors[t.id] - opened[t.gate_valve])
+E   AssertionError: ('turbo6', 0.0)
+E   assert 1795777776.838482 > 1795777776.838482
+________________________ test_closing_is_not_staggered ________________________
+tests\test_vc100_gate_stagger.py:106: in test_closing_is_not_staggered
+    h.run_until(lambda s: s.current == S.PUMPING_TO_HIGH_VAC, 40000)
+tests\conftest.py:124: in run_until
+    raise AssertionError("condition not reached; last state %s/%s" % (s.current.label, s.substate))
+E   AssertionError: condition not reached; last state Facility Off/0
+________________ test_tmp4_alarm_raises_5005_and_warning_shows ________________
+tests\test_vc100_new_tmps.py:113: in test_tmp4_alarm_raises_5005_and_warning_shows
+    assert s.turbos["turbo4"].status == TurboStatus.ERROR and "Turbo 4 Alarm" in s.error.source
+E   AssertionError: assert (<TurboStatus.OFF: 0> == <TurboStatus.ERROR: 5>)
+E    +  where <TurboStatus.OFF: 0> = TurboView(status=<TurboStatus.OFF: 0>, color='#C0C0C0', speed_pct=0.0, error=False, motor_read=False, standby=False, i...alse}, speed_set_pct=None, speed_settable=False, not_full_speed=False, isolated='', comm_silent_s=0.0, comm_lost=False).status
+E    +  and   <TurboStatus.ERROR: 5> = TurboStatus.ERROR
+____ test_spin_down_keeps_a_shared_valve_open_for_the_turbo_still_turning _____
+tests\test_vc100_new_tmps.py:137: in test_spin_down_keeps_a_shared_valve_open_for_the_turbo_still_turning
+    h.run_until(lambda s: s.current == S.PUMPING_TO_HIGH_VAC, 20000)
+tests\conftest.py:124: in run_until
+    raise AssertionError("condition not reached; last state %s/%s" % (s.current.label, s.substate))
+E   AssertionError: condition not reached; last state Facility Off/0
+______________ test_auto_high_vac_runs_every_turbo_at_full_speed ______________
+tests\test_vc100_turbo_speed.py:313: in test_auto_high_vac_runs_every_turbo_at_full_speed
+    assert hv, "never reached Pumping to High Vac"
+E   AssertionError: never reached Pumping to High Vac
+E   assert []
+___________ test_stuck_tmp4_gate_takes_tmp4_out_and_auto_carries_on ___________
+tests\test_vc100_turbo_speed.py:356: in test_stuck_tmp4_gate_takes_tmp4_out_and_auto_carries_on
+    h, s = _to_high_vac_with_stuck_gate4()
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests\test_vc100_turbo_speed.py:351: in _to_high_vac_with_stuck_gate4
+    assert s.mode == Mode.AUTO and not s.error.status, f"Auto stopped: {s.error.source}"
+E   AssertionError: Auto stopped: Conflict between Turbo 1 Valve command and read!
+E   assert (<Mode.AUTO: 3> == <Mode.AUTO: 3> and not True)
+E    +  where <Mode.AUTO: 3> = Snapshot(t=1795776275.879034, iteration=9, running_led=True, mode=<Mode.AUTO: 3>, current=<FacilityState.FACILITY_OFF:...maining_s=0.0, hold_reason='', loop_blocked=False, primary_run_hours=0.014777777791023254, exiting=False, exit_note='').mode
+E    +  and   <Mode.AUTO: 3> = Mode.AUTO
+E    +  and   True = ErrorCluster(status=True, code=5001, source='Conflict between Turbo 1 Valve command and read!').status
+E    +    where ErrorCluster(status=True, code=5001, source='Conflict between Turbo 1 Valve command and read!') = Snapshot(t=1795776275.879034, iteration=9, running_led=True, mode=<Mode.AUTO: 3>, current=<FacilityState.FACILITY_OFF:...maining_s=0.0, hold_reason='', loop_blocked=False, primary_run_hours=0.014777777791023254, exiting=False, exit_note='').error
+_____________ test_above_threshold_keeps_the_vi_order_gates_first _____________
+tests\test_vc100_turbo_speed.py:553: in test_above_threshold_keeps_the_vi_order_gates_first
+    h, s, trace, p0 = _rough_then_high_vac(c)
+                      ^^^^^^^^^^^^^^^^^^^^^^^
+tests\test_vc100_turbo_speed.py:530: in _rough_then_high_vac
+    raise AssertionError("high vac not reached")
+E   AssertionError: high vac not reached
+___ test_admin_to_auto_never_opens_a_turbo_valve_onto_an_unpumped_foreline ____
+tests\test_vc100_turbo_speed.py:646: in test_admin_to_auto_never_opens_a_turbo_valve_onto_an_unpumped_foreline
+    assert "Turbo 2 Valve held closed � the primary pump is not running yet" in log
+E   AssertionError: assert 'Turbo 2 Valve held closed � the primary pump is not running yet' in 'Started Chiller at 10:45:21\nStarted Primary Pump at 10:45:21\nOpened Turbo 2 Valve at 10:45:21\nStarted Turbo 2 at 1...urbo 2 Valve: primary pump running and the foreline pumped down � opening (10:46:08)\nOpened Turbo 2 Valve at 10:46:08'
+_________ test_slow_tmp4_gate_gets_its_30_s_before_it_counts_as_stuck _________
+tests\test_vc100_turbo_speed.py:742: in test_slow_tmp4_gate_gets_its_30_s_before_it_counts_as_stuck
+    assert s.mode == Mode.AUTO and not s.error.status
+E   AssertionError: assert (<Mode.AUTO: 3> == <Mode.AUTO: 3> and not True)
+E    +  where <Mode.AUTO: 3> = Snapshot(t=1795776469.2380583, iteration=9, running_led=True, mode=<Mode.AUTO: 3>, current=<FacilityState.FACILITY_OFF...maining_s=0.0, hold_reason='', loop_blocked=False, primary_run_hours=0.014722222222222222, exiting=False, exit_note='').mode
+E    +  and   <Mode.AUTO: 3> = Mode.AUTO
+E    +  and   True = ErrorCluster(status=True, code=5001, source='Conflict between Turbo 1 Valve command and read!').status
+E    +    where ErrorCluster(status=True, code=5001, source='Conflict between Turbo 1 Valve command and read!') = Snapshot(t=1795776469.2380583, iteration=9, running_led=True, mode=<Mode.AUTO: 3>, current=<FacilityState.FACILITY_OFF...maining_s=0.0, hold_reason='', loop_blocked=False, primary_run_hours=0.014722222222222222, exiting=False, exit_note='').error
+=========================== short test summary info ===========================
+FAILED tests/test_te_requests.py::test_primary_first_then_bypass_below_5e1_mbar_for_every_button[pump_to_rough]
+FAILED tests/test_te_requests.py::test_primary_first_then_bypass_below_5e1_mbar_for_every_button[overnight_pump]
+FAILED tests/test_vc100.py::test_turbo_slowing_ends_in_facility_off_at_slowing_threshold
+FAILED tests/test_vc100.py::test_overnight_keeps_backing_while_turbos_spin - ...
+FAILED tests/test_vc100.py::test_venting_shutdown_now_and_after_vent - Assert...
+FAILED tests/test_vc100.py::test_vent_from_turbo_slowing_page - AssertionErro...
+FAILED tests/test_vc100.py::test_contact_turbo_alarm_and_warning - AssertionE...
+FAILED tests/test_vc100.py::test_hipace_error_is_not_gated_on_the_chiller - A...
+FAILED tests/test_vc100.py::test_compressor_low_for_5s_stops_auto - Assertion...
+FAILED tests/test_vc100_gate_stagger.py::test_auto_engage_opens_gates_one_by_one_then_starts_turbos[True-True]
+FAILED tests/test_vc100_gate_stagger.py::test_auto_engage_opens_gates_one_by_one_then_starts_turbos[True-False]
+FAILED tests/test_vc100_gate_stagger.py::test_closing_is_not_staggered - Asse...
+FAILED tests/test_vc100_new_tmps.py::test_tmp4_alarm_raises_5005_and_warning_shows
+FAILED tests/test_vc100_new_tmps.py::test_spin_down_keeps_a_shared_valve_open_for_the_turbo_still_turning
+FAILED tests/test_vc100_turbo_speed.py::test_auto_high_vac_runs_every_turbo_at_full_speed
+FAILED tests/test_vc100_turbo_speed.py::test_stuck_tmp4_gate_takes_tmp4_out_and_auto_carries_on
+FAILED tests/test_vc100_turbo_speed.py::test_above_threshold_keeps_the_vi_order_gates_first
+FAILED tests/test_vc100_turbo_speed.py::test_admin_to_auto_never_opens_a_turbo_valve_onto_an_unpumped_foreline
+FAILED tests/test_vc100_turbo_speed.py::test_slow_tmp4_gate_gets_its_30_s_before_it_counts_as_stuck
+19 failed, 126 passed, 2 skipped in 601.29s (0:10:01)

@@ -1,0 +1,27 @@
+# Protection requirements baseline — 2026-11-27
+
+Prepared before executing the review tests. These are proposed acceptance requirements, not an approved plant safety specification. No SIL, compliance, certification or absence-of-defects claim is made.
+
+Reference: [IEC 61508-3:2010, official scope](https://webstore.iec.ch/en/publication/5517). This review uses requirements specification, architecture review, planned verification, traceability, discrepancy recording and controlled modification as lifecycle principles. The full licensed standard was not supplied; this is not a clause-by-clause assessment. A plant hazard analysis and independent review remain necessary.
+
+Authority codes: U = user's explicit protection requirements; M = exact installed equipment manuals, revision and installation applicability UNRESOLVED; P = approved plant P&ID, cause/effect specification and timing analysis UNRESOLVED. YAML settings and historical VI behavior are implementation evidence, not M/P authority.
+
+No numerical equipment limit, maximum reaction time or physical safe valve position is established by this review. 'Before command' means a software authorization condition, not an equipment reaction deadline. Protective output vectors must be approved from M/P, including conflicting hazards such as isolation versus continued backing.
+
+| ID / hazard | Required response | Deadline | Authority | Planned verification |
+|---|---|---|---|---|
+| R01 startup / restart into unknown plant | Enter RECOVERY; acquire valid actual feedback; inhibit start until backing, cooling, pressure and valve permissives confirmed; reconcile spinning rotors | Before enabling command; acquisition bound M/P unresolved | U; M/P | restart each state; missing feedback; normal startup |
+| R02 incorrect shutdown / renewed start during coast | Explicit stopping sequence; maintain required cooling/backing while rotor condition demands it; reject incompatible concurrent restart | Before command; coast thresholds and duration M/P unresolved | U; M/P | state sequences, delayed valve feedback, long coast |
+| R03 backing vacuum lost | Detect actual backing loss and foreline rise; latch fault and execute approved protective sequence, independent fallback if PC fails | Maximum detection + output + valve travel M/P unresolved | U; M/P | backing stopped with command still on, foreline boundary tests |
+| R04 cooling loss | Monitor actual required flow/temperature; inhibit starts and execute approved coast/fault response | M/P unresolved | U; M/P | flow loss despite run contact; temperature missing/corrupt; hardware witness required |
+| R05 excessive inlet/foreline pressure | Reject exposure above approved limits; trip on measured excursions with specified hysteresis and response | Limits/debounce/travel M/P unresolved | U; M/P | below/equal/above configured thresholds; unknown values; gas inrush model |
+| R06 excessive venting rate | Authorize vent only with confirmed permitted rotor/valve conditions; constrain rate by approved hardware/control design | Rate, speed, gas and port restrictions M/P unresolved | U; M/P | transition rejection; rate model absent, hardware procedure required |
+| R07 invalid/stale/disconnected/scaled telemetry | Preserve UNKNOWN separately from zero; check finite range, units, per-field freshness and acquisition success; inhibit dependent authorization | Before dependent command; freshness budgets M/P unresolved | U; M/P | NaN/inf/missing/negative, old timestamps, stuck readings, calibration mismatch |
+| R08 stuck/leaking valve or contradictory feedback | Track requested/sent/acknowledged/confirmed state separately; time out movement; inhibit dependent action without physical confirmation | Travel timeout and safe response M/P unresolved | U; M/P | stuck open/closed, missing/contradictory feedback, partial writes; leakage hardware test |
+| R09 communications/controller fault | Treat affected telemetry as unknown; latch fault; preserve independent protection; no automatic re-enable on reconnect | Per-field age and response M/P unresolved | U; M/P | dropped/corrupt/delayed messages, controller faults, partial poll successes |
+| R10 crash, PC/DAQ/power loss | Protection survives application/computer failure; retain required services or approved mechanical response; recovery reconciles plant | Independent protection timing M/P unresolved | U; M/P | simulated restart; output failure review; hardware watchdog/power-loss procedure |
+| R11 manual/admin/API/concurrent/bypass | One mandatory command authorization layer; protective rules apply in every mode; serialize requests and revalidate at execution after confirmation | Before each output commit | U | all modes, direct API, delayed dialogs, conflicting requests; mutation |
+| R12 invalid configuration / units | Reject nonfinite/negative timing and limits, contradictory units, duplicate I/O, unknown references and unapproved configuration before enabling outputs | Before outputs; runtime updates before adoption | U; approved bounds M/P | malformed YAML and direct threshold update tests; channel audit |
+| R13 reset / recovery | Fault acknowledgement must not clear active permissive failures or automatically restart; recover only with fresh confirmed state | Before return to operation | U; P | reset with persistent fault and queued commands |
+
+All equipment-dependent rows remain unresolved even when an implementation test passes. Test tolerances are simulation settings only. Hardware verification: NONE.

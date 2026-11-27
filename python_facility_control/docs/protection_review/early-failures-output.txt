@@ -1,0 +1,64 @@
+......F..FF.FFFFF                                                        [100%]
+================================== FAILURES ===================================
+_________________________ test_manual_mode_interlocks _________________________
+tests\test_admin_manual.py:136: in test_manual_mode_interlocks
+    assert s.commands.primary
+E   AssertionError: assert False
+E    +  where False = Commands(valves={'turbo_valve': False, 'bypass': False, 'vent': False, 'gate': False}, primary=False, chiller=False, t...andby={'turbo1': False}, turbo_error_ack={'turbo1': False}, primary_power=False, primary_run=False, turbo_speed_pct={}).primary
+E    +    where Commands(valves={'turbo_valve': False, 'bypass': False, 'vent': False, 'gate': False}, primary=False, chiller=False, t...andby={'turbo1': False}, turbo_error_ack={'turbo1': False}, primary_power=False, primary_run=False, turbo_speed_pct={}) = Snapshot(t=1795773920.5470703, iteration=7, running_led=True, mode=<Mode.MANUAL: 2>, current=<FacilityState.PUMPING_TO...ng_s=0.0, hold_remaining_s=0.0, hold_reason='', loop_blocked=False, primary_run_hours=0.0, exiting=False, exit_note='').commands
+_____________________ test_pump_to_high_vac_full_sequence _____________________
+tests\test_automode.py:40: in test_pump_to_high_vac_full_sequence
+    s, _ = h.run_until(lambda s: (seen.append((s.current, s.substate, s.commands.valves["bypass"], s.commands.valves["gate"],
+tests\conftest.py:124: in run_until
+    raise AssertionError("condition not reached; last state %s/%s" % (s.current.label, s.substate))
+E   AssertionError: condition not reached; last state Facility Off/0
+_____________ test_engage_turbo_backs_off_when_pressure_too_high ______________
+tests\test_automode.py:63: in test_engage_turbo_backs_off_when_pressure_too_high
+    s, _ = h.run_until(lambda s: s.current == S.ENGAGE_TURBO and s.substate == 1, 6000)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests\conftest.py:124: in run_until
+    raise AssertionError("condition not reached; last state %s/%s" % (s.current.label, s.substate))
+E   AssertionError: condition not reached; last state Facility Off/0
+_______________ test_error_in_auto_forces_facility_off_and_logs _______________
+tests\test_automode.py:104: in test_error_in_auto_forces_facility_off_and_logs
+    assert s.error.status is False
+E   AssertionError: assert True is False
+E    +  where True = ErrorCluster(status=True, code=5002, source='Conflict between Bypass Valve command and read!').status
+E    +    where ErrorCluster(status=True, code=5002, source='Conflict between Bypass Valve command and read!') = Snapshot(t=1795773989.9397407, iteration=21, running_led=True, mode=<Mode.AUTO: 3>, current=<FacilityState.FACILITY_OF...maining_s=0.0, hold_reason='', loop_blocked=False, primary_run_hours=0.006055555542310079, exiting=False, exit_note='').error
+______________________ test_high_pressure_turbo_shutoff _______________________
+tests\test_automode.py:114: in test_high_pressure_turbo_shutoff
+    s, _ = h.run_until(lambda s: s.current == S.PUMPING_TO_HIGH_VAC, 6000)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests\conftest.py:124: in run_until
+    raise AssertionError("condition not reached; last state %s/%s" % (s.current.label, s.substate))
+E   AssertionError: condition not reached; last state Facility Off/0
+____ test_shutdown_from_high_vac_goes_through_disengage_and_turbo_slowing _____
+tests\test_automode.py:126: in test_shutdown_from_high_vac_goes_through_disengage_and_turbo_slowing
+    s, _ = h.run_until(lambda s: s.current == S.PUMPING_TO_HIGH_VAC and s.turbos["turbo1"].speed_pct > 95, 8000)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests\conftest.py:124: in run_until
+    raise AssertionError("condition not reached; last state %s/%s" % (s.current.label, s.substate))
+E   AssertionError: condition not reached; last state Facility Off/0
+______ test_vent_from_high_vac_keeps_turbo_running_then_vents_10_minutes ______
+tests\test_automode.py:145: in test_vent_from_high_vac_keeps_turbo_running_then_vents_10_minutes
+    s, _ = h.run_until(lambda s: s.current == S.PUMPING_TO_HIGH_VAC and s.turbos["turbo1"].speed_pct > 95, 8000)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests\conftest.py:124: in run_until
+    raise AssertionError("condition not reached; last state %s/%s" % (s.current.label, s.substate))
+E   AssertionError: condition not reached; last state Facility Off/0
+__________________ test_overnight_pump_waits_for_engage_time __________________
+tests\test_automode.py:172: in test_overnight_pump_waits_for_engage_time
+    assert s.current == S.PUMPING_TO_ROUGH and s.target == S.PUMPING_TO_HIGH_VAC
+E   AssertionError: assert (<FacilityState.FACILITY_OFF: 0> == <FacilityState.PUMPING_TO_ROUGH: 1>)
+E    +  where <FacilityState.FACILITY_OFF: 0> = Snapshot(t=1795774482.8860025, iteration=2118, running_led=False, mode=<Mode.AUTO: 3>, current=<FacilityState.FACILITY...emaining_s=0.0, hold_reason='', loop_blocked=False, primary_run_hours=0.14238888886239792, exiting=False, exit_note='').current
+E    +  and   <FacilityState.PUMPING_TO_ROUGH: 1> = S.PUMPING_TO_ROUGH
+=========================== short test summary info ===========================
+FAILED tests/test_admin_manual.py::test_manual_mode_interlocks - AssertionErr...
+FAILED tests/test_automode.py::test_pump_to_high_vac_full_sequence - Assertio...
+FAILED tests/test_automode.py::test_engage_turbo_backs_off_when_pressure_too_high
+FAILED tests/test_automode.py::test_error_in_auto_forces_facility_off_and_logs
+FAILED tests/test_automode.py::test_high_pressure_turbo_shutoff - AssertionEr...
+FAILED tests/test_automode.py::test_shutdown_from_high_vac_goes_through_disengage_and_turbo_slowing
+FAILED tests/test_automode.py::test_vent_from_high_vac_keeps_turbo_running_then_vents_10_minutes
+FAILED tests/test_automode.py::test_overnight_pump_waits_for_engage_time - As...
+8 failed, 9 passed in 52.35s

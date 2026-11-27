@@ -145,7 +145,7 @@ def test_a_collapse_isolates_every_turbo_and_keeps_the_cooling(which):
     assert not any(c.valves.values()), c.valves                   # every gate, every turbo valve, bypass, vent
     assert not any(c.turbo_motor.values()) and not any(c.turbo_standby.values())
     assert c.chiller, "the cooling must stay on while the rotors slow down"
-    info = [m for k, m in r.dialogs.log if k == "info"]
+    info = [m for k, m in r.dialogs.log if k in ("info", "notice")]
     assert len(info) == 1 and "5015" in info[0] and "Clear Error" in info[0]
     r.run(15.0)
     assert _all_shut(r), "a gate or turbo valve is still off its seat 15 s after the trip"

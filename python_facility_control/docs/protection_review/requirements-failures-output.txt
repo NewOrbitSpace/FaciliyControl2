@@ -1,0 +1,136 @@
+FFFFFFFFFFFFF...F.F.........                                             [100%]
+================================== FAILURES ===================================
+__________ test_R07_unknown_speed_cannot_authorize_cooling_off[None] __________
+tests\test_protection_review.py:48: in test_R07_unknown_speed_cannot_authorize_cooling_off
+    assert not ctl.interlocks.chiller(False, ctl.cmds, b.input).allowed
+E   AssertionError: assert not True
+E    +  where True = Verdict(allowed=True, message='').allowed
+E    +    where Verdict(allowed=True, message='') = chiller(False, Commands(valves={'turbo_valve': False, 'bypass': False, 'vent': False, 'gate': False}, primary=False, chiller=False, t...andby={'turbo1': False}, turbo_error_ack={'turbo1': False}, primary_power=False, primary_run=False, turbo_speed_pct={}), Inputs(t=0.0, valve_reads={}, primary_read=False, chiller_read=False, pressures_torr={}, gauge_volts={}, extra_analog={}, turbos={}, compressor_bar=None, primary_hz=None, daq_error=None))
+E    +      where chiller = <facility_control.interlocks.Interlocks object at 0x000001F4991E1490>.chiller
+E    +        where <facility_control.interlocks.Interlocks object at 0x000001F4991E1490> = <facility_control.controller.Controller object at 0x000001F4991E2A50>.interlocks
+E    +      and   Commands(valves={'turbo_valve': False, 'bypass': False, 'vent': False, 'gate': False}, primary=False, chiller=False, t...andby={'turbo1': False}, turbo_error_ack={'turbo1': False}, primary_power=False, primary_run=False, turbo_speed_pct={}) = <facility_control.controller.Controller object at 0x000001F4991E2A50>.cmds
+E    +      and   Inputs(t=0.0, valve_reads={}, primary_read=False, chiller_read=False, pressures_torr={}, gauge_volts={}, extra_analog={}, turbos={}, compressor_bar=None, primary_hz=None, daq_error=None) = <test_protection_review.RecordingBackend object at 0x000001F4991E3920>.input
+__________ test_R07_unknown_speed_cannot_authorize_cooling_off[nan] ___________
+tests\test_protection_review.py:48: in test_R07_unknown_speed_cannot_authorize_cooling_off
+    assert not ctl.interlocks.chiller(False, ctl.cmds, b.input).allowed
+E   AssertionError: assert not True
+E    +  where True = Verdict(allowed=True, message='').allowed
+E    +    where Verdict(allowed=True, message='') = chiller(False, Commands(valves={'turbo_valve': False, 'bypass': False, 'vent': False, 'gate': False}, primary=False, chiller=False, t...andby={'turbo1': False}, turbo_error_ack={'turbo1': False}, primary_power=False, primary_run=False, turbo_speed_pct={}), Inputs(t=0.0, valve_reads={}, primary_read=False, chiller_read=False, pressures_torr={}, gauge_volts={}, extra_analog=...lent_s=0.0, comm_warning=False, standby_set_pct=None, rs485={})}, compressor_bar=None, primary_hz=None, daq_error=None))
+E    +      where chiller = <facility_control.interlocks.Interlocks object at 0x000001F4991ED8B0>.chiller
+E    +        where <facility_control.interlocks.Interlocks object at 0x000001F4991ED8B0> = <facility_control.controller.Controller object at 0x000001F4991EEF60>.interlocks
+E    +      and   Commands(valves={'turbo_valve': False, 'bypass': False, 'vent': False, 'gate': False}, primary=False, chiller=False, t...andby={'turbo1': False}, turbo_error_ack={'turbo1': False}, primary_power=False, primary_run=False, turbo_speed_pct={}) = <facility_control.controller.Controller object at 0x000001F4991EEF60>.cmds
+E    +      and   Inputs(t=0.0, valve_reads={}, primary_read=False, chiller_read=False, pressures_torr={}, gauge_volts={}, extra_analog=...lent_s=0.0, comm_warning=False, standby_set_pct=None, rs485={})}, compressor_bar=None, primary_hz=None, daq_error=None) = <test_protection_review.RecordingBackend object at 0x000001F4991EFD70>.input
+__________ test_R07_unknown_speed_cannot_authorize_cooling_off[-1.0] __________
+tests\test_protection_review.py:48: in test_R07_unknown_speed_cannot_authorize_cooling_off
+    assert not ctl.interlocks.chiller(False, ctl.cmds, b.input).allowed
+E   AssertionError: assert not True
+E    +  where True = Verdict(allowed=True, message='').allowed
+E    +    where Verdict(allowed=True, message='') = chiller(False, Commands(valves={'turbo_valve': False, 'bypass': False, 'vent': False, 'gate': False}, primary=False, chiller=False, t...andby={'turbo1': False}, turbo_error_ack={'turbo1': False}, primary_power=False, primary_run=False, turbo_speed_pct={}), Inputs(t=0.0, valve_reads={}, primary_read=False, chiller_read=False, pressures_torr={}, gauge_volts={}, extra_analog=...lent_s=0.0, comm_warning=False, standby_set_pct=None, rs485={})}, compressor_bar=None, primary_hz=None, daq_error=None))
+E    +      where chiller = <facility_control.interlocks.Interlocks object at 0x000001F4991A55E0>.chiller
+E    +        where <facility_control.interlocks.Interlocks object at 0x000001F4991A55E0> = <facility_control.controller.Controller object at 0x000001F4991A74A0>.interlocks
+E    +      and   Commands(valves={'turbo_valve': False, 'bypass': False, 'vent': False, 'gate': False}, primary=False, chiller=False, t...andby={'turbo1': False}, turbo_error_ack={'turbo1': False}, primary_power=False, primary_run=False, turbo_speed_pct={}) = <facility_control.controller.Controller object at 0x000001F4991A74A0>.cmds
+E    +      and   Inputs(t=0.0, valve_reads={}, primary_read=False, chiller_read=False, pressures_torr={}, gauge_volts={}, extra_analog=...lent_s=0.0, comm_warning=False, standby_set_pct=None, rs485={})}, compressor_bar=None, primary_hz=None, daq_error=None) = <test_protection_review.RecordingBackend object at 0x000001F4991A47A0>.input
+_____ test_R07_unknown_speed_cannot_authorize_atmospheric_exposure[None] ______
+tests\test_protection_review.py:57: in test_R07_unknown_speed_cannot_authorize_atmospheric_exposure
+    assert not ctl.interlocks.valve('gate', True, ctl.cmds, b.input).allowed
+E   AssertionError: assert not True
+E    +  where True = Verdict(allowed=True, message='').allowed
+E    +    where Verdict(allowed=True, message='') = valve('gate', True, Commands(valves={'turbo_valve': False, 'bypass': False, 'vent': False, 'gate': False}, primary=False, chiller=False, t...andby={'turbo1': False}, turbo_error_ack={'turbo1': False}, primary_power=False, primary_run=False, turbo_speed_pct={}), Inputs(t=0.0, valve_reads={}, primary_read=False, chiller_read=False, pressures_torr={'wrg': 760.0}, gauge_volts={}, extra_analog={}, turbos={}, compressor_bar=None, primary_hz=None, daq_error=None))
+E    +      where valve = <facility_control.interlocks.Interlocks object at 0x000001F498957230>.valve
+E    +        where <facility_control.interlocks.Interlocks object at 0x000001F498957230> = <facility_control.controller.Controller object at 0x000001F4989578C0>.interlocks
+E    +      and   Commands(valves={'turbo_valve': False, 'bypass': False, 'vent': False, 'gate': False}, primary=False, chiller=False, t...andby={'turbo1': False}, turbo_error_ack={'turbo1': False}, primary_power=False, primary_run=False, turbo_speed_pct={}) = <facility_control.controller.Controller object at 0x000001F4989578C0>.cmds
+E    +      and   Inputs(t=0.0, valve_reads={}, primary_read=False, chiller_read=False, pressures_torr={'wrg': 760.0}, gauge_volts={}, extra_analog={}, turbos={}, compressor_bar=None, primary_hz=None, daq_error=None) = <test_protection_review.RecordingBackend object at 0x000001F4989565A0>.input
+______ test_R07_unknown_speed_cannot_authorize_atmospheric_exposure[nan] ______
+tests\test_protection_review.py:57: in test_R07_unknown_speed_cannot_authorize_atmospheric_exposure
+    assert not ctl.interlocks.valve('gate', True, ctl.cmds, b.input).allowed
+E   AssertionError: assert not True
+E    +  where True = Verdict(allowed=True, message='').allowed
+E    +    where Verdict(allowed=True, message='') = valve('gate', True, Commands(valves={'turbo_valve': False, 'bypass': False, 'vent': False, 'gate': False}, primary=False, chiller=False, t...andby={'turbo1': False}, turbo_error_ack={'turbo1': False}, primary_power=False, primary_run=False, turbo_speed_pct={}), Inputs(t=0.0, valve_reads={}, primary_read=False, chiller_read=False, pressures_torr={'wrg': 760.0}, gauge_volts={}, e...lent_s=0.0, comm_warning=False, standby_set_pct=None, rs485={})}, compressor_bar=None, primary_hz=None, daq_error=None))
+E    +      where valve = <facility_control.interlocks.Interlocks object at 0x000001F4991ED670>.valve
+E    +        where <facility_control.interlocks.Interlocks object at 0x000001F4991ED670> = <facility_control.controller.Controller object at 0x000001F4991ECE00>.interlocks
+E    +      and   Commands(valves={'turbo_valve': False, 'bypass': False, 'vent': False, 'gate': False}, primary=False, chiller=False, t...andby={'turbo1': False}, turbo_error_ack={'turbo1': False}, primary_power=False, primary_run=False, turbo_speed_pct={}) = <facility_control.controller.Controller object at 0x000001F4991ECE00>.cmds
+E    +      and   Inputs(t=0.0, valve_reads={}, primary_read=False, chiller_read=False, pressures_torr={'wrg': 760.0}, gauge_volts={}, e...lent_s=0.0, comm_warning=False, standby_set_pct=None, rs485={})}, compressor_bar=None, primary_hz=None, daq_error=None) = <test_protection_review.RecordingBackend object at 0x000001F4991EFCE0>.input
+_____ test_R07_unknown_speed_cannot_authorize_atmospheric_exposure[-1.0] ______
+tests\test_protection_review.py:57: in test_R07_unknown_speed_cannot_authorize_atmospheric_exposure
+    assert not ctl.interlocks.valve('gate', True, ctl.cmds, b.input).allowed
+E   AssertionError: assert not True
+E    +  where True = Verdict(allowed=True, message='').allowed
+E    +    where Verdict(allowed=True, message='') = valve('gate', True, Commands(valves={'turbo_valve': False, 'bypass': False, 'vent': False, 'gate': False}, primary=False, chiller=False, t...andby={'turbo1': False}, turbo_error_ack={'turbo1': False}, primary_power=False, primary_run=False, turbo_speed_pct={}), Inputs(t=0.0, valve_reads={}, primary_read=False, chiller_read=False, pressures_torr={'wrg': 760.0}, gauge_volts={}, e...lent_s=0.0, comm_warning=False, standby_set_pct=None, rs485={})}, compressor_bar=None, primary_hz=None, daq_error=None))
+E    +      where valve = <facility_control.interlocks.Interlocks object at 0x000001F4991FC0B0>.valve
+E    +        where <facility_control.interlocks.Interlocks object at 0x000001F4991FC0B0> = <facility_control.controller.Controller object at 0x000001F4991FE210>.interlocks
+E    +      and   Commands(valves={'turbo_valve': False, 'bypass': False, 'vent': False, 'gate': False}, primary=False, chiller=False, t...andby={'turbo1': False}, turbo_error_ack={'turbo1': False}, primary_power=False, primary_run=False, turbo_speed_pct={}) = <facility_control.controller.Controller object at 0x000001F4991FE210>.cmds
+E    +      and   Inputs(t=0.0, valve_reads={}, primary_read=False, chiller_read=False, pressures_torr={'wrg': 760.0}, gauge_volts={}, e...lent_s=0.0, comm_warning=False, standby_set_pct=None, rs485={})}, compressor_bar=None, primary_hz=None, daq_error=None) = <test_protection_review.RecordingBackend object at 0x000001F4991FFDA0>.input
+____________ test_R07_rotating_contact_overrides_zero_analog_speed ____________
+tests\test_protection_review.py:61: in test_R07_rotating_contact_overrides_zero_analog_speed
+    assert turbo_is_spinning(TurboInputs(speed_pct=0, still_spinning=True), 5)
+E   AssertionError: assert False
+E    +  where False = turbo_is_spinning(TurboInputs(speed_pct=0, error=False, motor_read=False, still_spinning=True, error_text='', temps={}, contacts={}, warning=False, comm_ok=None, comm_silent_s=0.0, comm_warning=False, standby_set_pct=None, rs485={}), 5)
+E    +    where TurboInputs(speed_pct=0, error=False, motor_read=False, still_spinning=True, error_text='', temps={}, contacts={}, warning=False, comm_ok=None, comm_silent_s=0.0, comm_warning=False, standby_set_pct=None, rs485={}) = TurboInputs(speed_pct=0, still_spinning=True)
+_____________ test_R11_admin_cannot_start_unbacked_uncooled_turbo _____________
+tests\test_protection_review.py:68: in test_R11_admin_cannot_start_unbacked_uncooled_turbo
+    assert not ctl.cmds.turbo_motor['turbo1']
+E   assert not True
+______________ test_R03_missing_backing_feedback_is_not_running _______________
+tests\test_protection_review.py:74: in test_R03_missing_backing_feedback_is_not_running
+    assert not primary_is_running(cfg.primary, b.input, ctl.cmds)
+E   AssertionError: assert not True
+E    +  where True = primary_is_running(PumpConfig(label='Primary Pump', cmd=None, read=None, cross_check=True, read_inverted=False, power_cmd='Mod3/port0/lin...requency=FrequencyConfig(channel='Mod1/ai6', max_hz=210.0, min_v=0.0, max_v=10.0, running_above_hz=5.0, enabled=False)), Inputs(t=0.0, valve_reads={}, primary_read=False, chiller_read=False, pressures_torr={}, gauge_volts={}, extra_analog={}, turbos={}, compressor_bar=None, primary_hz=None, daq_error=None), Commands(valves={'turbo_valve': False, 'bypass': False, 'vent': False, 'gate': False}, primary=True, chiller=False, tu...standby={'turbo1': False}, turbo_error_ack={'turbo1': False}, primary_power=True, primary_run=True, turbo_speed_pct={}))
+E    +    where PumpConfig(label='Primary Pump', cmd=None, read=None, cross_check=True, read_inverted=False, power_cmd='Mod3/port0/lin...requency=FrequencyConfig(channel='Mod1/ai6', max_hz=210.0, min_v=0.0, max_v=10.0, running_above_hz=5.0, enabled=False)) = FacilityConfig(id='main_v4.4', name='Facility Control (Main_V4.4 port)', daq_name='cDAQ1', loop_period_ms=100, status_..._path='C:\\Users\\SelimOlguPilav\\Documents\\FaciliyControl\\python_facility_control\\config\\facility_main_v4.4.yaml').primary
+E    +    and   Inputs(t=0.0, valve_reads={}, primary_read=False, chiller_read=False, pressures_torr={}, gauge_volts={}, extra_analog={}, turbos={}, compressor_bar=None, primary_hz=None, daq_error=None) = <test_protection_review.RecordingBackend object at 0x000001F4991D70B0>.input
+E    +    and   Commands(valves={'turbo_valve': False, 'bypass': False, 'vent': False, 'gate': False}, primary=True, chiller=False, tu...standby={'turbo1': False}, turbo_error_ack={'turbo1': False}, primary_power=True, primary_run=True, turbo_speed_pct={}) = <facility_control.controller.Controller object at 0x000001F4991D49B0>.cmds
+_______________ test_R12_reject_invalid_runtime_threshold[nan] ________________
+tests\test_protection_review.py:83: in test_R12_reject_invalid_runtime_threshold
+    assert ctl.turbo_on_threshold_torr == before
+E   assert nan == 0.150012
+E    +  where nan = <facility_control.controller.Controller object at 0x000001F4991A4A40>.turbo_on_threshold_torr
+_______________ test_R12_reject_invalid_runtime_threshold[inf] ________________
+tests\test_protection_review.py:83: in test_R12_reject_invalid_runtime_threshold
+    assert ctl.turbo_on_threshold_torr == before
+E   assert inf == 0.150012
+E    +  where inf = <facility_control.controller.Controller object at 0x000001F4991FE4E0>.turbo_on_threshold_torr
+_______________ test_R12_reject_invalid_runtime_threshold[-1.0] _______________
+tests\test_protection_review.py:83: in test_R12_reject_invalid_runtime_threshold
+    assert ctl.turbo_on_threshold_torr == before
+E   assert -1.0 == 0.150012
+E    +  where -1.0 = <facility_control.controller.Controller object at 0x000001F4991EE8A0>.turbo_on_threshold_torr
+______________ test_R07_old_pressure_cannot_authorize_gate_open _______________
+tests\test_protection_review.py:91: in test_R07_old_pressure_cannot_authorize_gate_open
+    assert not ctl.interlocks.valve('gate', True, ctl.cmds, b.input).allowed
+E   AssertionError: assert not True
+E    +  where True = Verdict(allowed=True, message='').allowed
+E    +    where Verdict(allowed=True, message='') = valve('gate', True, Commands(valves={'turbo_valve': False, 'bypass': False, 'vent': False, 'gate': False}, primary=False, chiller=False, t...andby={'turbo1': False}, turbo_error_ack={'turbo1': False}, primary_power=False, primary_run=False, turbo_speed_pct={}), Inputs(t=-9000.0, valve_reads={}, primary_read=False, chiller_read=False, pressures_torr={'wrg': 0.0001}, gauge_volts=...lent_s=0.0, comm_warning=False, standby_set_pct=None, rs485={})}, compressor_bar=None, primary_hz=None, daq_error=None))
+E    +      where valve = <facility_control.interlocks.Interlocks object at 0x000001F4991D44A0>.valve
+E    +        where <facility_control.interlocks.Interlocks object at 0x000001F4991D44A0> = <facility_control.controller.Controller object at 0x000001F4991D4410>.interlocks
+E    +      and   Commands(valves={'turbo_valve': False, 'bypass': False, 'vent': False, 'gate': False}, primary=False, chiller=False, t...andby={'turbo1': False}, turbo_error_ack={'turbo1': False}, primary_power=False, primary_run=False, turbo_speed_pct={}) = <facility_control.controller.Controller object at 0x000001F4991D4410>.cmds
+E    +      and   Inputs(t=-9000.0, valve_reads={}, primary_read=False, chiller_read=False, pressures_torr={'wrg': 0.0001}, gauge_volts=...lent_s=0.0, comm_warning=False, standby_set_pct=None, rs485={})}, compressor_bar=None, primary_hz=None, daq_error=None) = <test_protection_review.RecordingBackend object at 0x000001F4991D77A0>.input
+_____________ test_R11_manual_gate_confirmation_rechecks_pressure _____________
+tests\test_protection_review.py:149: in test_R11_manual_gate_confirmation_rechecks_pressure
+    assert not ctl.cmds.valves['gate'], 'gate opened onto atmosphere after delayed confirmation'
+E   AssertionError: gate opened onto atmosphere after delayed confirmation
+E   assert not True
+___________ test_R09_partial_serial_success_does_not_refresh_speed ____________
+tests\test_protection_review.py:184: in test_R09_partial_serial_success_does_not_refresh_speed
+    assert value.error or not value.comm_ok or math.isnan(value.speed_pct)
+E   AssertionError: assert (False or not True or False)
+E    +  where False = TurboInputs(speed_pct=0.0, error=False, motor_read=False, still_spinning=False, error_text='no Err', temps={'electroni...: 2, 'remote_prio': False, 'stats': '58/58 ok, 0 timeout, 0 checksum, 0 format, 0 rejected, latency avg 0 / max 0 ms'}).error
+E    +  and   True = TurboInputs(speed_pct=0.0, error=False, motor_read=False, still_spinning=False, error_text='no Err', temps={'electroni...: 2, 'remote_prio': False, 'stats': '58/58 ok, 0 timeout, 0 checksum, 0 format, 0 rejected, latency avg 0 / max 0 ms'}).comm_ok
+E    +  and   False = <built-in function isnan>(0.0)
+E    +    where <built-in function isnan> = math.isnan
+E    +    and   0.0 = TurboInputs(speed_pct=0.0, error=False, motor_read=False, still_spinning=False, error_text='no Err', temps={'electroni...: 2, 'remote_prio': False, 'stats': '58/58 ok, 0 timeout, 0 checksum, 0 format, 0 rejected, latency avg 0 / max 0 ms'}).speed_pct
+=========================== short test summary info ===========================
+FAILED tests/test_protection_review.py::test_R07_unknown_speed_cannot_authorize_cooling_off[None]
+FAILED tests/test_protection_review.py::test_R07_unknown_speed_cannot_authorize_cooling_off[nan]
+FAILED tests/test_protection_review.py::test_R07_unknown_speed_cannot_authorize_cooling_off[-1.0]
+FAILED tests/test_protection_review.py::test_R07_unknown_speed_cannot_authorize_atmospheric_exposure[None]
+FAILED tests/test_protection_review.py::test_R07_unknown_speed_cannot_authorize_atmospheric_exposure[nan]
+FAILED tests/test_protection_review.py::test_R07_unknown_speed_cannot_authorize_atmospheric_exposure[-1.0]
+FAILED tests/test_protection_review.py::test_R07_rotating_contact_overrides_zero_analog_speed
+FAILED tests/test_protection_review.py::test_R11_admin_cannot_start_unbacked_uncooled_turbo
+FAILED tests/test_protection_review.py::test_R03_missing_backing_feedback_is_not_running
+FAILED tests/test_protection_review.py::test_R12_reject_invalid_runtime_threshold[nan]
+FAILED tests/test_protection_review.py::test_R12_reject_invalid_runtime_threshold[inf]
+FAILED tests/test_protection_review.py::test_R12_reject_invalid_runtime_threshold[-1.0]
+FAILED tests/test_protection_review.py::test_R07_old_pressure_cannot_authorize_gate_open
+FAILED tests/test_protection_review.py::test_R11_manual_gate_confirmation_rechecks_pressure
+FAILED tests/test_protection_review.py::test_R09_partial_serial_success_does_not_refresh_speed
+15 failed, 13 passed in 0.41s

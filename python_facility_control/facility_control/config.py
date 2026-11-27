@@ -392,6 +392,13 @@ class LoggingConfig:
     csv_directory: str = "logs"
     csv_period_s: float = 5.0
     event_log_max_lines: int = 2000
+    # Limits that hold whatever goes wrong underneath (2026-11-27):
+    popup_max_open: int = 5            # pop-ups that do not hold the loop: at most this many open at once
+    #                                    (0 = no limit); what does not fit is in the event log only
+    popup_repeat_s: float = 30.0       # ... and the same subject not again within this time, nor while its
+    #                                    last pop-up is still open
+    log_flood_lines: int = 20          # the same event-log line (numbers apart) more than this many times ...
+    log_flood_window_s: float = 10.0   # ... within this time is counted, not repeated (0 lines = no limit)
 
 
 @dataclass

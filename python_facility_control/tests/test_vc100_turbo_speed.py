@@ -358,7 +358,7 @@ def test_stuck_tmp4_gate_takes_tmp4_out_and_auto_carries_on():
     assert all(s.commands.turbo_motor[t] for t in ("turbo1", "turbo2", "turbo3", "turbo5", "turbo6"))
     assert all(s.commands.valves[g] for g in ("gate1", "gate2", "gate3", "gate5", "gate6"))
     assert s.commands.valves["turbo1_valve"]                      # TMP1 (and a coasting TMP4) stay backed
-    pops = [m for k, m in h.dialogs.log if k == "info" and "Thor's hammer" in m]
+    pops = [m for k, m in h.dialogs.log if k in ("info", "notice") and "Thor's hammer" in m]
     assert len(pops) == 1 and pops[0].startswith("Unable to open TMP4 gate valve, might need Thor's hammer!")
     assert any("Thor's hammer" in l and "Auto carries on" in l for l in s.event_log)
     assert s.turbos["turbo4"].isolated and not s.turbos["turbo1"].isolated
@@ -481,9 +481,9 @@ def test_lost_rs485_link_takes_out_only_that_turbo_in_auto():
     assert s.commands.valves["turbo2_valve"] and s.commands.primary          # backing kept
     assert all(s.commands.turbo_motor[t] for t in ("turbo1", "turbo3", "turbo4", "turbo5", "turbo6"))
     assert s.turbos["turbo2"].isolated and s.turbos["turbo2"].comm_lost
-    pops = [m for k, m in h.dialogs.log if k == "info" and "No RS-485 reply from Turbo 2" in m]
+    pops = [m for k, m in h.dialogs.log if k in ("info", "notice") and "No RS-485 reply from Turbo 2" in m]
     assert len(pops) == 1
-    assert any("!! no RS-485 reply" in l and "Auto carries on" in l for l in s.event_log)
+    assert any("!! No RS-485 reply from Turbo 2" in l and "Auto carries on" in l for l in s.event_log)
     s = h.step(10)
     assert len([m for k, m in h.dialogs.log if "No RS-485 reply" in m]) == 1      # no popup storm
     # link back + Clear Error -> Turbo 2 back in service

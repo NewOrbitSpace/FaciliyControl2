@@ -38,7 +38,7 @@ def test_a_dropout_shorter_than_the_delay_is_not_a_fault(which):
     assert _volts(r, gid) < 1.0 and _code(r) == 0
     r.backend.set_fault(f"gauge_fault_{gid}", False)
     r.tick(20)
-    assert _code(r) == 0 and not [m for k, m in r.dialogs.log if k == "info"]
+    assert _code(r) == 0 and not [m for k, m in r.dialogs.log if k in ("info", "notice")]
     # ... and the clock starts again from nothing the next time
     r.backend.set_fault(f"gauge_fault_{gid}", True)
     r.tick(2)

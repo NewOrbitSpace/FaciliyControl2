@@ -1,0 +1,18 @@
+xxxxxxxxxxxxx...x.x.........                                             [100%]
+=========================== short test summary info ===========================
+XFAIL tests/test_protection_review.py::test_R07_unknown_speed_cannot_authorize_cooling_off[None] - F01: absent/invalid speed authorizes cooling removal
+XFAIL tests/test_protection_review.py::test_R07_unknown_speed_cannot_authorize_cooling_off[nan] - F01: absent/invalid speed authorizes cooling removal
+XFAIL tests/test_protection_review.py::test_R07_unknown_speed_cannot_authorize_cooling_off[-1.0] - F01: absent/invalid speed authorizes cooling removal
+XFAIL tests/test_protection_review.py::test_R07_unknown_speed_cannot_authorize_atmospheric_exposure[None] - F01: unknown rotor permits gate opening onto atmosphere
+XFAIL tests/test_protection_review.py::test_R07_unknown_speed_cannot_authorize_atmospheric_exposure[nan] - F01: unknown rotor permits gate opening onto atmosphere
+XFAIL tests/test_protection_review.py::test_R07_unknown_speed_cannot_authorize_atmospheric_exposure[-1.0] - F01: unknown rotor permits gate opening onto atmosphere
+XFAIL tests/test_protection_review.py::test_R07_rotating_contact_overrides_zero_analog_speed - F01: independent rotating contact is ignored
+XFAIL tests/test_protection_review.py::test_R11_admin_cannot_start_unbacked_uncooled_turbo - F02: Admin bypasses protection
+XFAIL tests/test_protection_review.py::test_R03_missing_backing_feedback_is_not_running - F03: commanded run is treated as confirmed rotation
+XFAIL tests/test_protection_review.py::test_R12_reject_invalid_runtime_threshold[nan] - F04: runtime threshold has no finite/range validation
+XFAIL tests/test_protection_review.py::test_R12_reject_invalid_runtime_threshold[inf] - F04: runtime threshold has no finite/range validation
+XFAIL tests/test_protection_review.py::test_R12_reject_invalid_runtime_threshold[-1.0] - F04: runtime threshold has no finite/range validation
+XFAIL tests/test_protection_review.py::test_R07_old_pressure_cannot_authorize_gate_open - F05: no freshness check on pressure authorization
+XFAIL tests/test_protection_review.py::test_R11_manual_gate_confirmation_rechecks_pressure - F07: manual dialog confirmation uses pre-dialog permissive
+XFAIL tests/test_protection_review.py::test_R09_partial_serial_success_does_not_refresh_speed - F05: other serial replies conceal a stale speed field
+13 passed, 15 xfailed in 0.42s

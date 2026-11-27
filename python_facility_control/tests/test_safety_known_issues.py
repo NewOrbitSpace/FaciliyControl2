@@ -364,7 +364,7 @@ def test_ki7_a_dead_or_frozen_gauge_warns_and_shuts_the_facility_down_safely(whi
     Now (2026-11-16): below 1 V for 3 s, or 100 readings in a row exactly equal -> pop-up, error 5014,
     Facility Off; the turbos keep their backing and cooling while they slow."""
     r = make(which, situation)
-    popups = len([m for k, m in r.dialogs.log if k == "info"])
+    popups = len([m for k, m in r.dialogs.log if k in ("info", "notice")])
     g = _break(r, role, how)
     r.run(20.0 if how == "fails" else 130.0)
     s = r.ctl.snapshot()
@@ -375,11 +375,11 @@ def test_ki7_a_dead_or_frozen_gauge_warns_and_shuts_the_facility_down_safely(whi
         for v in r.cfg.valves_of_kind(kind):
             assert r.st.valves[v.id].position < 0.02, f"{v.label} still open"
     assert not any(t.motor for t in r.st.turbos.values())
-    new = [m for k, m in r.dialogs.log if k == "info"][popups:]
+    new = [m for k, m in r.dialogs.log if k in ("info", "notice")][popups:]
     assert len(new) == 1 and g.label in new[0] and "shut down safely" in new[0], new
     assert r.ctl.inputs.pressure(g.id) != r.ctl.inputs.pressure(g.id), "the reading of a gauge in fault is not a number"
     r.run(1200.0)
-    assert len([m for k, m in r.dialogs.log if k == "info"][popups:]) == 1, "the pop-up must not repeat"
+    assert len([m for k, m in r.dialogs.log if k in ("info", "notice")][popups:]) == 1, "the pop-up must not repeat"
     assert_no_new_hazard(r)
 
 

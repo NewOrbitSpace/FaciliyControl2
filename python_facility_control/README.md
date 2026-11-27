@@ -372,6 +372,87 @@ Double-click, in the repository root:
 Neither ever starts the simulator: without the NI-DAQmx driver they stop with a message.  They check
 that LabVIEW is closed and ask once before starting.
 
+## Pop-ups can no longer flood the screen; the RS-485 link looks after itself (2026-11-27)
+
+**What happened (VC100, 25 Nov).**  The serial port of the USB/RS-485 converter was not there (the
+profile said COM3, Windows had made it COM4).  In Auto at Facility Off the program then raised a
+"No RS-485 reply" pop-up for each of the four HiPace turbos on *every pass of the loop* - in the
+simulator 12 000 pop-ups in five minutes - and because those pop-ups were modal the panel under
+them, the Manual Mode button included, could not be used.  Separately, the link had been lost
+overnight and never came back.  Three faults were behind this; all three are fixed, and two general
+limits were added so that nothing of the kind can lock the panel again.
+
+### 1. The loop: a silent turbo was given back while it was still silent
+
+In Auto a HiPace that does not answer for `comm_timeout_s` (20 s) is taken out of service (its gate
+closed, the pump told to stop, its backing kept) and Auto carries on with the others.  A second
+rule gave taken-out turbos back at Facility Off "so the next pump-down tries them" - without looking
+whether the turbo answered.  Out, back, out, back: one log line and one pop-up per turbo per pass.
+
+Now a turbo taken out for a lost link **stays out for as long as it is silent**.  At Facility Off it
+is given back by itself the moment it answers again; in any other state it comes back with
+'Clear Error' (which no longer gives back a pump that is still silent - it says so in the log).
+All pumps on one converter are reported together: **one pop-up and one log line per serial port**,
+and when the port itself is the trouble the pop-up says so and names the serial ports the PC has.
+
+### 2. The limits for every pop-up
+
+Every pop-up that tells the operator something while the facility carries on - lost RS-485 link,
+dead gauge, speed-drop trip, a gate that will not open - goes through one place
+(`Controller._notify`):
+
+| Rule | Setting (`logging:` in the profile) | Default |
+|---|---|---|
+| The same subject is not raised again while its last pop-up is still open, nor shortly after | `popup_repeat_s` | 30 s |
+| No more than this many such pop-ups open at once.  What does not fit is in the event log only, and one extra box says so | `popup_max_open` | 5 (0 = no limit) |
+| The same event-log line (numbers apart) more than this many times within the window is counted, not repeated | `log_flood_lines`, `log_flood_window_s` | 20 in 10 s |
+
+These pop-ups are **never modal**: STOP, Clear Error and the mode buttons work with any number of
+them open, and they open side by side instead of on top of each other.  The window itself refuses
+more than 8 as a second limit.  Questions ("Is the manual vent valve closed?") and, with
+`blocking_waits: true`, the answer to something the operator just pressed ("Please Turn Chiller On
+First") are unchanged: one at a time, and they have to be answered, as in LabVIEW.
+
+### 3. The RS-485 link did not reconnect
+
+Everything that talks to the HiPace pumps runs in one background task per serial port.  It handled
+a pump that does not answer, but not an error of the **port** - what Windows reports when the USB
+converter drops out for a moment ("WriteFile failed", "ClearCommError failed").  One such error
+ended the task, and nothing restarted it: no readings, no re-opening of the port and no stop
+commands until the program was restarted.  In the test a port that was away for **one second**
+left the link dead for good.
+
+Now:
+
+* a port error closes the port at once and opens it again - **every second for the first minute,
+  then every 5 s, for as long as the program runs**.  One second away = pumps read again about one
+  second later;
+* when the port is back, RS-485 control is taken again and whatever the pumps were last told (run,
+  stop, standby, speed) is **sent again** - also a stop that could not be delivered meanwhile;
+* if **the same converter comes back under another COM number**, it is followed, and the log says
+  which number to put in the profile.  It is only followed when it is unmistakably the same device
+  (same USB identity, exactly one of them, not a port another pump uses); any other device is left
+  alone;
+* the background task cannot end any more: anything unexpected is logged and it carries on, and the
+  main loop starts it again if it is ever found not running;
+* a fault that lasts writes one log line, then one every ten minutes - not eight every 10 s.
+
+What is unchanged: silence for 3 s shows a warning on the turbo's card; silence for 20 s takes that
+turbo out as described above.  A drop-out shorter than that is now ridden through.
+
+**Optional, recommended once on the facility PC:** when the port cannot be opened, the event log
+lists the serial ports the PC has, for example `COM4 (USB Serial Port, USB 0403:6001:A9XK2)`.
+Putting that identity into the profile makes the COM number irrelevant from then on, also at
+program start:
+
+```yaml
+    hipace_rs485:
+      port: COM4
+      usb_id: "0403:6001:A9XK2"      # VID:PID or VID:PID:serial, exactly as the event log prints it
+```
+
+Tests: `tests/test_popup_limits.py` (17) and `tests/test_rs485_reconnect.py` (13).
+
 ## Speed-drop trip, slow chamber-pressure trip, safe program exit (2026-11-17)
 
 Three additions.  Neither VI had any of them.  All settings are in the profiles.

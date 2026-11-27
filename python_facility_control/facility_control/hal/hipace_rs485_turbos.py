@@ -67,8 +67,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional
 
-from ..drivers.pfeiffer_pv import (BAUD, DEFAULT_ADDRESS, HiPace, PVBus, PVError, PVRejected, PVTimeout,
-                                   error_kind)
+from ..drivers.pfeiffer_pv import (BAUD, DEFAULT_ADDRESS, HiPace, PVBus, PVError, PVPortError, PVRejected,
+                                   PVTimeout, error_kind)
 from ..config import check_rs485_turbos as validate_rs485_turbos
 from ..model import TurboInputs
 
@@ -90,6 +90,9 @@ DEFAULTS = {
     "nominal_hz": None,             # fallback until [P:315] has been read
     "warning_is_error": False,
     "write_retry_s": 1.0,
+    "usb_id": None,                 # "VID:PID" or "VID:PID:serial" of the USB/RS-485 converter (hex, as the
+    #                                 event log prints it).  With it the converter is found even when
+    #                                 Windows gives it another COM number than `port`.
 }
 
 
@@ -144,12 +147,14 @@ class RS485Turbos:
 
     def __init__(self, turbos, read_only: bool = False,
                  serial_factory: Optional[Callable[[str, int, float], object]] = None,
-                 clock: Callable[[], float] = time.monotonic):
+                 clock: Callable[[], float] = time.monotonic,
+                 port_lister: Optional[Callable[[], List[Dict]]] = None):
         self.turbos = [t for t in turbos if t.control_mode == "hipace_rs485"]
         validate_rs485_turbos(self.turbos)
         self.read_only = read_only
         self.serial_factory = serial_factory
         self.clock = clock
+        self.port_lister = port_lister     # -> [{"device", "description", "vid", "pid", "serial"}] (tests)
         self.lock = threading.RLock()
         self.buses: Dict[str, PVBus] = {}
         self.units: Dict[str, _Unit] = {}
@@ -159,7 +164,18 @@ class RS485Turbos:
         self.idle_s = 0.02                 # pause between poll passes
         self.port_errors: Dict[str, str] = {}
         self._port_retry: Dict[str, float] = {}
+        # A port that is gone is tried again for as long as the program runs: every second for the
+        # first minute (a USB converter that re-enumerates is back within seconds), then every 5 s.
         self.port_retry_s = 5.0
+        self.port_retry_fast_s = 1.0
+        self.port_retry_fast_for_s = 60.0
+        self.repeat_log_s = 600.0          # a fault that lasts is logged again this often, not every time
+        self._port_lost_at: Dict[str, float] = {}      # when a port went away (or failed to open)
+        self._port_tries: Dict[str, int] = {}
+        self._port_identity: Dict[str, tuple] = {}     # (vid, pid, serial) of the converter last opened OK
+        self._port_events: List[str] = []              # events of a port, not of one pump
+        self._said: Dict[tuple, tuple] = {}
+        self._port_list_cache: tuple = (-1e9, [])
 
     def __bool__(self) -> bool:
         return bool(self.turbos)
@@ -186,48 +202,229 @@ class RS485Turbos:
         self._last_reset: Dict[str, float] = {k: now for k in self._by_port}
         for u in self.units.values():
             self._connect(u)
+        self._threads_wanted = bool(start_threads)
         if start_threads:
-            for key, units in self._by_port.items():
-                th = threading.Thread(target=self._run, args=(units,), name=f"rs485-{key}", daemon=True)
-                th.start()
-                self._threads.append(th)
+            for key in self._by_port:
+                self._start_thread(key)
 
-    def _open_serial(self, p: Dict):
+    def _start_thread(self, key: str) -> None:
+        th = threading.Thread(target=self._run, args=(self._by_port[key],), name=f"rs485-{key}", daemon=True)
+        th.start()
+        self._threads.append(th)
+
+    def _ensure_threads(self) -> None:
+        """The pollers are the ONLY thing that talks to the pumps.  One that has ended (it should
+        never - see _run) is started again; called from the controller's loop."""
+        if not getattr(self, "_threads_wanted", False) or self._stop.is_set():
+            return
+        alive = {th.name for th in self._threads if th.is_alive()}
+        self._threads = [th for th in self._threads if th.is_alive()]
+        for key in self._by_port:
+            if f"rs485-{key}" not in alive:
+                self._pev(f"!! RS-485 poller for {key} had stopped - started again")
+                self._start_thread(key)
+
+    # ------------------------------------------------------------------ the serial port
+    def _pev(self, text: str) -> None:
+        with self.lock:
+            self._port_events.append(text)
+
+    def _say(self, key: str, kind: str, text: str) -> None:
+        """A port event that repeats for as long as a fault lasts (a reset every 10 s, a failed
+        re-open every second): logged the first time, then once every `repeat_log_s` with a count."""
+        now = self.clock()
+        last, hidden = self._said.get((key, kind), (None, 0))
+        if last is None or now - last >= self.repeat_log_s:
+            self._pev(text + (f"  [{hidden} more like this since the last line]" if hidden else ""))
+            self._said[(key, kind)] = (now, 0)
+        else:
+            self._said[(key, kind)] = (last, hidden + 1)
+
+    def _list_ports(self) -> List[Dict]:
+        """The serial ports the PC has right now, with the USB identity of each."""
+        now = self.clock()
+        if now - self._port_list_cache[0] < 1.0:
+            return self._port_list_cache[1]
+        ports: List[Dict] = []
+        try:
+            if self.port_lister is not None:
+                ports = [dict(x) for x in self.port_lister()]
+            elif self.serial_factory is None:           # (a test's own serial objects are not real ports)
+                from serial.tools import list_ports
+                ports = [{"device": x.device, "description": x.description or "", "vid": x.vid, "pid": x.pid,
+                          "serial": x.serial_number or ""} for x in list_ports.comports()]
+        except Exception:
+            ports = []
+        self._port_list_cache = (now, ports)
+        return ports
+
+    @staticmethod
+    def _usb_text(info: Dict) -> str:
+        if info.get("vid") is None:
+            return ""
+        return f"USB {int(info['vid']):04X}:{int(info['pid'] or 0):04X}" + (f":{info['serial']}" if info.get("serial") else "")
+
+    @staticmethod
+    def _wanted_identity(p: Dict) -> Optional[tuple]:
+        """`usb_id: "0403:6001"` / `"0403:6001:A9XYZ"` -> (vid, pid, serial or None)."""
+        text = str(p.get("usb_id") or "").strip()
+        if not text:
+            return None
+        parts = text.replace("USB", "").strip().split(":")
+        try:
+            return int(parts[0], 16), int(parts[1], 16), (":".join(parts[2:]).strip() or None)
+        except (ValueError, IndexError):
+            return None
+
+    def _ports_hint(self) -> str:
+        ports = self._list_ports()
+        if not ports:
+            return "" if (self.serial_factory is not None and self.port_lister is None) else \
+                "  No serial port is present on this PC - is the USB/RS-485 converter plugged in?"
+        shown = "; ".join(f"{x['device']} ({', '.join(t for t in (x.get('description'), self._usb_text(x)) if t)})"
+                          for x in ports)
+        return f"  Serial ports on this PC now: {shown}"
+
+    def _moved_port(self, key: str, p: Dict) -> Optional[str]:
+        """The configured port cannot be opened.  If the SAME USB converter - the one named by
+        `usb_id`, or the one that was on this port while it worked - is present under another COM
+        number, return that.  Never guesses: exactly one match, and not a port this program
+        already uses."""
+        want = self._wanted_identity(p) or self._port_identity.get(key)
+        if want is None:
+            return None
+        configured = {str(rs485_params(t.params)["port"]).upper() for t in self.turbos} | {key}
+        in_use = {str(b.port).upper() for k, b in self.buses.items() if k != key}
+        found = []
+        for x in self._list_ports():
+            dev = str(x.get("device") or "")
+            if x.get("vid") is None or dev.upper() in in_use or (dev.upper() in configured and dev.upper() != key):
+                continue
+            if (x["vid"], x["pid"]) != (want[0], want[1]):
+                continue
+            if want[2] is not None and (x.get("serial") or "") != want[2]:
+                continue
+            found.append(dev)
+        found = [d for d in found if d.upper() != key] or found
+        if len(found) == 1 and found[0].upper() != key:
+            return found[0]
+        if len(found) > 1:
+            self._say(key, "ambiguous", f"!! {p['port']} cannot be opened and {len(found)} converters of the same "
+                                        f"type are present ({', '.join(found)}) - cannot tell which one it is; set "
+                                        f"`port:` (or `usb_id:` with its serial number) in the profile")
+        return None
+
+    def _remember_port(self, key: str, device: str) -> None:
+        for x in self._list_ports():
+            if str(x.get("device") or "").upper() == str(device).upper() and x.get("vid") is not None:
+                self._port_identity[key] = (x["vid"], x["pid"], x.get("serial") or None)
+
+    def _open_serial(self, p: Dict, port: Optional[str] = None):
+        port = port or p["port"]
         if self.serial_factory:
-            return self.serial_factory(p["port"], int(p["baud"]), float(p["timeout_s"]))
-        return PVBus(p["port"], baud=int(p["baud"]), timeout=float(p["timeout_s"])).ser
+            return self.serial_factory(port, int(p["baud"]), float(p["timeout_s"]))
+        return PVBus(port, baud=int(p["baud"]), timeout=float(p["timeout_s"])).ser
+
+    def _open_port(self, key: str, p: Dict):
+        """-> (serial object, the port name actually opened).  Tries the configured port, then the
+        same converter under another COM number (see _moved_port).  Raises if neither opens."""
+        try:
+            ser = self._open_serial(p)
+            self._remember_port(key, p["port"])
+            return ser, str(p["port"])
+        except Exception as exc:
+            moved = self._moved_port(key, p)
+            if moved is None:
+                raise
+            ser = self._open_serial(p, moved)           # (raises the second error if this fails too)
+            self._remember_port(key, moved)
+            self._pev(
+                f"!! {p['port']} cannot be opened ({exc}), but its USB/RS-485 converter is now {moved} - using "
+                f"{moved}.  Change `port:` to {moved} in the profile (or set `usb_id:` so the number no longer matters)")
+            return ser, moved
+
+    def _port_error_text(self, p: Dict, exc: BaseException) -> str:
+        return f"cannot open {p['port']}: {exc}.{self._ports_hint()}"
 
     def _make_bus(self, p: Dict) -> PVBus:
         """A port that cannot be opened (converter unplugged, port held by the bring-up tool) must not
         stop the facility program: the pumps on it report 'cannot open COMx' and the poller retries."""
         key = str(p["port"]).upper()
+        device = str(p["port"])
         try:
-            ser = self._open_serial(p)
+            ser, device = self._open_port(key, p)
             self.port_errors.pop(key, None)
         except Exception as exc:
             ser = _NoPort()
-            self.port_errors[key] = f"cannot open {p['port']}: {exc}"
-        return PVBus(p["port"], baud=int(p["baud"]), timeout=float(p["timeout_s"]), serial_obj=ser)
+            self.port_errors[key] = self._port_error_text(p, exc)
+            self._port_lost_at[key] = self.clock()
+        return PVBus(device, baud=int(p["baud"]), timeout=float(p["timeout_s"]), serial_obj=ser)
+
+    def _drop_port(self, key: str, units: List[_Unit]) -> None:
+        """The serial port failed under us (USB converter unplugged, reset or re-enumerated - pyserial
+        reports 'WriteFile failed', 'ClearCommError failed', 'device disconnected').  Close the dead
+        handle - Windows cannot give the converter its COM number back while we hold it - and let
+        _retry_port open it again.  Whatever the pumps were last told is sent again after that."""
+        bus = self.buses[key]
+        with bus.lock:
+            fault, bus.port_fault = bus.port_fault, ""
+            try:
+                bus.ser.close()
+            except Exception:
+                pass
+            bus.ser = _NoPort()
+        now = self.clock()
+        self.port_errors[key] = f"{bus.port} stopped working ({fault})"
+        self._port_lost_at[key] = now
+        self._port_tries[key] = 0
+        self._port_retry[key] = now - self.port_retry_s          # first new attempt on the next pass
+        self._said.pop((key, "retry"), None)
+        self._pev(f"!! RS-485 port {bus.port} stopped working ({fault}) - port closed; trying to "
+                                 f"open it again every {self.port_retry_fast_s:g} s")
+        for u in units:
+            u.applied_motor = None                  # unknown from here on: the wanted state is sent again
+            u.applied_standby = None
+            u.applied_speed = "unknown"
 
     def _retry_port(self, key: str, p: Dict) -> None:
+        """A port that could not be opened or has dropped out is tried again for as long as the
+        program runs - never given up on."""
+        if key not in self.port_errors:
+            return
         now = self.clock()
-        if key not in self.port_errors or now - self._port_retry.get(key, 0.0) < self.port_retry_s:
+        lost = self._port_lost_at.setdefault(key, now)
+        every = self.port_retry_fast_s if now - lost < self.port_retry_fast_for_s else self.port_retry_s
+        if now - self._port_retry.get(key, -1e9) < every:
             return
         self._port_retry[key] = now
+        self._port_tries[key] = self._port_tries.get(key, 0) + 1
         try:
-            ser = self._open_serial(p)
+            ser, device = self._open_port(key, p)
         except Exception as exc:
-            self.port_errors[key] = f"cannot open {p['port']}: {exc}"
+            self.port_errors[key] = self._port_error_text(p, exc)
+            if now - lost >= 5.0:                   # (a converter that re-enumerates needs a few seconds)
+                self._say(key, "retry", f"{p['port']} still cannot be opened after {now - lost:.0f} s "
+                                        f"({self._port_tries[key]} tries) - still trying.{self._ports_hint()}")
             return
         bus = self.buses[key]
         with bus.lock:
             bus.ser = ser
+            bus.port = device
+            bus.port_fault = ""
         self.port_errors.pop(key, None)
+        self._pev(f"RS-485 port {device} opened again after {now - lost:.0f} s "
+                                 f"({self._port_tries.get(key, 1)} tries) - taking the pumps back")
+        self._port_lost_at.pop(key, None)
+        self._port_tries.pop(key, None)
+        self._said.pop((key, "retry"), None)
+        self._last_reset[key] = now
         for u in self._by_port.get(key, []):
-            u.events.append(f"{u.label}: {p['port']} opened")
-            self._connect(u)
+            u.applied_motor = None                  # send the wanted state again - the pump may have been
+            u.applied_standby = None                # power-cycled, or missed a stop while the port was away
+            u.applied_speed = "unknown"
+            self._connect(u, quiet=True)
 
-    def _connect(self, u: _Unit) -> None:
+    def _connect(self, u: _Unit, quiet: bool = False) -> None:
         """Best effort: a pump that does not answer yet is not fatal - it shows as 'no reply'."""
         try:
             u.values[315] = u.pump.read(315)
@@ -243,7 +440,8 @@ class RS485Turbos:
         except PVRejected as exc:
             u.control_error = f"RS-485 control refused: {exc}"
         except PVError as exc:
-            u.events.append(f"{u.label}: no RS-485 reply at start-up ({exc})")
+            if not quiet:
+                u.events.append(f"{u.label}: no RS-485 reply at start-up ({exc})")
 
     def close(self) -> List[str]:
         """Stop the pollers, send the final state (all off after safe_state) synchronously, release."""
@@ -285,8 +483,11 @@ class RS485Turbos:
                 u.ack_pending = True
 
     def take_events(self) -> List[str]:
+        self._ensure_threads()
         out = []
         with self.lock:
+            out.extend(self._port_events)
+            self._port_events.clear()
             for u in self.units.values():
                 out.extend(u.events)
                 u.events.clear()
@@ -342,15 +543,28 @@ class RS485Turbos:
 
     # ------------------------------------------------------------------ poller
     def _run(self, units: List[_Unit]) -> None:
+        """The poller of one port.  It must never end while the program runs: nothing else reads the
+        pumps, re-opens the port or sends a stop.  (Until 2026-11-27 a serial-port error - a USB
+        converter that dropped out for a moment - ended it for good; only a program restart
+        brought the link back.)"""
         key = str(units[0].p["port"]).upper()
         while not self._stop.is_set():
-            self._pass(key, units)
+            try:
+                self._pass(key, units)
+            except Exception as exc:                # whatever it is: say so, and carry on
+                self._say(key, "crash", f"!! RS-485 poller for {key}: unexpected {type(exc).__name__}: {exc} "
+                                        f"- carrying on")
             self._stop.wait(self.idle_s)
 
     def _pass(self, key: str, units: List[_Unit]) -> None:
         """One pass over a port: the pump silent longest is polled first; writes (a stop above all)
         go out before every poll."""
+        bus = self.buses[key]
+        if bus.port_fault:
+            self._drop_port(key, units)
         self._retry_port(key, units[0].p)
+        if key in self.port_errors:
+            return                                  # no port: nothing to ask; the next pass tries it again
         self._maybe_reset_port(key, units)
         with self.lock:
             order = sorted(units, key=lambda u: u.last_ok or u.opened_at)
@@ -359,7 +573,11 @@ class RS485Turbos:
                 self._apply(w)
             if self._stop.is_set():
                 return
-            self._poll(u)
+            if not bus.port_fault:
+                self._poll(u)
+            if bus.port_fault:                      # the port died under us: no point asking the others
+                self._drop_port(key, units)
+                return
 
     def _maybe_reset_port(self, key: str, units: List[_Unit]) -> None:
         """Every pump on this port silent for `port_reset_s`: close the port, open it again and take
@@ -371,7 +589,12 @@ class RS485Turbos:
         if reset_s <= 0:
             return
         silent = min(now - (u.last_ok or u.opened_at) for u in units)
-        if silent < reset_s or now - self._last_reset.get(key, 0.0) < reset_s:
+        if silent < reset_s:
+            if (key, "reset") in self._said:        # they answer again: the next silence is a new story
+                del self._said[(key, "reset")]
+                self._pev(f"pump(s) on {self.buses[key].port} answering again")
+            return
+        if now - self._last_reset.get(key, 0.0) < reset_s:
             return
         self._last_reset[key] = now
         p = units[0].p
@@ -382,20 +605,25 @@ class RS485Turbos:
                     bus.ser.close()
                 except Exception:
                     pass
-                bus.ser = self._open_serial(p)
-        except Exception as exc:
-            self.port_errors[key] = f"cannot open {p['port']}: {exc}"
-            with bus.lock:
                 bus.ser = _NoPort()
-            for u in units:
-                u.events.append(f"{u.label}: {p['port']} silent for {silent:.0f} s - re-opening it failed ({exc})")
+                ser, device = self._open_port(key, p)
+                bus.ser, bus.port, bus.port_fault = ser, device, ""
+        except Exception as exc:
+            self.port_errors[key] = self._port_error_text(p, exc)
+            self._port_lost_at[key] = now
+            self._port_tries[key] = 0
+            self._say(key, "reset", f"!! {p['port']}: no pump answered for {silent:.0f} s and re-opening the port "
+                                    f"failed ({exc}) - trying again every {self.port_retry_fast_s:g} s")
             return
+        # one line when it starts, then one every `repeat_log_s` - not eight every ten seconds for as
+        # long as the pumps' electronics are switched off
+        self._say(key, "reset", f"{bus.port}: no reply from any pump for {silent:.0f} s - port closed and "
+                                f"re-opened (repeated every {reset_s:g} s until a pump answers)")
         for u in units:
-            u.events.append(f"{u.label}: no reply on {p['port']} for {silent:.0f} s - port closed and re-opened")
             u.applied_motor = None                  # unknown after a reset: send the desired state again
             u.applied_standby = None
             u.applied_speed = "unknown"
-            self._connect(u)
+            self._connect(u, quiet=True)
 
     def poll_once_ordered(self) -> None:
         """One pass per port exactly as the poller thread does it (tests)."""
@@ -486,6 +714,8 @@ class RS485Turbos:
                 if timeouts >= 2:                   # dead link: don't spend 12 x timeout on it
                     break
                 continue
+            except PVPortError:
+                break                               # the port itself: _pass closes it and retries
             except PVError:
                 continue
             with self.lock:

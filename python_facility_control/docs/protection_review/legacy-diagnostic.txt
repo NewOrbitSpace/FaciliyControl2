@@ -1,0 +1,13 @@
+First error 2233 0 0 ErrorCluster(status=True, code=5001, source='Conflict between Turbo Valve command and read!')
+Started Chiller at 10:12:37
+Primary Pump: powered � run command in 15 s
+Started Primary Pump at 10:12:37
+Primary Pump: run commanded
+Opened Turbo Valve at 10:12:39
+ERROR 5001: Conflict between Turbo Valve command and read!
+Shutt down due to error at 10:12:39
+Primary Pump: run command removed � power off in 300 s
+Closed Turbo Valve at 10:12:39
+Closed Bypass Valve at 10:12:39
+Stopped Primary Pump at 10:12:39
+Stopped Chiller at 10:12:39

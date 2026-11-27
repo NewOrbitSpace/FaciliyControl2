@@ -66,6 +66,12 @@ class PVFormat(PVError):
     pass
 
 
+class PVPortError(PVError):
+    """The serial port itself failed (USB converter unplugged or reset, driver error) - not the pump.
+    Raised instead of whatever pyserial / the operating system threw, so that every caller that
+    handles PVError also survives a port that drops out."""
+
+
 class PVRejected(PVError):
     """The pump answered, but with NO_DEF / _RANGE / _LOGIC."""
 
@@ -283,6 +289,7 @@ class CommStats:
     sum_ms: float = 0.0
     last_ok_time: float = 0.0
     consecutive_failures: int = 0
+    port_errors: int = 0            # the serial port itself failed (see PVPortError)
 
     @property
     def avg_ms(self) -> float:
@@ -290,12 +297,13 @@ class CommStats:
 
     @property
     def failures(self) -> int:
-        return self.timeouts + self.checksum_errors + self.format_errors
+        return self.timeouts + self.checksum_errors + self.format_errors + self.port_errors
 
     def summary(self) -> str:
         return (f"{self.ok}/{self.requests} ok, {self.timeouts} timeout, {self.checksum_errors} checksum, "
                 f"{self.format_errors} format, {self.rejected} rejected, "
-                f"latency avg {self.avg_ms:.0f} / max {self.max_ms:.0f} ms")
+                + (f"{self.port_errors} port errors, " if self.port_errors else "")
+                + f"latency avg {self.avg_ms:.0f} / max {self.max_ms:.0f} ms")
 
 
 # ---------------------------------------------------------------------------- bus
@@ -319,6 +327,7 @@ class PVBus:
         self.log = log            # log(direction, text), direction "TX" / "RX" / "--"
         self.gap_s = 0.005        # idle time between telegrams (bus turnaround)
         self.echo_detected = False
+        self.port_fault = ""      # set when the serial port itself failed; cleared by whoever re-opens it
 
     def close(self) -> None:
         try:
@@ -358,17 +367,28 @@ class PVBus:
             time.sleep(self.gap_s)
             self._log("TX", tx)
             t0 = time.monotonic()
-            self.ser.write(tx.encode("ascii"))
-            deadline = t0 + self.timeout
-            rx = self._readline(deadline)
-            if rx == tx and (action == ACTION_QUERY or self.echo_detected):
-                # A query reply never equals the query (action 10 vs 00), so this is the converter
-                # echoing our own bytes.  A write reply legitimately equals the write telegram, so
-                # for writes we can only tell once a query has shown that this converter echoes.
-                if not self.echo_detected:
-                    self._log("--", "converter echoes transmitted telegrams - echo will be skipped")
-                self.echo_detected = True
-                rx = self._readline(time.monotonic() + self.timeout)
+            try:
+                self.ser.write(tx.encode("ascii"))
+                deadline = t0 + self.timeout
+                rx = self._readline(deadline)
+                if rx == tx and (action == ACTION_QUERY or self.echo_detected):
+                    # A query reply never equals the query (action 10 vs 00), so this is the converter
+                    # echoing our own bytes.  A write reply legitimately equals the write telegram, so
+                    # for writes we can only tell once a query has shown that this converter echoes.
+                    if not self.echo_detected:
+                        self._log("--", "converter echoes transmitted telegrams - echo will be skipped")
+                    self.echo_detected = True
+                    rx = self._readline(time.monotonic() + self.timeout)
+            except Exception as exc:
+                # pyserial / the operating system: the PORT failed (USB converter unplugged or reset
+                # - 'WriteFile failed', 'ClearCommError failed', 'device disconnected', a write
+                # time-out).  Before 2026-11-27 this went up as it was, past every `except PVError`,
+                # and ended the facility program's RS-485 thread for good.
+                st.port_errors += 1
+                st.consecutive_failures += 1
+                self.port_fault = f"{type(exc).__name__}: {exc}"
+                self._log("--", f"serial port error: {self.port_fault}")
+                raise PVPortError(f"serial port {self.port} failed ({self.port_fault})") from exc
             ms = (time.monotonic() - t0) * 1000.0
         try:
             if not rx:

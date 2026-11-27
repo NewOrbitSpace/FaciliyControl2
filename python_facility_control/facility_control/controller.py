@@ -69,7 +69,9 @@ class DialogHandle:
 class DialogProvider(Protocol):
     def ask(self, kind: str, message: str, buttons: List[str]) -> DialogHandle:
         """kind: 'two' (buttons [yes, no] -> result 0/1), 'three' (result 0/1/2, 3 = window closed),
-        'info' (one OK button, result ignored).  Must return immediately."""
+        'info' (one OK button, result ignored; the controller may wait for it),
+        'notice' (one OK button, tells the operator something while the facility carries on: the
+        controller never waits for it and it must never block the panel).  Must return immediately."""
         ...
 
 
@@ -93,7 +95,7 @@ class AutoAnswerDialogs:
 
     def ask(self, kind: str, message: str, buttons: List[str]) -> DialogHandle:
         self.log.append((kind, message))
-        if kind == "info":
+        if kind in ("info", "notice"):
             return DialogHandle(None, done=True)
         ans = self._next(0)
         if ans is DEFER:
@@ -197,6 +199,11 @@ class Controller:
         self._high_vac_since: Optional[float] = None     # Auto entered Pumping to High Vac (full-speed check)
         self._force_command = False                      # write commands this iteration even while held
         self._comm_lost: Set[str] = set()                # RS-485 turbos currently past comm_timeout_s
+        self._comm_new: List[Tuple[object, object]] = [] # ... taken out in THIS pass (reported together)
+        # pop-ups that do not hold the loop: subject -> (handle, when shown).  See _notify.
+        self._notices: Dict[str, Tuple[DialogHandle, float]] = {}
+        self.popups_hidden = 0                           # pop-ups not shown because of the limits
+        self._log_seen: Dict[str, List[float]] = {}      # kind of log line -> [window start, count, hidden]
         self._gate_open_cmd_at: Dict[str, float] = {}    # gate -> when it was commanded open
         self._gate_slow: Set[str] = set()                # gates given extra time to open (logged)
         self._tv_held: Dict[str, str] = {}               # turbo valve -> why it is held closed (no backing yet)
@@ -423,7 +430,7 @@ class Controller:
             self._auto_trip = None
             self._speed_trip = None
             self._log("Error cleared by user")
-            self._restore_taken_out("Clear Error")
+            self._restore_taken_out("Clear Error", say_silent=True)
         self.sleep(cfg.status_wait_ms / 1000.0)
         # ---- error-ack pulse end
         for tid, until in list(self._ack_until.items()):
@@ -467,7 +474,7 @@ class Controller:
                         self._log("Manual (interlocked) Control Mode Enabled")
                     self.mode = Mode.MANUAL
                 if self.mode in (Mode.ADMIN, Mode.MANUAL):
-                    self._restore_taken_out(f"{self.mode.name.title()} mode")
+                    self._restore_taken_out(f"{self.mode.name.title()} mode", even_if_silent=True)
             reqs = [r for r in reqs if r.kind not in ("admin_mode", "manual_mode")]
             if self.mode == Mode.INITIALIZE:
                 new = self._decide_initialize(new)
@@ -754,6 +761,7 @@ class Controller:
                                                  tc.speed_settable, False, tc.disabled_reason,
                                                  ti.comm_silent_s if (ti.comm_warning or comm_lost) else 0.0,
                                                  comm_lost)
+        self._report_comm_loss()
         # compressor pressure (VC100: < 5 bar for 5 s -> error; only if the profile has the sensor)
         if th.compressor_min_bar is not None and inp.compressor_bar is not None:
             low = inp.compressor_bar < th.compressor_min_bar
@@ -851,10 +859,11 @@ class Controller:
                         f"gauge, cable or data acquisition fault")
             self._gauge_fault[g.id] = what
             self._log(f"!! {what} ({ts})")
-            self.dialogs.ask("info", f"{what}.\n\nThe pressure from this gauge cannot be trusted, so the "
-                                     f"facility is being shut down safely (error {ERR_GAUGE_FAULT}).\n\n"
-                                     f"Check the gauge, its supply and its cable.  The error clears by itself "
-                                     f"once the gauge reads properly again.", ["OK"])
+            self._notify(f"gauge:{g.id}",
+                         f"{what}.\n\nThe pressure from this gauge cannot be trusted, so the "
+                         f"facility is being shut down safely (error {ERR_GAUGE_FAULT}).\n\n"
+                         f"Check the gauge, its supply and its cable.  The error clears by itself "
+                         f"once the gauge reads properly again.")
 
     def _check_turbo_speeds(self, inp: Inputs, now: float) -> None:
         """Speed-drop trip (2026-11-17): a turbo that loses speed FAST has gas on it, whatever the
@@ -988,11 +997,12 @@ class Controller:
             self._speed_trip = ErrorCluster.make(ERR_TURBO_SPEED_DROP, what + "  Every turbo isolated")
             self._hold_until = min(self._hold_until, now)        # do not sit out a settle wait first
             self._log(f"!! {what}  Isolating every turbo ({ts})")
-            self.dialogs.ask("info", f"{what}\n\nEvery gate valve and every turbo valve is being closed and the "
-                                     f"turbo motors are stopped (error {ERR_TURBO_SPEED_DROP}).  The chiller stays "
-                                     f"on while the turbos slow down.\n\nFind out where the gas came from before "
-                                     f"pumping again: the gauges, the valves, a leak.  The turbos stay isolated "
-                                     f"until 'Clear Error' is pressed.", ["OK"])
+            self._notify("speed_trip",
+                         f"{what}\n\nEvery gate valve and every turbo valve is being closed and the "
+                         f"turbo motors are stopped (error {ERR_TURBO_SPEED_DROP}).  The chiller stays "
+                         f"on while the turbos slow down.\n\nFind out where the gas came from before "
+                         f"pumping again: the gauges, the valves, a leak.  The turbos stay isolated "
+                         f"until 'Clear Error' is pressed.")
 
     def _gate_failed_to_open(self, vid: str, inp: Inputs, now: Optional[float] = None) -> bool:
         """Auto mode, a gate commanded OPEN still reads closed after its settle time, and its turbo
@@ -1026,9 +1036,10 @@ class Controller:
             self._log(f"!! {msg} – {self.cfg.valves[vid].label} closed and {tc.label} switched off; "
                       f"Auto carries on with the other turbos ({time.strftime('%H:%M:%S')})")
             # a popup that does NOT hold the control loop (the facility keeps running underneath it)
-            self.dialogs.ask("info", f"{msg}\n\n{self.cfg.valves[vid].label} has been closed and {tc.label} "
-                                     f"switched off. The rest of the facility carries on in Auto.\n\n"
-                                     f"Press 'Clear Error' to let Auto try {tc.label} again.", ["OK"])
+            self._notify(f"gate:{tc.id}",
+                         f"{msg}\n\n{self.cfg.valves[vid].label} has been closed and {tc.label} "
+                         f"switched off. The rest of the facility carries on in Auto.\n\n"
+                         f"Press 'Clear Error' to let Auto try {tc.label} again.")
         return True
 
     def _comm_watch(self, tc, ti, comm_lost: bool) -> bool:
@@ -1038,12 +1049,18 @@ class Controller:
         off (the poller keeps sending the stop until the pump answers), keep its turbo valve and the
         primary pump on while it may still be spinning (its last known speed is kept), popup, and let
         Auto carry on with the others.  Returns True when the comm error is handled this way, so it
-        does not stop Auto.  Otherwise (Manual/Admin, option off) it stays the turbo error it was."""
+        does not stop Auto.  Otherwise (Manual/Admin, option off) it stays the turbo error it was.
+
+        A turbo taken out for this stays out for as long as it is silent (2026-11-27): until then
+        Facility Off gave it back in the same pass, the next pass took it out again, and every pass
+        raised another pop-up."""
         if not comm_lost:
             if tc.id in self._comm_lost:
                 self._comm_lost.discard(tc.id)
-                self._log(f"{tc.label} answering on RS-485 again"
-                          + (" – press 'Clear Error' to put it back in service" if tc.disabled_reason else ""))
+                hint = ""
+                if tc.disabled_reason and not (self.mode == Mode.AUTO and self.current == FacilityState.FACILITY_OFF):
+                    hint = " - press 'Clear Error' to put it back in service"
+                self._log(f"{tc.label} answering on RS-485 again{hint} ({time.strftime('%H:%M:%S')})")
             return False
         self._comm_lost.add(tc.id)
         if (self.mode != Mode.AUTO or not tc.in_use
@@ -1052,26 +1069,96 @@ class Controller:
         if tc.disabled_reason:
             return True                                  # already out (this or another reason)
         rs = ti.rs485 or {}
-        msg = f"No RS-485 reply from {tc.label} ({rs.get('port', '?')} address {rs.get('address', '?')})"
-        tc.disabled_reason = msg
+        tc.disabled_reason = f"No RS-485 reply from {tc.label} ({rs.get('port', '?')} address {rs.get('address', '?')})"
         self._force_command = True
-        gate = self.cfg.valves[tc.gate_valve].label
-        self._log(f"!! {ti.error_text or msg} – {gate} closed, {tc.label} commanded off, its turbo valve and "
-                  f"the primary pump kept on while it may still spin; Auto carries on with the other turbos "
-                  f"({time.strftime('%H:%M:%S')}; link stats: {rs.get('stats', '-')})")
-        self.dialogs.ask("info", f"{msg}.\n\n{gate} has been closed and {tc.label} told to stop (the stop "
-                         f"is repeated until the pump answers). Its turbo valve and the primary pump stay on "
-                         f"while it may still be spinning. The rest of the facility carries on in Auto.\n\n"
-                         f"Check the RS-485 cable and converter, then press 'Clear Error' to put {tc.label} "
-                         f"back in service.", ["OK"])
+        self._comm_new.append((tc, ti))                  # told to the operator by _report_comm_loss
         return True
 
-    def _restore_taken_out(self, why: str) -> None:
-        """Give turbos taken out at run time back to Auto / the operator."""
+    def _report_comm_loss(self) -> None:
+        """Tell the operator about the turbos `_comm_watch` took out in this pass: ONE log line and
+        ONE pop-up per serial port, however many pumps hang on it (four on the VC100's converter)."""
+        new, self._comm_new = self._comm_new, []
+        by_port: Dict[str, List[Tuple[object, object]]] = {}
+        for tc, ti in new:
+            by_port.setdefault(str((ti.rs485 or {}).get("port", "?")), []).append((tc, ti))
+        for port, items in by_port.items():
+            labels = [tc.label for tc, _ in items]
+            names = labels[0] if len(labels) == 1 else ", ".join(labels[:-1]) + " and " + labels[-1]
+            adrs = ", ".join(str((ti.rs485 or {}).get("address", "?")) for _, ti in items)
+            one = len(items) == 1
+            msg = f"No RS-485 reply from {names} ({port} address{'' if one else 'es'} {adrs})"
+            gates = ", ".join(dict.fromkeys(self.cfg.valves[tc.gate_valve].label for tc, _ in items))
+            detail = items[0][1].error_text or ""
+            stats = (items[0][1].rs485 or {}).get("stats", "-")
+            self._log(f"!! {msg} – {detail + ' – ' if detail else ''}{gates} closed, {names} commanded off, "
+                      f"{'its turbo valve' if one else 'their turbo valves'} and the primary pump kept on while "
+                      f"{'it' if one else 'they'} may still spin; Auto carries on with the other turbos; the "
+                      f"program keeps trying to reconnect ({time.strftime('%H:%M:%S')}; link stats: {stats})")
+            port_trouble = ("cannot open" in detail) or ("stopped working" in detail)
+            self._notify(f"comm:{port}",
+                         f"{msg}.\n\n"
+                         + (f"The serial port itself is the problem: {detail}\n\n" if port_trouble else "")
+                         + f"{gates} {'has' if one else 'have'} been closed and {names} told to stop (the stop is "
+                           f"repeated until the pump answers). {'Its turbo valve' if one else 'Their turbo valves'} "
+                           f"and the primary pump stay on while {'it' if one else 'they'} may still be spinning. "
+                           f"The rest of the facility carries on in Auto.\n\n"
+                           f"The program keeps trying to reconnect by itself. Check the RS-485 cable and "
+                           f"converter{' and the port number in the profile' if port_trouble else ''}; when "
+                           f"{'the pump answers' if one else 'the pumps answer'} again, press 'Clear Error' to put "
+                           f"{'it' if one else 'them'} back in service.")
+
+    def _restore_taken_out(self, why: str, even_if_silent: bool = False, say_silent: bool = False) -> None:
+        """Give turbos taken out at run time back to Auto / the operator.  A turbo that is STILL not
+        answering on RS-485 stays out (it would be taken out again in the next pass) unless
+        `even_if_silent` - Manual / Admin, where the operator has it in hand."""
         for tc in self.cfg.turbos:
-            if tc.disabled_reason:
-                tc.disabled_reason = ""
-                self._log(f"{tc.label} back in use ({why})")
+            if not tc.disabled_reason:
+                continue
+            if tc.id in self._comm_lost and not even_if_silent:
+                if say_silent:
+                    self._log(f"{tc.label} is still not answering on RS-485 – it stays out of service")
+                continue
+            tc.disabled_reason = ""
+            self._log(f"{tc.label} back in use ({why})")
+
+    # ------------------------------------------------------------------ pop-ups that do not hold the loop
+    def _notify(self, key: str, message: str, kind: str = "notice", repeat_s: Optional[float] = None) -> bool:
+        """A pop-up that tells the operator something while the facility carries on.  Every such
+        pop-up goes through here, and whatever goes wrong underneath, the limits hold (2026-11-27,
+        after a fault that raised a new pop-up on every pass of the loop - hundreds - and locked the
+        operators out of the panel):
+
+          * one box per subject (`key`): not raised again while the last one is still open, nor within
+            `logging.popup_repeat_s` of it;
+          * at most `logging.popup_max_open` boxes open at once.  What does not fit is in the event
+            log only (the caller logs every event anyway), and ONE extra box says so.
+
+        The boxes themselves never block the panel (kind 'notice' - see gui/dialogs.py).
+        Returns True when a box was raised."""
+        lg = self.cfg.logging
+        now = self.clock()
+        repeat = float(lg.popup_repeat_s if repeat_s is None else repeat_s)
+        prev = self._notices.get(key)
+        if prev is not None and (not prev[0].done or now - prev[1] < repeat):
+            self.popups_hidden += 1
+            return False
+        open_now = sum(1 for k, (h, _) in self._notices.items() if not h.done and k != "__more__")
+        limit = int(lg.popup_max_open or 0)
+        if limit and open_now >= limit:
+            self.popups_hidden += 1
+            more = self._notices.get("__more__")
+            if more is None or more[0].done:
+                self._log(f"Pop-up limit reached ({open_now} open) – further messages are in this event log only "
+                          f"until some pop-ups are closed ({time.strftime('%H:%M:%S')})")
+                self._notices["__more__"] = (self.dialogs.ask(
+                    "notice", f"There are more messages than the {limit} pop-ups shown.\n\nThe others are in the "
+                              f"event log at the bottom right of the panel - nothing is lost. Close some pop-ups "
+                              f"to see new ones again.", ["OK"]), now)
+            return False
+        self._notices[key] = (self.dialogs.ask(kind, message, ["OK"]), now)
+        if len(self._notices) > 200:                     # (subjects are few; this is only a backstop)
+            self._notices = {k: v for k, v in self._notices.items() if not v[0].done or now - v[1] < repeat}
+        return True
 
     def _supervise_full_speed(self, now: float) -> None:
         """Auto 'Pumping to High Vac': every turbo in use must be at FULL speed - status Speed Reached,
@@ -1231,9 +1318,15 @@ class Controller:
             self._wait_dialog(handle, kind, label or message)
 
     def _info(self, message: str) -> None:
-        handle = self.dialogs.ask("info", message, ["OK"])
-        if self.blocking and not handle.done:           # the VI's one-button dialog blocks too
-            self._wait_dialog(handle, "info", message)
+        """The answer to something the operator just pressed ("Please Turn Chiller On First")."""
+        if self.blocking:
+            handle = self.dialogs.ask("info", message, ["OK"])
+            if not handle.done:                         # the VI's one-button dialog blocks too
+                self._wait_dialog(handle, "info", message)
+        else:
+            # not waited for: the same limits as every other pop-up (one box per message, a cap on
+            # how many are open); it may come again as soon as the last one was closed
+            self._notify("info:" + message, message, kind="info", repeat_s=0.0)
         self._log(message)
 
     # ------------------------------------------------------------------ frame 3
@@ -1769,6 +1862,32 @@ class Controller:
                 self._log(f"{tc.label} speed set to " + ("full speed" if sp is None else f"{sp:.0f} %") + f" at {ts}")
 
     def _log(self, line: str) -> None:
+        """One line into the event log.  A line that keeps coming - the same text apart from its
+        numbers, more than `logging.log_flood_lines` times within `log_flood_window_s` - is shown
+        that many times, then once per window with a count, so that a fault which repeats on every
+        pass of the loop cannot bury the rest of the log."""
+        lg = self.cfg.logging
+        limit, window = int(lg.log_flood_lines or 0), float(lg.log_flood_window_s)
+        if limit:
+            now = self.clock()
+            kind = _reason_kind(line)
+            rec = self._log_seen.get(kind)
+            if rec is None or now - rec[0] > window:
+                flooding = rec is not None and rec[2] > 0 and now - rec[0] <= 2 * window
+                if flooding:                             # still coming: one line per window, with the count
+                    line = f"{line}  [this message came {int(rec[2])} more times and was not repeated]"
+                # [window start, lines in it, hidden in it, 1 = still flooding: no second marker]
+                self._log_seen[kind] = [now, float(limit if flooding else 1), 0.0, 1.0 if flooding else 0.0]
+                if len(self._log_seen) > 400:
+                    for k in sorted(self._log_seen, key=lambda k: self._log_seen[k][0])[:200]:
+                        del self._log_seen[k]
+            else:
+                rec[1] += 1
+                if rec[1] > limit:
+                    rec[2] += 1
+                    if rec[2] > 1 or rec[3]:
+                        return
+                    line = f"{line}  [repeating – further repeats of this message are counted, not shown]"
         self.event_log.append(line)
         cap = self.cfg.logging.event_log_max_lines
         if len(self.event_log) > cap:

@@ -1,0 +1,22 @@
+.............................FF..s.................................      [100%]
+================================== FAILURES ===================================
+_______________ test_validation_passes_on_a_healthy_rs485_pump ________________
+tests\test_hipace_rs485.py:227: in test_validation_passes_on_a_healthy_rs485_pump
+    checks = validate(pump, pings=10, write_test=True)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+facility_control\drivers\pfeiffer_pv.py:722: in validate
+    f"avg {lat:.0f} ms, {pings / dt:.1f} telegrams/s"))
+                         ^^^^^^^^^^
+E   ZeroDivisionError: float division by zero
+___________ test_validation_flags_remote_priority_and_wrong_address ___________
+tests\test_hipace_rs485.py:236: in test_validation_flags_remote_priority_and_wrong_address
+    by = {c.name: c.result for c in validate(pump, pings=5)}
+                                    ^^^^^^^^^^^^^^^^^^^^^^^
+facility_control\drivers\pfeiffer_pv.py:722: in validate
+    f"avg {lat:.0f} ms, {pings / dt:.1f} telegrams/s"))
+                         ^^^^^^^^^^
+E   ZeroDivisionError: float division by zero
+=========================== short test summary info ===========================
+FAILED tests/test_hipace_rs485.py::test_validation_passes_on_a_healthy_rs485_pump
+FAILED tests/test_hipace_rs485.py::test_validation_flags_remote_priority_and_wrong_address
+2 failed, 64 passed, 1 skipped in 8.92s
