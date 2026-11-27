@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields as dataclass_fields
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -735,6 +735,20 @@ def build_config(raw: Dict[str, Any], source_path: str = "") -> FacilityConfig:
         compressor_offset=float(comp.get("offset", 0.0)),
         auto_mode=dc(AutoBehaviour, raw.get("auto_mode")), auto_buttons=buttons, source_path=source_path,
     )
+    # Every number in these blocks must be a number (2026-11-28): not-a-number, infinite, negative or
+    # text in a threshold or a time silently switches the comparison it is used in off.
+    for block_name, block in (("thresholds", cfg.thresholds), ("timings", cfg.timings), ("logging", cfg.logging)):
+        for f in dataclass_fields(block):
+            if str(f.type).replace(" ", "") not in ("float", "int", "Optional[float]", "Optional[int]"):
+                continue
+            value = getattr(block, f.name)
+            if value is None:
+                continue
+            usable = (isinstance(value, (int, float)) and not isinstance(value, bool)
+                      and value == value and value not in (float("inf"), float("-inf")) and value >= 0)
+            if not usable:
+                raise ValueError(f"{block_name}.{f.name}: {value!r} is not a usable number (must be a real "
+                                 f"number, zero or more; use null to switch a setting off)")
     if cfg.pressure_unit_default not in ("torr", "mbar"):
         raise ValueError("facility.pressure_unit_default must be torr or mbar")
     cfg.main_gauge  # validate presence

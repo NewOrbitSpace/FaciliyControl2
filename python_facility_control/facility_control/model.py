@@ -327,6 +327,23 @@ class Commands:
                 == {k: v for k, v in other.turbo_speed_pct.items() if v is not None})
 
 
+def speed_says_turning(speed_pct: float, above_pct: float) -> bool:
+    """Does this speed reading say the rotor is turning faster than `above_pct`?
+
+    A reading that is not a usable number never says "stopped" (2026-11-28): not-a-number, infinite,
+    or far below zero (beyond -`above_pct`; a little below zero is ordinary noise on the +/-10 V
+    speed input) all count as TURNING.  Everything that protects a rotor - keep its backing and its
+    cooling, do not join it to an un-roughed chamber - hangs on this answer, so an unreadable speed
+    must fall on the careful side."""
+    try:
+        speed = float(speed_pct)
+    except (TypeError, ValueError):
+        return True
+    if speed != speed or math.isinf(speed):
+        return True
+    return abs(speed) > above_pct
+
+
 def primary_is_running(pump, inp: "Inputs", cmds: "Commands") -> bool:
     """THE definition of "the primary pump is turning".  One place, used by the controller, the
     Manual-mode interlocks, the hour meter, the panel and the CSV, so they cannot disagree.

@@ -279,24 +279,42 @@ class NiDaqmxBackend(HardwareBackend):
         cfg = self.config
         if self.read_only:
             return
-        self.tasks["valve_cmd"].write([bool(cmds.valves.get(v, False)) for v in cfg.valve_ids], auto_start=True)
+        # Every output group is written even if an earlier one fails (2026-11-28): the valves, the
+        # primary pump, the chiller and each turbo are separate DAQ tasks, and a failing valve write
+        # used to stop the pump, chiller and turbo-motor writes behind it from happening at all -
+        # also when those were the "everything off" of an error shutdown.  The failures are
+        # collected and raised together afterwards (error 5020, as before).
+        failed: List[str] = []
+
+        def attempt(what: str, do) -> None:
+            try:
+                do()
+            except Exception as exc:
+                failed.append(f"{what}: {type(exc).__name__}: {exc}")
+
+        attempt("valves", lambda: self.tasks["valve_cmd"].write(
+            [bool(cmds.valves.get(v, False)) for v in cfg.valve_ids], auto_start=True))
         if cfg.primary.two_stage:
             # order matters only on the wire, not here: the controller has already decided which of
             # the two relays may be closed this iteration (power -> gap -> run, and the reverse).
-            self.tasks["primary_cmd"].write([bool(cmds.primary_power), bool(cmds.primary_run)], auto_start=True)
+            attempt("primary pump", lambda: self.tasks["primary_cmd"].write(
+                [bool(cmds.primary_power), bool(cmds.primary_run)], auto_start=True))
         else:
-            self.tasks["primary_cmd"].write(bool(cmds.primary_run), auto_start=True)
-        self.tasks["chiller_cmd"].write(bool(cmds.chiller), auto_start=True)
+            attempt("primary pump", lambda: self.tasks["primary_cmd"].write(bool(cmds.primary_run), auto_start=True))
+        attempt("chiller", lambda: self.tasks["chiller_cmd"].write(bool(cmds.chiller), auto_start=True))
         if self.rs485:
-            self.rs485.set_commands(cmds.turbo_motor, cmds.turbo_standby, cmds.turbo_speed_pct)
+            attempt("RS-485 turbos", lambda: self.rs485.set_commands(
+                cmds.turbo_motor, cmds.turbo_standby, cmds.turbo_speed_pct))
         for tc in cfg.turbos:
             if tc.control_mode == "hipace_rs485":
                 continue
             vals = [bool(cmds.turbo_motor.get(tc.id, False))]
             if "standby_do" in tc.params:
                 vals.append(bool(cmds.turbo_standby.get(tc.id, False)))
-            task = self.tasks[f"{tc.id}_cmd"]
-            task.write(vals if len(vals) > 1 else vals[0], auto_start=True)
+            attempt(tc.label, lambda tc=tc, vals=vals: self.tasks[f"{tc.id}_cmd"].write(
+                vals if len(vals) > 1 else vals[0], auto_start=True))
+        if failed:
+            raise RuntimeError("output write failed - " + "; ".join(failed))
         self._last_written = cmds.copy()
 
     def turbo_error_ack(self, turbo_id: str, level: bool) -> None:

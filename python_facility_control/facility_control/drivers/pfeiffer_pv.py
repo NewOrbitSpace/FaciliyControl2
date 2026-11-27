@@ -739,7 +739,7 @@ def validate(pump: HiPace, pings: int = 50, write_test: bool = False,
     note(Check("Link quality", res,
                f"{n_ok}/{pings} replies ok, {st.timeouts - before.timeouts} timeouts, "
                f"{st.checksum_errors - before.checksum_errors} checksum errors, "
-               f"avg {lat:.0f} ms, {pings / dt:.1f} telegrams/s"))
+               f"avg {lat:.0f} ms, " + (f"{pings / dt:.1f} telegrams/s" if dt > 0 else "rate not measurable")))
 
     # 5 - pump health
     code = snap.get(303)

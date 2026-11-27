@@ -32,14 +32,31 @@ class Interlocks:
 
     # ------------------------------------------------------------ helpers
     def _speed(self, inp: Inputs, tid: Optional[str] = None) -> float:
-        """Speed in % – a contact-interface turbo (no speed signal) counts as 100 % while 'Rotating'."""
+        """Speed in % – a contact-interface turbo (no speed signal) counts as 100 % while 'Rotating'.
+
+        What is not known is never "stopped" (2026-11-28): a turbo in use that has no reading at all
+        (a failed read), or whose speed is not a usable number (not-a-number, infinite, far below
+        zero), counts as 100 %.  Every "wait for the turbo to slow down first" and every exposure
+        check goes through here."""
+        slow = self.th.turbo_slow_speed_pct
+
         def one(t):
             if t.has_contacts:
                 return 100.0 if t.contact("rotating") else 0.0
-            return t.speed_pct
+            sp = t.speed_pct
+            usable = isinstance(sp, (int, float)) and sp == sp and not math.isinf(sp) and sp >= -slow
+            return float(sp) if usable else 100.0
+
+        def known(turbo_id: str) -> float:
+            if turbo_id in inp.turbos:
+                return one(inp.turbos[turbo_id])
+            tc = next((t for t in self.cfg.turbos if t.id == turbo_id), None)
+            return 100.0 if (tc is not None and tc.in_use) else 0.0
+
         if tid:
-            return one(inp.turbos[tid]) if tid in inp.turbos else 0.0
-        return max([one(t) for t in inp.turbos.values()] or [0.0])
+            return known(tid)
+        ids = list(dict.fromkeys([t.id for t in self.cfg.turbos] + list(inp.turbos)))
+        return max([known(i) for i in ids] or [0.0])
 
     def _motor(self, cmds: Commands, tid: Optional[str] = None) -> bool:
         if tid:

@@ -47,7 +47,7 @@ from typing import Dict, List, Optional, Set
 
 from .config import FacilityConfig, TurboConfig
 from .model import (Commands, ERR_BACKING_LOST, ERR_CHAMBER_PRESSURE, FacilityState as S, Inputs, TabPage,
-                    TurboInputs, primary_is_running)
+                    TurboInputs, primary_is_running, speed_says_turning)
 from .units import torr_to
 
 
@@ -127,6 +127,7 @@ class AutoInput:
     turbo_engage_time: Optional[float]  # epoch seconds ('Turbo Engage time')
     skip_primary_warm: bool
     isolate_turbos: bool = False       # speed-drop trip (5015) not cleared yet: every turbo stays isolated
+    wall_now: Optional[float] = None   # time of day (epoch s) for 'Turbo Engage time'; None = same as `now`
 
 
 @dataclass
@@ -159,7 +160,7 @@ def turbo_is_spinning(ti: Optional[TurboInputs], pct: float) -> bool:
         return False
     if ti.has_contacts:
         return ti.contact("rotating")
-    return ti.speed_pct > pct
+    return speed_says_turning(ti.speed_pct, pct)       # an unreadable speed is never "stopped"
 
 
 class AutoStateMachine:
@@ -290,7 +291,7 @@ class AutoStateMachine:
             return False
         if ti.has_contacts:
             return bool(ti.contact("rotating"))
-        return ti.speed_pct > self.th.turbo_slow_speed_pct
+        return speed_says_turning(ti.speed_pct, self.th.turbo_slow_speed_pct)
 
     def _exposure_limit(self, turbo_on_threshold_torr: float) -> float:
         """Highest chamber pressure a turning turbo may be joined to (Torr).
@@ -572,7 +573,9 @@ class AutoStateMachine:
                 cmds.chiller = spinning_slow
             else:
                 cmds.chiller = self._any_spinning(inp, th.overnight_chiller_speed_pct)
-            time_reached = a.turbo_engage_time is not None and a.now > a.turbo_engage_time
+            # the operator's date and time: compared with the time of day, not with the timers' clock
+            wall = a.wall_now if a.wall_now is not None else a.now
+            time_reached = a.turbo_engage_time is not None and wall > a.turbo_engage_time
             new_cur = S.PUMPING_TO_ROUGH if time_reached else S.OVERNIGHT_PUMP
             new_tgt = S.PUMPING_TO_HIGH_VAC if time_reached else tgt
             if time_reached:

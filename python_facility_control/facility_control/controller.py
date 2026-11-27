@@ -144,8 +144,8 @@ VALVE_ERROR_CODES = {"turbo": ERR_TURBO_VALVE_CONFLICT, "bypass": ERR_BYPASS_CON
 class Controller:
     def __init__(self, cfg: FacilityConfig, backend: HardwareBackend, dialogs: Optional[DialogProvider] = None,
                  csv_logger: Optional[CsvLogger] = None, initial_mode: Optional[Mode] = None,
-                 sleep: Callable[[float], None] = time.sleep, clock: Callable[[], float] = time.time,
-                 run_hours: Optional[RunHours] = None):
+                 sleep: Callable[[float], None] = time.sleep, clock: Optional[Callable[[], float]] = None,
+                 run_hours: Optional[RunHours] = None, wall_clock: Optional[Callable[[], float]] = None):
         self.cfg = cfg
         self.backend = backend
         self.dialogs: DialogProvider = dialogs or AutoAnswerDialogs()
@@ -153,7 +153,12 @@ class Controller:
         self.run_hours = run_hours if run_hours is not None else RunHours(None)
         self._last_hours_t: Optional[float] = None
         self.sleep = sleep
-        self.clock = clock
+        # Two clocks (2026-11-28).  `clock` measures HOW LONG - settle waits, trip delays, timers -
+        # and must not jump when Windows corrects the PC's time, so it is the monotonic clock.
+        # `wall` is the time of day, used for one thing only: the 'Turbo Engage time' the operator
+        # sets as a date and time.  (A clock handed in - the tests, the simulator - serves as both.)
+        self.clock = clock if clock is not None else time.monotonic
+        self.wall = wall_clock if wall_clock is not None else (clock if clock is not None else time.time)
         self.auto = AutoStateMachine(cfg)
         self.interlocks = Interlocks(cfg)
         self._requests: "queue.Queue[Request]" = queue.Queue()
@@ -204,6 +209,7 @@ class Controller:
         self._notices: Dict[str, Tuple[DialogHandle, float]] = {}
         self.popups_hidden = 0                           # pop-ups not shown because of the limits
         self._log_seen: Dict[str, List[float]] = {}      # kind of log line -> [window start, count, hidden]
+        self._waited_for_dialog = False                  # the loop stood still for a question in this pass
         self._gate_open_cmd_at: Dict[str, float] = {}    # gate -> when it was commanded open
         self._gate_slow: Set[str] = set()                # gates given extra time to open (logged)
         self._tv_held: Dict[str, str] = {}               # turbo valve -> why it is held closed (no backing yet)
@@ -403,8 +409,7 @@ class Controller:
             elif r.kind == "clear_error":
                 self._clear_requested = True
             elif r.kind == "set_threshold":
-                self.turbo_on_threshold_torr = float(r.arg)
-                self.interlocks.turbo_on_threshold_torr = self.turbo_on_threshold_torr
+                self._set_threshold(r.arg)
             elif r.kind == "set_engage_time":
                 self.turbo_engage_time = r.arg
             elif r.kind == "set_unit":
@@ -414,7 +419,8 @@ class Controller:
             else:
                 self._deferred.append(r)
         # ---- frame 0: read (always)
-        inp = self.backend.read()
+        self._waited_for_dialog = False
+        inp = self._usable_inputs(self.backend.read())
         for line in self.backend.take_events():
             self._log(line)
         self.inputs = inp
@@ -1314,8 +1320,78 @@ class Controller:
         the answer is applied in the iteration in which it arrives."""
         handle = self.dialogs.ask(kind, message, buttons)
         self._pending = PendingDialog(handle, apply, label or message)
-        if self.blocking and not handle.done:
-            self._wait_dialog(handle, kind, label or message)
+        if self.blocking:
+            self._waited_for_dialog = True            # nothing is read while a question is open - see _inputs_now
+            if not handle.done:
+                self._wait_dialog(handle, kind, label or message)
+
+    def _usable_inputs(self, inp: Inputs) -> Inputs:
+        """A read that FAILED must never look like a facility at rest (2026-11-28).
+
+        When the DAQ read fails the backend hands back what it got up to that point - often nothing:
+        no turbo readings at all.  "No reading" used to count as "not turning", so ONE failed read
+        with the turbos at full speed made Auto (error 5020 -> Facility Off) switch the primary pump
+        and the chiller off and shut the turbo valves in that same pass, and switch them on again in
+        the next.  Now the equipment readings a failed read did not deliver are the LAST KNOWN ones:
+        turbo speed / contacts, the primary pump's and the chiller's read-back, valve positions.  The
+        error 5020 is raised as before, and Auto shuts down as for any error - with the turbos'
+        backing and cooling kept while they slow down.  Pressures are NOT carried over: a pressure
+        that was not read stays unknown, which every rule already treats as "assume atmosphere"."""
+        if not inp.daq_error:
+            return inp
+        last = self.inputs
+        if last is None:
+            return inp
+        for tid, ti in last.turbos.items():
+            inp.turbos.setdefault(tid, ti)
+        for vid, was_open in last.valve_reads.items():
+            inp.valve_reads.setdefault(vid, was_open)
+        inp.primary_read, inp.primary_hz, inp.chiller_read = last.primary_read, last.primary_hz, last.chiller_read
+        return inp
+
+    def _inputs_now(self) -> Inputs:
+        """The readings to judge an operator's answer with.  While the loop stood still for a question
+        (blocking mode) nothing was read, so they are read again here; otherwise this pass's are it."""
+        if not self._waited_for_dialog:
+            return self.inputs
+        self._waited_for_dialog = False
+        try:
+            inp = self._usable_inputs(self.backend.read())
+        except Exception as exc:                        # cannot look: judge with nothing known
+            inp = self._usable_inputs(Inputs(daq_error=f"{type(exc).__name__}: {exc}"))
+        for gid in self._gauge_fault:                   # a gauge known to be dead stays unknown
+            inp.pressures_torr[gid] = float("nan")
+        self.inputs = inp
+        return inp
+
+    def _still_allowed(self, manual: bool, check: Callable[[Inputs], object]) -> bool:
+        """Manual mode: the interlock is asked AGAIN when the operator has answered the question,
+        with readings taken at that moment (2026-11-28).  It used to be asked only before the
+        question was shown: 'Open Gate Valve?' raised with the chamber under vacuum and answered
+        after the chamber had come up to atmosphere opened the gate onto a turbo at full speed.
+        Admin has no interlocks, as before."""
+        if not manual:
+            return True
+        verdict = check(self._inputs_now())
+        if verdict.allowed:
+            return True
+        self._log(f"Not switched – no longer allowed when the question was answered ({time.strftime('%H:%M:%S')})")
+        self._info(verdict.message)
+        return False
+
+    def _set_threshold(self, value) -> None:
+        """'Turbo on Threshold' from the panel, in Torr.  Only a real pressure is taken: a number,
+        above zero, not above 1000 Torr.  Anything else (not-a-number, infinite, negative) would
+        switch the exposure limit derived from it off, and is refused."""
+        try:
+            torr = float(value)
+        except (TypeError, ValueError):
+            torr = float("nan")
+        if not (0.0 < torr <= 1000.0):                  # (False for not-a-number too)
+            self._log(f"Turbo on Threshold not changed: {value!r} is not a usable pressure")
+            return
+        self.turbo_on_threshold_torr = torr
+        self.interlocks.turbo_on_threshold_torr = torr
 
     def _info(self, message: str) -> None:
         """The answer to something the operator just pressed ("Please Turn Chiller On First")."""
@@ -1385,7 +1461,7 @@ class Controller:
                     return
 
             def apply(result, cmds, vid=vid, want=want):
-                if result == 0:
+                if result == 0 and self._still_allowed(manual, lambda i: self.interlocks.valve(vid, want, cmds, i)):
                     cmds.valves[vid] = want
             question = f"{'Close' if is_open else 'Open'} {v.label}?"
             if want and v.kind == "turbo" and not manual:      # Admin: no interlock, but say it
@@ -1407,7 +1483,7 @@ class Controller:
                     return
 
             def apply(result, cmds, want=want):
-                if result == 0:
+                if result == 0 and self._still_allowed(manual, lambda i: self.interlocks.primary(want, cmds, i)):
                     cmds.primary = want
             self._open_dialog("two", f"Turn {'Off' if new.primary else 'on'} Primary Pump?", ["Yes", "No"], apply)
         elif target == "chiller":
@@ -1419,7 +1495,7 @@ class Controller:
                     return
 
             def apply(result, cmds, want=want):
-                if result == 0:
+                if result == 0 and self._still_allowed(manual, lambda i: self.interlocks.chiller(want, cmds, i)):
                     cmds.chiller = want
             self._open_dialog("two", f"Turn {'Off' if new.chiller else 'on'} Chiller?", ["Yes", "No"], apply)
         elif target.startswith("turbo:"):
@@ -1436,7 +1512,8 @@ class Controller:
                         return
 
                 def apply(result, cmds, tid=tid):
-                    if result == 0:
+                    if result == 0 and self._still_allowed(
+                            manual, lambda i: self.interlocks.turbo_motor(tid, True, cmds, i)):
                         cmds.turbo_motor[tid], cmds.turbo_standby[tid] = True, False
                 self._open_dialog("two", f"Start {tname}?", ["Yes", "No"], apply)
             elif not standby:
@@ -1524,14 +1601,16 @@ class Controller:
                 self._info(verdict.message)
                 return
 
-        def apply(result, cmds, tid=tid, standby=standby, speed=speed):
-            if result == 0:
+        def apply(result, cmds, tid=tid, standby=standby, speed=speed, asked=False):
+            if result == 0 and (not asked or self._still_allowed(
+                    manual, lambda i: self.interlocks.turbo_motor(tid, True, cmds, i))):
                 cmds.turbo_motor[tid], cmds.turbo_standby[tid] = True, standby
                 cmds.turbo_speed_pct[tid] = speed
         if confirmed:
-            apply(0, new)
+            apply(0, new)                             # (checked just above, nothing in between)
         else:
-            self._open_dialog("two", f"Start {tname} {what}?", ["Yes", "No"], apply)
+            self._open_dialog("two", f"Start {tname} {what}?", ["Yes", "No"],
+                              lambda result, cmds: apply(result, cmds, asked=True))
 
     def recognise_state(self, c: Commands) -> Optional[Tuple[FacilityState, FacilityState, str]]:
         """Admin → Auto state recognition (exactly the VI's decision tree, on commanded states)."""
@@ -1642,7 +1721,8 @@ class Controller:
         error_active = self.error.status or (AUTO_ERROR_CODE_MIN <= self.error.code <= AUTO_ERROR_CODE_MAX and self.error.code != 0)
         out = self.auto.step(AutoInput(inp, self.cmds, self.current, self.target, self.substate, buttons, getattr(self, "_iter_now", None) or self.clock(),
                                        error_active, self.turbo_on_threshold_torr, self.turbo_engage_time,
-                                       self.skip_primary_warm, isolate_turbos=self._speed_trip is not None))
+                                       self.skip_primary_warm, isolate_turbos=self._speed_trip is not None,
+                                       wall_now=self.wall()))
         for line in out.log:
             self._log(line)
         self.current, self.target, self.substate, self.tab = out.current, out.target, out.substate, out.tab

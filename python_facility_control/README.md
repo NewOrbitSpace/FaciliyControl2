@@ -372,6 +372,35 @@ Double-click, in the repository root:
 Neither ever starts the simulator: without the NI-DAQmx driver they stop with a message.  They check
 that LabVIEW is closed and ask once before starting.
 
+## Bugs fixed after the protection review (2026-11-28)
+
+An outside review of the program (`docs/protection_review/`) listed protection gaps.  The ones that
+are software bugs are fixed; the ones that are decisions already taken (Admin has no interlocks,
+no automatic trips in Manual / Admin, the settle waits as in LabVIEW) are unchanged.  Every finding
+and what was done about it: `docs/protection_review/RESPONSE.md`.
+
+* **A failed DAQ read no longer looks like a facility at rest.**  When a read failed, the turbo
+  readings were simply missing, and "no reading" counted as "not turning".  One failed read with the
+  turbos at full speed made Auto switch the primary pump and the chiller off and shut the turbo
+  valves in that pass - and switch them on again in the next.  Now a failed read keeps the last
+  known turbo, pump, chiller and valve readings: error 5020 and the ordinary error shutdown, with
+  backing and cooling kept while the turbos slow down.  A pressure that was not read stays unknown.
+* **A speed that is not a number is never "stopped".**  Not-a-number, infinite or far below zero
+  counts as turning - in Auto and in the Manual interlocks.
+* **Manual mode asks its interlock again when you answer.**  'Open Gate Valve?' was checked when the
+  question appeared and not when Yes was pressed.  If the situation changed meanwhile (the chamber
+  came up, the chiller tripped), nothing is switched and the reason is shown.
+* **'Turbo on Threshold' only takes a real pressure**, and a profile with not-a-number, infinite,
+  negative or text where a number belongs does not load.
+* **Every output is written even if one fails.**  A failing valve write no longer stops the pump,
+  chiller and turbo commands behind it.
+* **Waits and trip delays no longer follow the PC's time of day**, which Windows can correct in
+  steps; only the 'Turbo Engage time' does.
+* The RS-485 bring-up check no longer divides by zero on a fast PC; a HiPace speed that is not being
+  refreshed is marked as old on its card.
+
+Tests: `tests/test_review_fixes.py` (56).
+
 ## Pop-ups can no longer flood the screen; the RS-485 link looks after itself (2026-11-27)
 
 **What happened (VC100, 25 Nov).**  The serial port of the USB/RS-485 converter was not there (the

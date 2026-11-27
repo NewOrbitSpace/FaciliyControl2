@@ -135,6 +135,7 @@ class _Unit:
     ack_pending: bool = False
     values: Dict[int, object] = field(default_factory=dict)
     last_ok: float = 0.0
+    speed_ok: float = 0.0                      # when the SPEED [P:309] was last read (see inputs())
     opened_at: float = 0.0
     polls: int = 0
     control_error: str = ""
@@ -499,6 +500,7 @@ class RS485Turbos:
         with self.lock:
             v = dict(u.values)
             last_ok, control_error = u.last_ok, u.control_error
+            speed_ok = u.speed_ok
             desired = u.desired_motor
         ti = TurboInputs()
         nominal = v.get(315) or u.pump.nominal_hz
@@ -537,6 +539,17 @@ class RS485Turbos:
         elif control_error:
             ti.error = True
             ti.error_text = control_error
+        # "Alive" above means ANY good reply.  The speed is its own question (2026-11-28): a pump that
+        # answers everything except [P:309] would show its last speed for ever with nothing to say
+        # it is old.  A speed older than `comm_warn_s` is flagged the way a slow link is - shown on
+        # the card, and the speed-drop trip does not judge it.  It is deliberately NOT made an error:
+        # on 2026-10-28 pumps were seen to answer writes while their query replies stalled, and
+        # taking a healthy turbo out for that would be worse than showing an old number.
+        if ti.comm_ok and speed_ok:
+            speed_age = now - speed_ok
+            if speed_age > warn_s:
+                ti.comm_warning = True
+                ti.comm_silent_s = max(ti.comm_silent_s, speed_age)
         ti.rs485 = {"port": u.pump.bus.port, "address": u.pump.address,
                     "ctrl": v.get(60), "remote_prio": v.get(300), "stats": u.pump.stats.summary()}
         return ti
@@ -721,5 +734,7 @@ class RS485Turbos:
             with self.lock:
                 u.values[n] = val
                 u.last_ok = self.clock()
+                if n == 309:
+                    u.speed_ok = u.last_ok
             if n == 315 and val:
                 u.pump.nominal_hz = int(val)
